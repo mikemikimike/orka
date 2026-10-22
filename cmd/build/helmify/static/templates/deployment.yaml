@@ -191,6 +191,7 @@ spec:
             # Matches this template's Pod label; each host's NetworkPolicy
             # admits only these Pods from the release namespace.
             - --agent-host-controller-pod-labels=orka.ai/network-role=controller
+            {{- end }}
             {{- if include "orka.ahpEnabled" . }}
             {{- with .Values.controller.ahp }}
             - --enable-ahp-api=true
