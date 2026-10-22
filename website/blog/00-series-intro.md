@@ -66,6 +66,15 @@ Most of those doors lead to the same Task, with the same record and the same rul
 coding-tool door is a little different: there, Orka acts as a shared model endpoint, so your
 team stops handing out provider keys, but the tool itself keeps running where it already runs.
 
+Meeting you where you are goes for infrastructure too. Orka runs on the Kubernetes cluster you
+already have, and when you want stronger sandboxes, it plugs into the sandbox projects you
+choose instead of bringing its own.
+
+You will also notice two habits running through every part. Orka **keeps jobs apart**: for a
+coding agent, the part that talks to the model, the part that does the work, and the part that
+delivers the result each hold only their own credentials. And Orka **expects agents to be idle
+most of the time**, waiting on people and CI, so it is built to make that idle time cheap.
+
 ## The series
 
 ### [Part 1 — Meet Orka: your first agent in five minutes](01-meet-orka.md)
@@ -83,6 +92,8 @@ Features we cover:
   `container` (run any command, no model needed)
 - **Provider, Agent, Task**, and how one points at the next
 - **Coding agents that open pull requests**, without the agent ever holding a Git credential
+- **Three jobs, kept apart:** talking to the model, doing the work, and delivering the result
+- **Timeouts and stopping a Task**
 - **Many front doors:** `kubectl`, the `orka` CLI, the dashboard, chat, and the
   OpenAI- and Anthropic-compatible endpoints for tools like Claude Code
 - **The dashboard demo**, which runs in your browser with no install
@@ -104,6 +115,7 @@ Features we cover:
 - **Human approval** for actions that matter, with Orka running exactly the action a person
   approved
 - **Connectors**, so an agent can act as *you* on GitHub, with approval on every write
+- **A walk through an attack:** what a fooled agent finds when it goes looking
 - **Calling your own systems without handing agents the keys**
 - **Stronger walls** around agents, from sandboxed Pods to a sandbox per conversation
 
@@ -119,7 +131,7 @@ Features we cover:
 - **Scheduled Tasks:** any Task on a cron schedule
 - **Repository monitors:** review every pull request as it arrives
 - **Issue to pull request:** label an issue `orka:implement` and Orka plans, implements, reviews,
-  and repairs the PR
+  and repairs the PR, and `orka:pause` to hold it back
 - **Security scanning** of a repository with validated findings
 - **Multi-agent coordination:** one agent delegates to specialists, inside limits you set
 - **Autonomous Tasks** that plan, act, and re-plan toward a goal
@@ -129,8 +141,10 @@ Features we cover:
 - **Workspaces:** a sandbox per conversation (Agent Sandbox or Agent Substrate) that can suspend
   between Tasks and resume later; Agent Substrate can also save checkpoints and restore or fork
   from them
+- **Three kinds of remembering:** the conversation, the files, and approved facts, each with
+  its own owner
 - **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
-- **Your own tools:** connecting your APIs, adding extra programs for coding agents
+- **Your team's ways and your own tools:** skills and a persona, connecting your APIs, adding extra programs for coding agents
   (toolboxes), and packaging an agent you built yourself (AgentKit)
 
 ### [Part 4 — Running Orka for real: visibility, cost, and how it works inside](04-running-orka-for-real.md)
@@ -146,6 +160,8 @@ Features we cover:
 - **Tracing and metrics** in the monitoring tools you already run
 - **Usage and PR outcomes:** tokens per merged pull request, per team
 - **The dashboard** for watching and steering work
+- **Backup model providers** for when one has an outage
+- **One shared address** for every team's coding tools
 - **How it works inside:** the one program that runs everything, warm pools of coding agents
   that shut down when idle, pinned images, and what happens when things restart
 - **Day-two operations:** install, upgrade, and where to look when something is stuck

@@ -226,9 +226,29 @@ spec:
 Orka clones the repository, gives the agent a working copy, and records what it does.
 
 Coding agents are slow to start from scratch, so Orka keeps a *pool* for each one: a running
-Pod that can host several agents' private sessions at once and shuts down when nobody is using
-it. The first coding Task starts the pool, which takes a few minutes; after that, new Tasks
-start in seconds.
+Pod that can host several agents' private sessions at once. The first coding Task starts the
+pool, which takes a few minutes; after that, new Tasks start in seconds.
+
+The pool also shuts down when nobody is using it, and that matters more than it sounds. Look at
+how an agent actually spends a day: it works for a few minutes, then sits idle while it waits
+for a person to reply, a CI run to finish, or the next issue to arrive. Orka is built so that
+idle time costs you as close to nothing as it can. You will see the same idea again in Part 3,
+where an agent can be put to sleep between messages.
+
+### Three jobs, kept apart
+
+Here is a picture worth holding onto for the rest of the series. When a coding agent works on
+your repository, three separate parts of Orka each do one job:
+
+| Job | Who does it | What it holds |
+| --- | --- | --- |
+| Talk to the model | The provider proxy you set up above | The model key |
+| Do the work | The agent, in its own private space | A copy of the code, and nothing else |
+| Deliver the result | The publisher | The Git credential, but no model access |
+
+No single part holds everything. That split is what makes the next step safe.
+
+### Letting the agent change code
 
 To let an agent change code, create a new Task (on a repository you can push to) with
 `intent: write` and a Git credential for publishing, and Orka will publish the change to a
@@ -236,6 +256,12 @@ branch. Add `createPR: true`, the branch to merge into, and a GitHub API credent
 opens the pull request too. Here is the part worth remembering for
 Part 2: **the agent itself never holds a Git credential.** It only edits files. A separate
 component checks the change and does the push.
+
+### Stopping a Task
+
+Every Task can carry a `timeout`, such as `timeout: 15m`; coding Tasks get 30 minutes if you
+set nothing. To stop one early, delete it: `kubectl -n orka-system delete task code-review`
+or `orka task delete code-review -n orka-system`.
 
 ## The third type: plain containers
 

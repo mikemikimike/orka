@@ -32,7 +32,7 @@ Here is the map of this part:
 | Remember things | Memory proposals | Agent + review |
 | Pick up where they left off | Sessions, session import, and execution workspaces | Task |
 | Answer in Teams, Telegram, or to other agents | A gateway adapter | Agent + Tasks |
-| Use your tools and programs | Tools and toolboxes | Agent |
+| Know your team's ways and use your tools | Skills, a persona, tools, and toolboxes | Agent |
 | Be an agent you built yourself | An AgentKit image | Agent |
 
 ## Agents on a schedule
@@ -95,7 +95,8 @@ composability at work.
 
 Before acting on a label, Orka checks the webhook signature and that the person who added the
 label really has permission on the repository. Labels are a convenient trigger, not an open
-door. [Issue-to-PR automation](https://orka-agents.github.io/orka/docs/guides/issue-to-pr-automation)
+door. To make Orka keep its hands off a particular issue or pull request, add the `orka:pause`
+label; remove it when you want the work to continue. [Issue-to-PR automation](https://orka-agents.github.io/orka/docs/guides/issue-to-pr-automation)
 has a complete runnable example.
 
 ### Find security issues
@@ -187,6 +188,15 @@ come back an hour later with "now update the tests." Sometimes you even start on
 want to hand the work over to the cluster. For any of that, the agent needs two things: the
 conversation so far, and the files it was working on.
 
+An agent gets more useful the longer it can build on earlier work, but every kind of
+remembering also needs someone in charge of it. Orka keeps three kinds apart:
+
+| What is kept | Feature | Lasts for | Who controls it |
+| --- | --- | --- | --- |
+| The conversation | Session (below) | One piece of work, across several Tasks | Whoever sends the Tasks |
+| The files | Execution workspace (below) | Until the workspace class's time limits | Whoever runs Orka sets the rules |
+| Facts worth keeping | Memory (above) | Until someone removes them | A person approves each one |
+
 ### Sessions: the conversation
 
 A **Session** is a conversation that spans several Tasks. Give each Task the same `sessionRef`
@@ -261,8 +271,8 @@ Here is what that gives Orka:
 
 ### Suspend and resume
 
-An agent waiting for your next message does not need to keep running. With a workspace that
-allows it, Orka **suspends** the agent when a Task finishes: it stops the agent completely and
+Remember from Part 1 that agents sit idle far more than they work. A shared pool handles that
+by shutting down when empty; a workspace goes one step further. With a workspace that allows it, Orka **suspends** the agent when a Task finishes: it stops the agent completely and
 keeps only its files. Agent Sandbox keeps the files on a storage volume; Agent Substrate takes a snapshot of
 them. Orka double-checks that the old agent is really gone before it calls the workspace
 suspended, so nothing is quietly left running.
@@ -353,8 +363,21 @@ anywhere your team works.
 
 ## Agents with your tools
 
-The last way to grow an agent is to give it more to work with. There are three options, from
+The last way to grow an agent is to give it more to work with. There are four options, from
 smallest to biggest.
+
+### Teach it how your team works: skills and a persona
+
+A **skill** is a short, reusable set of instructions, such as "run `make lint` after every
+change" or "write release notes in this format." You save it in Orka once
+(`orka skill import ./SKILL.md --name release-notes`) and list it by name on any of Orka's own
+`type: ai` Agents that need it. Keep skills short: their text is sent with every request to
+the model, so each one costs a little on every call. Coding agents do not take skills; put that
+guidance in their instructions instead.
+
+A **soul** sets an Agent's personality and tone, kept apart from its job description, such as
+"be direct, and say what you could not check." It works for `type: ai` Agents and the built-in
+coding agents alike. It shapes how the agent talks; it does not grant or remove any permission.
 
 ### Connect your APIs
 
@@ -454,8 +477,7 @@ from Part 2 can cover the tools Orka runs on its behalf. Agents hosted in Micros
 
 Look back at what we added in this part: a `schedule` field, a `RepositoryMonitor`, a
 `coordination` block, a review step for memory, a Session and a workspace, a gateway adapter,
-tools, a toolbox, and an
-agent you built yourself. Each one is
+skills, tools, a toolbox, and an agent you built yourself. Each one is
 small. None of them replaced anything from Part 1 or Part 2. They snap onto the same
 Provider–Agent–Task core, and they inherit the same security and the same records.
 

@@ -99,6 +99,38 @@ orchestrator. If you want to look before installing anything, the
 [dashboard demo](https://orka-agents.github.io/orka/demo/) runs the real dashboard in your
 browser on sample data.
 
+## When a model provider has a bad day
+
+Model services have outages and rate limits like any other service. For Orka's own `type: ai`
+Agents, you can list backup Providers under `model.fallbacks`:
+
+```yaml
+spec:
+  providerRef:
+    name: anthropic
+  model:
+    name: claude-opus-5
+    fallbacks:
+      - providerRef: openai
+        model: gpt-6-astra
+```
+
+Orka retries the main Provider first. If it keeps failing, rejects the key, or cannot be
+reached, Orka moves to the next one on the list. Each backup is just another Provider, with its
+own key in its own Secret.
+
+## One address for every team
+
+In Part 1, developers pointed Claude Code or Codex at Orka's compatible endpoints. In a bigger
+organization, each team usually runs its own Orka in its own namespace, and nobody wants to
+hand out a different address per team.
+
+An optional [shared endpoint](https://orka-agents.github.io/orka/docs/operations/shared-compatibility-api)
+fixes that. Everyone uses the same OpenAI- and Anthropic-compatible address; the caller's token
+says which team they belong to, and the request goes to that team's Orka, with that team's
+models and permissions. The shared endpoint itself holds no model keys and keeps no
+conversations.
+
 ## How it works inside
 
 You do not need to know this to use Orka. But if you operate it, a simple mental model helps
@@ -124,7 +156,8 @@ Starting a coding agent from scratch is slow: big image, lots of setup. So inste
 Job per Task, Orka keeps warm **RuntimePools** for the built-in coding agents, kept separate
 per namespace and per agent setup. A pool Pod hosts
 several private sessions when it is busy, so a new Task usually starts in seconds, and it
-**scales to zero** when idle, so you are not paying for agents that are doing nothing.
+**scales to zero** when idle. Since agents spend far more time waiting than working, that
+idle time is where most of the savings are.
 
 When a pool needs to be replaced or scaled down — say, after an upgrade — Orka first lets it
 finish the work it has (it "drains") before removing it. Running Tasks are not cut off halfway.
@@ -187,13 +220,19 @@ per merged PR. Two ideas carried us the whole way:
 
 **Orka is composable.** Three building blocks — Provider, Agent, Task — and small additions
 on top: a schedule, a monitor, a coordination block, a gateway, a sandbox, a tool. You add the
-pieces you need and leave the rest off. Nothing new replaces what you already built.
+pieces you need and leave the rest off. Nothing new replaces what you already built. Orka
+does not ask you for new infrastructure either: it runs on the Kubernetes cluster you have,
+and plugs into the sandbox projects you choose.
 
 **Orka meets people where they are.** `kubectl` for the Kubernetes crowd, a CLI for scripters,
 a dashboard for clickers, chat for anyone, Claude Code and Codex for developers, GitHub for
 maintainers, Teams and Telegram for everyone else. Almost every door leads to the same Task,
 with the same keys kept safe, the same rules, and the same record; the coding-tool endpoints
 share the same keys and model rules without needing a Task.
+
+Underneath both ideas sits one habit from Part 2: keep jobs apart. For a coding agent, the part
+that talks to the model, the part that does the work, and the part that delivers it never share
+credentials, so an agent that gets fooled finds little worth taking.
 
 Orka is experimental and changing quickly, and the project wants to hear from you. Try it on a
 laptop, break it, and tell us what you find.
