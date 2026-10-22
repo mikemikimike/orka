@@ -10,7 +10,11 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"sigs.k8s.io/yaml"
+
+	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+	"github.com/orka-agents/orka/internal/connectors"
 )
 
 const agentHostTestNamespace = "orka-agent-hosts"
@@ -240,5 +244,111 @@ func TestStaticChartAgentHostPolicyMatchesSharedAdmission(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sharedPolicy.Spec, chartPolicy.Spec) {
 		t.Fatal("Helm and Kustomize enforce different AgentHost admission")
+	}
+}
+
+func agentHostGitHubValues(extra ...string) []string {
+	return append(append(agentHostsEnabled(),
+		"--set", "controller.connectors.enabled=true",
+		"--set", "controller.connectors.callbackBaseUrl=https://orka.example.com",
+		"--set", "controller.agentHosts.github.enabled=true",
+		"--set", "controller.agentHosts.github.clientID=Iv23example",
+	), extra...)
+}
+
+// One helm install gives people hosts from GitHub: the chart renders the
+// provider and the copilotd template, which is the sample's, unchanged.
+func TestStaticChartAgentHostGitHubRendersTheProviderAndTemplate(t *testing.T) {
+	rendered := requireHelmRender(t, append(agentHostGitHubValues(
+		"--set", "controller.agentHosts.github.clientSecret.value=not-a-real-secret"),
+		"--show-only", "templates/agent-host-github.yaml")...)
+
+	var provider corev1alpha1.ConnectorProvider
+	if err := yaml.Unmarshal([]byte(requireRenderedDocument(t, rendered, "kind: ConnectorProvider\n")), &provider); err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name != "github" || provider.Spec.AgentHost == nil || provider.Spec.AgentHost.TemplateRef.Name != "copilotd" ||
+		provider.Spec.OAuth.ClientID != "Iv23example" || provider.Spec.OAuth.ClientSecretRef.Name != "test-orka-github-app" ||
+		provider.Spec.OAuth.TokenURL != "https://github.com/login/oauth/access_token" || len(provider.Spec.Tools) != 0 {
+		t.Fatalf("provider = %+v", provider)
+	}
+	if issue := connectors.ValidateProviderSpec(&provider, nil); issue != nil {
+		t.Fatalf("the rendered provider is invalid: %v", issue)
+	}
+	var secret corev1.Secret
+	if err := yaml.Unmarshal([]byte(requireRenderedDocument(t, rendered, "kind: Secret\n")), &secret); err != nil {
+		t.Fatal(err)
+	}
+	if secret.Name != "test-orka-github-app" || secret.StringData["clientSecret"] != "not-a-real-secret" {
+		t.Fatalf("secret %s keys = %v", secret.Name, len(secret.StringData))
+	}
+
+	var template corev1alpha1.AgentHostTemplate
+	if err := yaml.Unmarshal([]byte(requireRenderedDocument(t, rendered, "kind: AgentHostTemplate\n")), &template); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "samples", "core_v1alpha1_agenthosttemplate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sample corev1alpha1.AgentHostTemplate
+	if err := yaml.Unmarshal(raw, &sample); err != nil {
+		t.Fatal(err)
+	}
+	if template.Name != "copilotd" || !reflect.DeepEqual(template.Spec, sample.Spec) {
+		t.Fatal("the chart's copilotd template differs from config/samples/core_v1alpha1_agenthosttemplate.yaml")
+	}
+	if template.Spec.Access != corev1alpha1.AgentHostAccessRelay {
+		t.Fatal("hosts fed by a Connection need a Relay template")
+	}
+
+	// An existing Secret is named instead of rendered.
+	existing := requireHelmRender(t, append(agentHostGitHubValues(
+		"--set", "controller.agentHosts.github.clientSecret.existingSecret=github-app"),
+		"--show-only", "templates/agent-host-github.yaml")...)
+	if strings.Contains(existing, "kind: Secret\n") || !strings.Contains(existing, "name: github-app") {
+		t.Fatalf("existing Secret render:\n%s", existing)
+	}
+}
+
+func TestStaticChartAgentHostGitHubRefusesIncompleteSettings(t *testing.T) {
+	for name, args := range map[string][]string{
+		"no client secret": agentHostGitHubValues(),
+		"both client secrets": agentHostGitHubValues(
+			"--set", "controller.agentHosts.github.clientSecret.value=x",
+			"--set", "controller.agentHosts.github.clientSecret.existingSecret=y"),
+		"no client ID": agentHostGitHubValues(
+			"--set", "controller.agentHosts.github.clientID=",
+			"--set", "controller.agentHosts.github.clientSecret.value=x"),
+		"no connectors": append(agentHostGitHubValues("--set", "controller.agentHosts.github.clientSecret.value=x"),
+			"--set", "controller.connectors.enabled=false"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := helmTemplateStaticChart(t, args...); err == nil {
+				t.Fatal("the chart rendered an agent-host provider it cannot run")
+			}
+		})
+	}
+	if rendered := requireHelmRender(t); strings.Contains(rendered, "kind: ConnectorProvider") || strings.Contains(rendered, "kind: AgentHostTemplate") {
+		t.Fatal("the default render must not create an agent-host provider or template")
+	}
+}
+
+// With the Tailscale operator, the API is served on the tailnet.
+func TestStaticChartIngressForTailscale(t *testing.T) {
+	rendered := requireHelmRender(t, "--set", "ingress.enabled=true", "--set", "ingress.className=tailscale",
+		"--set", "ingress.tls[0].hosts[0]=orka", "--show-only", "templates/ingress.yaml")
+	var ingress networkingv1.Ingress
+	if err := yaml.Unmarshal([]byte(rendered), &ingress); err != nil {
+		t.Fatal(err)
+	}
+	backend := ingress.Spec.DefaultBackend
+	if ingress.Spec.IngressClassName == nil || *ingress.Spec.IngressClassName != "tailscale" || backend == nil ||
+		backend.Service.Name != "test-orka" || backend.Service.Port.Name != "api" ||
+		len(ingress.Spec.TLS) != 1 || ingress.Spec.TLS[0].Hosts[0] != "orka" {
+		t.Fatalf("ingress = %+v", ingress.Spec)
+	}
+	if _, err := helmTemplateStaticChart(t, "--show-only", "templates/ingress.yaml"); err == nil {
+		t.Fatal("the default render must not create an Ingress")
 	}
 }

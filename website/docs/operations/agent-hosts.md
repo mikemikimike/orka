@@ -159,17 +159,42 @@ Add the host as `ws://127.0.0.1:8788/?tkn=<token>`. Port-forward needs
 
 ### Hosts from GitHub Connections
 
-With [connectors](../guides/connectors.md) enabled, people can get a host by linking
-GitHub, with no Secret and no Kubernetes access. An operator adds a template to one GitHub
-`ConnectorProvider` in the watch namespace, backed by a GitHub App with expiring user
-tokens:
+With [connectors](../guides/connectors.md), people get a host by linking GitHub: no Secret,
+no YAML and no Kubernetes access. Create a GitHub App with expiring user tokens and the
+callback URL `<callbackBaseUrl>/api/v1/connections/callback`, then install with:
 
 ```yaml
-spec:
-  # ...the provider's OAuth settings, as in Connectors
-  agentHost:
-    templateRef:
-      name: copilotd
+controller:
+  connectors:
+    enabled: true
+    callbackBaseUrl: https://orka.example.com
+  agentHosts:
+    enabled: true
+    github:
+      enabled: true
+      clientID: Iv23...
+      clientSecret:
+        existingSecret: github-app   # or value: <the client secret>
+```
+
+The chart renders the `github` ConnectorProvider and the `copilotd` template it names;
+`controller.agentHosts.template` sets the template's images, storage and resources. The
+template's spec is immutable: to change it on an existing install, delete the
+AgentHostTemplate, then upgrade, and hosts move to the new one on their volumes. Without the
+chart, add `spec.agentHost.templateRef` to a GitHub provider yourself.
+
+To reach Orka with no domain, set `ingress.enabled: true`, `ingress.className: tailscale`
+and `ingress.tls: [{hosts: [orka]}]` with the Tailscale Kubernetes operator installed: the
+API and dashboard are then served at `https://orka.<tailnet>.ts.net` on your tailnet.
+
+Each person then runs `orka connect github`, or links GitHub on the dashboard's Connectors
+page. `orka connect` waits for the host and prints the environment to pick in the Copilot
+app. Afterwards:
+
+```bash
+orka host status         # the host, its phase, and why it is not ready
+orka host wake           # start it after it idled out
+orka host delete --yes   # delete it and its volume; while linked, a fresh one follows
 ```
 
 - The provider needs no tools. A dedicated GitHub App with only the permissions the host

@@ -667,4 +667,28 @@ namespaces, and the orka-host-agent sidecar image must be immutable.
 {{- end -}}
 {{- $_ := include "orka.agentHostAgentImage" . -}}
 {{- end -}}
+{{- if include "orka.agentHostGitHubEnabled" . -}}
+{{- $github := .Values.controller.agentHosts.github -}}
+{{- if not (include "orka.agentHostsEnabled" .) -}}
+{{- fail "controller.agentHosts.github.enabled requires controller.agentHosts.enabled=true" -}}
+{{- end -}}
+{{- if not (dig "connectors" "enabled" false .Values.controller) -}}
+{{- fail "controller.agentHosts.github.enabled requires controller.connectors.enabled=true: hosts are fed by people's GitHub links" -}}
+{{- end -}}
+{{- if not (trim (toString $github.clientID)) -}}
+{{- fail "controller.agentHosts.github.clientID is required: the GitHub App's client ID" -}}
+{{- end -}}
+{{- if eq (empty $github.clientSecret.existingSecret) (empty $github.clientSecret.value) -}}
+{{- fail "set exactly one of controller.agentHosts.github.clientSecret.existingSecret and .value" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- define "orka.agentHostGitHubEnabled" -}}
+{{- if dig "agentHosts" "github" "enabled" false .Values.controller -}}true{{- end -}}
+{{- end }}
+
+{{- define "orka.agentHostGitHubSecretName" -}}
+{{- $secret := .Values.controller.agentHosts.github.clientSecret -}}
+{{- default (printf "%s-github-app" (include "orka.fullname" .)) $secret.existingSecret -}}
 {{- end }}
