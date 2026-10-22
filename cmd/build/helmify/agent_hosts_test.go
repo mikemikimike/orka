@@ -264,10 +264,12 @@ func TestStaticChartAgentHostGitHubRendersTheProviderAndTemplate(t *testing.T) {
 		"--show-only", "templates/agent-host-github.yaml")...)
 
 	var provider corev1alpha1.ConnectorProvider
-	if err := yaml.Unmarshal([]byte(requireRenderedDocument(t, rendered, "kind: ConnectorProvider\n")), &provider); err != nil {
+	providerDoc := requireRenderedDocument(t, rendered, "kind: ConnectorProvider\n")
+	if err := yaml.Unmarshal([]byte(providerDoc), &provider); err != nil {
 		t.Fatal(err)
 	}
-	if provider.Name != "github" || provider.Spec.AgentHost == nil || provider.Spec.AgentHost.TemplateRef.Name != "copilotd" ||
+	if provider.Name != "github" || provider.Spec.AgentHost == nil ||
+		provider.Spec.AgentHost.TemplateRef.Name != "copilotd" ||
 		provider.Spec.OAuth.ClientID != "Iv23example" || provider.Spec.OAuth.ClientSecretRef.Name != "test-orka-github-app" ||
 		provider.Spec.OAuth.TokenURL != "https://github.com/login/oauth/access_token" || len(provider.Spec.Tools) != 0 {
 		t.Fatalf("provider = %+v", provider)
@@ -284,7 +286,8 @@ func TestStaticChartAgentHostGitHubRendersTheProviderAndTemplate(t *testing.T) {
 	}
 
 	var template corev1alpha1.AgentHostTemplate
-	if err := yaml.Unmarshal([]byte(requireRenderedDocument(t, rendered, "kind: AgentHostTemplate\n")), &template); err != nil {
+	templateDoc := requireRenderedDocument(t, rendered, "kind: AgentHostTemplate\n")
+	if err := yaml.Unmarshal([]byte(templateDoc), &template); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "samples", "core_v1alpha1_agenthosttemplate.yaml"))
@@ -329,7 +332,8 @@ func TestStaticChartAgentHostGitHubRefusesIncompleteSettings(t *testing.T) {
 			}
 		})
 	}
-	if rendered := requireHelmRender(t); strings.Contains(rendered, "kind: ConnectorProvider") || strings.Contains(rendered, "kind: AgentHostTemplate") {
+	rendered := requireHelmRender(t)
+	if strings.Contains(rendered, "kind: ConnectorProvider") || strings.Contains(rendered, "kind: AgentHostTemplate") {
 		t.Fatal("the default render must not create an agent-host provider or template")
 	}
 }

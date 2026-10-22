@@ -138,7 +138,7 @@ func agentHostResponse(host *corev1alpha1.AgentHost) AgentHostResponse {
 		Name:              host.Name,
 		Namespace:         host.Namespace,
 		Environment:       "orka-" + host.Name,
-		Phase:             string(host.Status.Phase),
+		Phase:             host.Status.Phase,
 		Suspended:         host.Spec.Suspended || host.Status.IdleSuspendedAt != nil,
 		OperatorSuspended: host.Spec.Suspended,
 		Deleting:          !host.DeletionTimestamp.IsZero(),

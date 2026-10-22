@@ -15,6 +15,10 @@ import (
 // agentHostAPIPath is the signed-in person's own agent host.
 const agentHostAPIPath = "/api/v1/agent-hosts/me"
 
+// agentHostPhaseFailed is the phase of a host that cannot run until its cause
+// is fixed.
+const agentHostPhaseFailed = "Failed"
+
 // agentHostReadyPollInterval paces waiting for a host after linking.
 var agentHostReadyPollInterval = 2 * time.Second
 
@@ -171,7 +175,7 @@ func waitForAgentHost(ctx context.Context, cmd *cobra.Command) error {
 		case err == nil && host.Ready:
 			fmt.Fprintf(out, "Host ready: %s. Pick it in the Copilot app's Environments.\n", host.Environment) //nolint:errcheck
 			return nil
-		case err == nil && host.Phase == "Failed":
+		case err == nil && host.Phase == agentHostPhaseFailed:
 			return fmt.Errorf("your agent host %s failed: %s: %s", host.Name, host.Reason, host.Message)
 		case err != nil && !strings.Contains(err.Error(), "HTTP 404"):
 			// The host is created moments after the link; until then the
