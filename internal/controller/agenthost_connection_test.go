@@ -245,3 +245,35 @@ func TestAgentHostFromAConnectionNeedsARelayTemplate(t *testing.T) {
 		t.Fatalf("ready = %+v", got)
 	}
 }
+
+// A running host whose template is recreated without Relay access stops and
+// loses the token copy it already had.
+func TestAgentHostFromAConnectionLosesItsTokenWhenItsTemplateTurnsStandalone(t *testing.T) {
+	h, _, _ := newConnectionHostHarness(t)
+	h.settle()
+	if _, ok := h.tokenCopy(); !ok {
+		t.Fatal("the host has no token copy to lose")
+	}
+	template := &corev1alpha1.AgentHostTemplate{}
+	if err := h.client.Get(context.Background(), types.NamespacedName{Namespace: testUserNamespace, Name: "copilotd"}, template); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Delete(context.Background(), template); err != nil {
+		t.Fatal(err)
+	}
+	recreated := testTemplate(corev1alpha1.AgentHostAccessStandalone, corev1alpha1.AgentHostCredentialRequired)
+	recreated.UID = "template-uid-2"
+	if err := h.client.Create(context.Background(), recreated); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	if _, ok := h.pod(); ok {
+		t.Fatal("the host must stop")
+	}
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("the token copy must be deleted")
+	}
+	if got := agentHostReady(h.host()); got.Reason != agentHostReasonInvalidTemplate {
+		t.Fatalf("ready = %+v", got)
+	}
+}

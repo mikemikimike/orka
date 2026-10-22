@@ -262,23 +262,9 @@ func (r *AgentHostReconciler) reconcileHost(
 		return r.suspend(ctx, host, names)
 	}
 
-	template := &corev1alpha1.AgentHostTemplate{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: host.Namespace, Name: host.Spec.TemplateRef.Name}, template); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, agentHostFailed(agentHostReasonTemplateNotFound,
-				"AgentHostTemplate %q does not exist", host.Spec.TemplateRef.Name)
-		}
+	template, err := r.hostTemplate(ctx, host)
+	if err != nil {
 		return ctrl.Result{}, err
-	}
-	if err := agenthost.ValidateTemplate(template); err != nil {
-		return ctrl.Result{}, agentHostFailed(agentHostReasonInvalidTemplate, "%v", err)
-	}
-	// Standalone access hands the host's connection token to a Secret in this
-	// namespace, which every person's host shares; a host holding a person's
-	// linked token is reached only through their own GitHub account.
-	if host.Spec.GitHubTokenFrom != nil && template.Spec.Access != corev1alpha1.AgentHostAccessRelay {
-		return ctrl.Result{}, agentHostFailed(agentHostReasonInvalidTemplate,
-			"a host fed by a Connection needs a template with access: Relay")
 	}
 	if strings.TrimSpace(r.AgentImage) == "" {
 		return ctrl.Result{}, agentHostFailed(agentHostReasonHostAgentUnavailable,
@@ -336,6 +322,29 @@ func (r *AgentHostReconciler) reconcileHost(
 		result.RequeueAfter = agentHostResync
 	}
 	return result, err
+}
+
+// hostTemplate loads the host's template and checks that the host may run it.
+func (r *AgentHostReconciler) hostTemplate(ctx context.Context, host *corev1alpha1.AgentHost) (*corev1alpha1.AgentHostTemplate, error) {
+	template := &corev1alpha1.AgentHostTemplate{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: host.Namespace, Name: host.Spec.TemplateRef.Name}, template); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, agentHostFailed(agentHostReasonTemplateNotFound,
+				"AgentHostTemplate %q does not exist", host.Spec.TemplateRef.Name)
+		}
+		return nil, err
+	}
+	if err := agenthost.ValidateTemplate(template); err != nil {
+		return nil, agentHostFailed(agentHostReasonInvalidTemplate, "%v", err)
+	}
+	// Standalone access hands the host's connection token to a Secret in this
+	// namespace, which every person's host shares; a host holding a person's
+	// linked token is reached only through their own GitHub account.
+	if host.Spec.GitHubTokenFrom != nil && template.Spec.Access != corev1alpha1.AgentHostAccessRelay {
+		return nil, agentHostFailed(agentHostReasonInvalidTemplate,
+			"a host fed by a Connection needs a template with access: Relay")
+	}
+	return template, nil
 }
 
 // githubToken returns the user's token when the template uses one, or nil,
@@ -760,7 +769,8 @@ func (r *AgentHostReconciler) suspend(
 }
 
 // stopFailedHost stops the Pod of a host that cannot run correctly, and
-// deletes the copied GitHub token when its source is gone. The volume stays.
+// deletes the copied GitHub token when its source is gone or is a person's
+// Connection. The volume stays.
 func (r *AgentHostReconciler) stopFailedHost(
 	ctx context.Context,
 	host *corev1alpha1.AgentHost,
@@ -783,9 +793,12 @@ func (r *AgentHostReconciler) stopFailedHost(
 		return err
 	}
 	host.Status.PodName = ""
+	// A person's linked token stays only in a host that runs.
+	if host.Spec.GitHubTokenFrom != nil {
+		return ignoreCollision(r.deleteOwned(ctx, host, agentHostKindSecret, "", names.GitHubTokenSecret))
+	}
 	switch failure.reason {
-	case agentHostReasonGitHubTokenRequired, agentHostReasonGitHubTokenUnavailable,
-		agentHostReasonConnectionUnavailable, agentHostReasonGitHubIdentityChanged:
+	case agentHostReasonGitHubTokenRequired, agentHostReasonGitHubTokenUnavailable:
 		return ignoreCollision(r.deleteOwned(ctx, host, agentHostKindSecret, "", names.GitHubTokenSecret))
 	}
 	return nil
