@@ -95,8 +95,10 @@ composability at work.
 
 Before acting on a label, Orka checks the webhook signature and that the person who added the
 label really has permission on the repository. Labels are a convenient trigger, not an open
-door. To make Orka keep its hands off a particular issue or pull request, add the `orka:pause`
-label; remove it when you want the work to continue. [Issue-to-PR automation](https://orka-agents.github.io/orka/docs/guides/issue-to-pr-automation)
+door. To stop Orka from taking further steps on a particular issue or pull request, add the
+`orka:pause` label. A Task that is already running may still finish and publish, so cancel it
+if you need it stopped right away. Removing the label lets Orka look at the issue again and
+decide what to do next. [Issue-to-PR automation](https://orka-agents.github.io/orka/docs/guides/issue-to-pr-automation)
 has a complete runnable example.
 
 ### Find security issues
@@ -193,8 +195,8 @@ remembering also needs someone in charge of it. Orka keeps three kinds apart:
 
 | What is kept | Feature | Lasts for | Who controls it |
 | --- | --- | --- | --- |
-| The conversation | Session (below) | One piece of work, across several Tasks | Whoever sends the Tasks |
-| The files | Execution workspace (below) | Until the workspace class's time limits | Whoever runs Orka sets the rules |
+| The conversation | Session (below) | Across Tasks, until it is deleted or cleaned up | Whoever sends the Tasks |
+| The files | Execution workspace (below) | Until it is deleted or expires under rules set by whoever runs Orka | Whoever runs Orka |
 | Facts worth keeping | Memory (above) | Until someone removes them | A person approves each one |
 
 ### Sessions: the conversation
@@ -271,8 +273,8 @@ Here is what that gives Orka:
 
 ### Suspend and resume
 
-Remember from Part 1 that agents sit idle far more than they work. A shared pool handles that
-by shutting down when empty; a workspace goes one step further. With a workspace that allows it, Orka **suspends** the agent when a Task finishes: it stops the agent completely and
+Remember from Part 1 that agent work often comes in bursts, with waiting in between. A shared
+pool shuts down once it has been empty for a while; a workspace goes one step further. With a workspace that allows it, Orka **suspends** the agent when a Task finishes: it stops the agent completely and
 keeps only its files. Agent Sandbox keeps the files on a storage volume; Agent Substrate takes a snapshot of
 them. Orka double-checks that the old agent is really gone before it calls the workspace
 suspended, so nothing is quietly left running.
@@ -285,7 +287,8 @@ continues the Session. Two things are deliberately *not* brought back:
 - **Old credentials.** The resumed agent gets new ones, so nothing that should have expired
   comes back to life.
 
-The workspace class decides the rules, for example "suspend between Tasks, throw away saved
+Whoever runs Orka writes those rules into a *workspace class*, a named set of workspace
+settings (more on choosing one below). For example: "suspend between Tasks, throw away saved
 files nobody has used for a day, and never keep a workspace longer than a week."
 
 ### Snapshots, checkpoints, and restore
@@ -370,7 +373,7 @@ smallest to biggest.
 
 A **skill** is a short, reusable set of instructions, such as "run `make lint` after every
 change" or "write release notes in this format." You save it in Orka once
-(`orka skill import ./SKILL.md --name release-notes`) and list it by name on any of Orka's own
+(`orka skill import ./SKILL.md --name release-notes -n orka-system`) and list it by name on any of Orka's own
 `type: ai` Agents that need it. Keep skills short: their text is sent with every request to
 the model, so each one costs a little on every call. Coding agents do not take skills; put that
 guidance in their instructions instead.

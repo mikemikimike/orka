@@ -229,11 +229,12 @@ Coding agents are slow to start from scratch, so Orka keeps a *pool* for each on
 Pod that can host several agents' private sessions at once. The first coding Task starts the
 pool, which takes a few minutes; after that, new Tasks start in seconds.
 
-The pool also shuts down when nobody is using it, and that matters more than it sounds. Look at
-how an agent actually spends a day: it works for a few minutes, then sits idle while it waits
-for a person to reply, a CI run to finish, or the next issue to arrive. Orka is built so that
-idle time costs you as close to nothing as it can. You will see the same idea again in Part 3,
-where an agent can be put to sleep between messages.
+The pool also shuts down after it has been empty for a while (15 minutes by default), and that
+matters more than it sounds. A lot of agent work comes in bursts: a few minutes of work, then
+waiting for a person to reply, for continuous integration (CI, the automated build and test
+checks) to finish, or for the next issue to arrive. When nothing is running in a pool, it is not
+using your cluster. You will see the same idea again in Part 3, where an agent can be put to
+sleep between messages.
 
 ### Three jobs, kept apart
 
@@ -243,10 +244,11 @@ your repository, three separate parts of Orka each do one job:
 | Job | Who does it | What it holds |
 | --- | --- | --- |
 | Talk to the model | The provider proxy you set up above | The model key |
-| Do the work | The agent, in its own private space | A copy of the code, and nothing else |
+| Do the work | The agent, in its own private space | A copy of the code, plus short-lived passes that only work with Orka's own proxies; no model key, no Git credential |
 | Deliver the result | The publisher | The Git credential, but no model access |
 
-No single part holds everything. That split is what makes the next step safe.
+No single part holds everything, and the real model key and Git credential never reach the
+agent. That split is what makes the next step safe.
 
 ### Letting the agent change code
 

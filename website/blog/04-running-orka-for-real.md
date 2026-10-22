@@ -156,8 +156,8 @@ Starting a coding agent from scratch is slow: big image, lots of setup. So inste
 Job per Task, Orka keeps warm **RuntimePools** for the built-in coding agents, kept separate
 per namespace and per agent setup. A pool Pod hosts
 several private sessions when it is busy, so a new Task usually starts in seconds, and it
-**scales to zero** when idle. Since agents spend far more time waiting than working, that
-idle time is where most of the savings are.
+**scales to zero** once it has been empty for a while. For bursty work, where agents spend
+long stretches waiting on people and checks, that can save a good deal of compute.
 
 When a pool needs to be replaced or scaled down — say, after an upgrade — Orka first lets it
 finish the work it has (it "drains") before removing it. Running Tasks are not cut off halfway.
@@ -231,8 +231,9 @@ with the same keys kept safe, the same rules, and the same record; the coding-to
 share the same keys and model rules without needing a Task.
 
 Underneath both ideas sits one habit from Part 2: keep jobs apart. For a coding agent, the part
-that talks to the model, the part that does the work, and the part that delivers it never share
-credentials, so an agent that gets fooled finds little worth taking.
+that talks to the model, the part that does the work, and the part that delivers it are separate,
+and the real model key and Git credential stay out of the agent's reach, so an agent that gets
+fooled cannot take them.
 
 Orka is experimental and changing quickly, and the project wants to hear from you. Try it on a
 laptop, break it, and tell us what you find.

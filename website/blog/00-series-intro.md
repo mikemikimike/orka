@@ -72,8 +72,10 @@ choose instead of bringing its own.
 
 You will also notice two habits running through every part. Orka **keeps jobs apart**: for a
 coding agent, the part that talks to the model, the part that does the work, and the part that
-delivers the result each hold only their own credentials. And Orka **expects agents to be idle
-most of the time**, waiting on people and CI, so it is built to make that idle time cheap.
+delivers the result each hold only what they need, and the real model key and Git credential
+stay out of the agent's reach. And Orka **plans for agents that wait**: much of an agent's work
+is waiting on a person or on automated checks, so Orka can shut down or put to sleep the parts
+that have nothing to do.
 
 ## The series
 

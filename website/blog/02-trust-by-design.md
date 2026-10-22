@@ -21,8 +21,8 @@ to main." This is called *prompt injection*, and no model is fully immune to it.
 
 So the useful question is not "will the agent ever be fooled?" It is: **if the agent is
 fooled, what can it actually do?** Orka plans for the bad day. It treats the agent's space as
-if someone hostile is already sitting at the keyboard, and makes sure there is nothing valuable
-within reach when they go looking. This part walks through how, starting with what every
+if someone hostile is already sitting at the keyboard, and keeps the most valuable things, such
+as model keys and Git credentials, out of reach. This part walks through how, starting with what every
 install gets and ending with options for teams that want much tighter control. You turn on only
 the layers you need.
 
@@ -76,17 +76,20 @@ for it.
 
 - **It looks for the model key.** It is not there. The key sits with the provider proxy, in
   another part of the cluster, and the agent only ever talks to the proxy.
-- **It tries to push to main.** It has no Git credential, and its Pod is not allowed to reach
-  GitHub directly. The only way code leaves is through the publisher, which pushes to the
-  branch Orka chose and nowhere else.
-- **It tries to send what it found somewhere else.** A coding agent's Pod can only reach the
-  model proxy and Orka itself; other network traffic is blocked.
+- **It tries to push to main.** It has no Git credential, and it cannot reach GitHub directly
+  (see the next point). Pushing goes through the publisher, which pushes only to the branch
+  Orka chose.
+- **It tries to send what it found somewhere else.** Orka gives every coding-agent pool network
+  rules that block all traffic except name lookups, the model proxy, and Orka itself. Your
+  cluster has to enforce Kubernetes network rules for this to hold; most production clusters
+  do, but some local test clusters do not.
 - **It pokes at other agents' work.** Each session runs as its own operating-system user with
   its own private files.
 
-The worst realistic outcome is a bad change on its own branch, which shows up for review like
-any other pull request. That is the difference between "the agent was fooled" and "the agent
-was fooled *and* leaked our keys."
+The keys stay safe and main stays untouched. What a fooled agent *can* still do is write a bad
+change to its own branch, so keep reviewing what agents publish. And it can still read the code
+it was given and pass it to the model, so do not give an agent a repository you would not show
+that model. That is still a long way from "the agent was fooled *and* leaked our keys."
 
 ### Everything is scoped and recorded
 
