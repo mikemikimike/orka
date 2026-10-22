@@ -137,7 +137,7 @@ check under **Acceptance**.
 - These conditions make the Connection unusable:
   - it is deleted, or no longer Ready;
   - its consent is stale;
-  - its provider no longer names this template;
+  - its provider no longer serves agent hosts (a host keeps its own template);
   - a refresh fails for good.
 - When that happens, the controller stops the Pod, confirms it is gone, deletes the token
   copy and keeps the AgentHost and its volume. The host is `Failed` with

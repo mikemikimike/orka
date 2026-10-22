@@ -271,7 +271,7 @@ because a pending or running workflow can be lost to suspension.
 | `StateVolumeLost` | The host's volume was deleted. Delete and recreate the AgentHost. |
 | `HostAgentUnavailable` | The controller has no `--agent-host-agent-image`. |
 | `HostNamespaceChanged` | The controller's `--agent-host-namespace` changed after the host was created. Delete and recreate it. |
-| `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent, or its provider no longer serves agent hosts. Linking again restarts the host. |
+| `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent: linking again restarts the host. Or its provider no longer serves agent hosts: an operator restores the provider's `agentHost`, then the person links again. |
 | `GitHubIdentityChanged` | The Connection now links a different GitHub account than the one the host's volume belongs to. Link the original account, or delete the AgentHost. |
 
 A host that fails for a missing template or token has its Pod stopped and keeps its

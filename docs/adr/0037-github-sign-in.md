@@ -48,9 +48,12 @@ signed-in person's host may do.
      token another app obtained cannot sign in;
    - takes the identity from GitHub: issuer `https://github.com`, subject the numeric
      user ID (logins can change), username the login;
-   - requires active membership of a configured org, or of a configured team
-     (`GET /user/memberships/orgs/{org}`, `state: active`). The app must be installed on
-     those orgs with read access to members. Any error denies sign-in.
+   - requires active membership of a configured org
+     (`GET /user/memberships/orgs/{org}`), or of a configured team
+     (`GET /orgs/{org}/teams/{team_slug}/memberships/{username}`), with `state: active`.
+     Org membership alone never satisfies a team allow-list. The app must be installed on
+     those orgs with read access to members. Any error denies sign-in, and each later
+     membership check applies the same rule.
    - issues an Orka session token: random, shown once, stored only as a hash with its
      owner and a twelve-hour expiry, as AHP tokens are.
 4. The CLI keeps the session token in the user's configuration directory, readable only
@@ -60,6 +63,10 @@ The API's authentication accepts session tokens beside OIDC. A session's identit
 verified person, like an OIDC sign-in: it may link accounts and mint AHP tokens, and it
 works in the sign-in namespace, which is the watch namespace. Session tokens are never
 logged.
+
+This extends [ADR 0033](0033-user-connectors.md)'s owner rule, which admits only OIDC and
+context-token subjects. A GitHub session also owns Connections, as issuer
+`https://github.com` and subject the numeric user ID taken at sign-in, never the login.
 
 ### Renewal and offboarding
 
