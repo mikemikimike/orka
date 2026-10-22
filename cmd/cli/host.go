@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/orka-agents/orka/internal/cli/client"
 )
 
 // agentHostAPIPath is the signed-in person's own agent host.
@@ -18,6 +20,10 @@ const agentHostAPIPath = "/api/v1/agent-hosts/me"
 // agentHostPhaseFailed is the phase of a host that cannot run until its cause
 // is fixed.
 const agentHostPhaseFailed = "Failed"
+
+// agentHostReasonConnectionUnavailable is a host's reason while its link is
+// gone; linking again clears it.
+const agentHostReasonConnectionUnavailable = "ConnectionUnavailable"
 
 // agentHostReadyPollInterval paces waiting for a host after linking.
 var agentHostReadyPollInterval = 2 * time.Second
@@ -55,7 +61,7 @@ func newHostStatusCmd() *cobra.Command {
 		Short: "Show your agent host",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			host, err := getOwnAgentHost(context.Background(), cmd)
+			host, err := getOwnAgentHost(context.Background(), newClientFromCmd(cmd))
 			if err != nil {
 				return err
 			}
@@ -128,8 +134,9 @@ func newHostDeleteCmd() *cobra.Command {
 	return cmd
 }
 
-func getOwnAgentHost(ctx context.Context, cmd *cobra.Command) (agentHostView, error) {
-	c := newClientFromCmd(cmd)
+// getOwnAgentHost reads the person's host with c. Callers keep one client
+// for a whole command: credentials read from stdin are read once.
+func getOwnAgentHost(ctx context.Context, c *client.Client) (agentHostView, error) {
 	raw, err := c.DoJSON(ctx, http.MethodGet, agentHostAPIPath, nil, nil)
 	if err != nil {
 		return agentHostView{}, agentHostError(err)
@@ -166,16 +173,18 @@ func printAgentHost(out io.Writer, host agentHostView) {
 
 // waitForAgentHost waits until the person's host is ready after linking a
 // provider that serves agent hosts, and says how the Copilot app lists it.
-func waitForAgentHost(ctx context.Context, cmd *cobra.Command) error {
+func waitForAgentHost(ctx context.Context, cmd *cobra.Command, c *client.Client) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Waiting for your agent host...") //nolint:errcheck
 	for {
-		host, err := getOwnAgentHost(ctx, cmd)
+		host, err := getOwnAgentHost(ctx, c)
 		switch {
 		case err == nil && host.Ready:
 			fmt.Fprintf(out, "Host ready: %s. Pick it in the Copilot app's Environments.\n", host.Environment) //nolint:errcheck
 			return nil
-		case err == nil && host.Phase == agentHostPhaseFailed:
+		// A host kept from an earlier link still says its Connection was
+		// unavailable until the controller sees the new link.
+		case err == nil && host.Phase == agentHostPhaseFailed && host.Reason != agentHostReasonConnectionUnavailable:
 			return fmt.Errorf("your agent host %s failed: %s: %s", host.Name, host.Reason, host.Message)
 		case err != nil && !strings.Contains(err.Error(), "HTTP 404"):
 			// The host is created moments after the link; until then the

@@ -668,7 +668,7 @@ namespaces, and the orka-host-agent sidecar image must be immutable.
 {{- $_ := include "orka.agentHostAgentImage" . -}}
 {{- end -}}
 {{- if include "orka.agentHostGitHubEnabled" . -}}
-{{- $github := .Values.controller.agentHosts.github -}}
+{{- $github := include "orka.agentHostGitHub" . | fromYaml -}}
 {{- if not (include "orka.agentHostsEnabled" .) -}}
 {{- fail "controller.agentHosts.github.enabled requires controller.agentHosts.enabled=true" -}}
 {{- end -}}
@@ -689,6 +689,26 @@ namespaces, and the orka-host-agent sidecar image must be immutable.
 {{- end }}
 
 {{- define "orka.agentHostGitHubSecretName" -}}
-{{- $secret := .Values.controller.agentHosts.github.clientSecret -}}
-{{- default (printf "%s-github-app" (include "orka.fullname" .)) $secret.existingSecret -}}
+{{- $github := include "orka.agentHostGitHub" . | fromYaml -}}
+{{- default (printf "%s-github-app" (include "orka.fullname" .)) $github.clientSecret.existingSecret -}}
+{{- end }}
+
+{{/*
+The agent-host GitHub settings and template with the chart's defaults under
+them: an upgrade that reuses an older release's values has none of these
+maps, and must render as a fresh install would. The defaults match values.yaml.
+*/}}
+{{- define "orka.agentHostGitHub" -}}
+{{- $defaults := dict "providerName" "github" "displayName" "GitHub" "clientID" "" "clientSecret" (dict "existingSecret" "" "key" "clientSecret" "value" "") -}}
+{{- $set := dig "agentHosts" "github" dict .Values.controller -}}
+{{- toYaml (mergeOverwrite $defaults (deepCopy $set)) -}}
+{{- end }}
+
+{{- define "orka.agentHostTemplate" -}}
+{{- $resources := dict "requests" (dict "cpu" "250m" "memory" "1Gi") "limits" (dict "cpu" "4" "memory" "8Gi") -}}
+{{- $defaults := dict "name" "copilotd" "storage" "20Gi" "resources" $resources
+  "copilotdImage" "ghcr.io/github/copilotd:0.9.6@sha256:0abd0d0bc20ab7c1a6c8d73d4dce7ab8c80d48f78e80d746b485c0415451c72f"
+  "hostImage" "mcr.microsoft.com/devcontainers/go:1@sha256:8f1c83128e4bce9d745b1dc0f28f8c027e303d3886e2434966ff135296c41770" -}}
+{{- $set := dig "agentHosts" "template" dict .Values.controller -}}
+{{- toYaml (mergeOverwrite $defaults (deepCopy $set)) -}}
 {{- end }}

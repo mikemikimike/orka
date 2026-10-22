@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/connectors"
@@ -74,8 +75,14 @@ func newAgentHostAPI(t *testing.T, objects ...client.Object) *agentHostAPI {
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objects, provider)...).Build()
 	h := &agentHostAPI{t: t, client: c, identity: person("alice")}
+	h.rebuild()
+	return h
+}
+
+// rebuild serves the routes from h.client.
+func (h *agentHostAPI) rebuild() {
 	handlers := NewHandlers(HandlersConfig{
-		Client: c, APIReader: c, WatchNamespace: agentHostTestNamespace,
+		Client: h.client, APIReader: h.client, WatchNamespace: agentHostTestNamespace,
 		Connectors: ConnectorConfig{Enabled: true},
 	})
 	app := fiber.New()
@@ -89,7 +96,6 @@ func newAgentHostAPI(t *testing.T, objects ...client.Object) *agentHostAPI {
 	app.Post("/api/v1/agent-hosts/me/wake", handlers.WakeOwnAgentHost)
 	app.Delete("/api/v1/agent-hosts/me", handlers.DeleteOwnAgentHost)
 	h.app = app
-	return h
 }
 
 func (h *agentHostAPI) do(method, path string) (int, AgentHostResponse) {
@@ -189,5 +195,54 @@ func TestWakeOwnAgentHost(t *testing.T) {
 	h = newAgentHostAPI(t, held)
 	if status, _ := h.do(http.MethodPost, "/api/v1/agent-hosts/me/wake"); status != http.StatusConflict {
 		t.Fatalf("wake an operator-suspended host: %d, want 409", status)
+	}
+}
+
+// A host replaced under the same name after the ownership check, which may
+// be another person's, is neither woken nor deleted.
+func TestOwnAgentHostWritesAreFencedToTheHostThatWasChecked(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			idle := linkedHost("gh-alice", "alice")
+			asleep := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+			idle.Status.IdleSuspendedAt = &asleep
+			h := newAgentHostAPI(t, idle)
+			replace := func(ctx context.Context, c client.WithWatch) {
+				current := &corev1alpha1.AgentHost{}
+				if err := c.Get(ctx, types.NamespacedName{Namespace: agentHostTestNamespace, Name: "gh-alice"}, current); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Delete(ctx, current); err != nil {
+					t.Fatal(err)
+				}
+				other := linkedHost("gh-alice", "mallory")
+				other.Status.IdleSuspendedAt = &asleep
+				if err := c.Create(ctx, other); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.client = interceptor.NewClient(h.client.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					replace(ctx, c)
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					replace(ctx, c)
+					return c.Delete(ctx, obj, opts...)
+				},
+			})
+			h.rebuild()
+			path := "/api/v1/agent-hosts/me"
+			if method == http.MethodPost {
+				path += "/wake"
+			}
+			if status, _ := h.do(method, path); status != http.StatusConflict {
+				t.Fatalf("%s on a replaced host: %d, want 409", method, status)
+			}
+			replacement, ok := h.host("gh-alice")
+			if !ok || replacement.Spec.WakeRequestedAt != nil {
+				t.Fatal("the replacement host must be untouched")
+			}
+		})
 	}
 }

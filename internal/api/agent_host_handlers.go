@@ -72,7 +72,14 @@ func (h *Handlers) WakeOwnAgentHost(c fiber.Ctx) error {
 		}
 		requested := metav1.NewTime(wake)
 		host.Spec.WakeRequestedAt = &requested
-		if err := h.client.Patch(c.Context(), host, client.MergeFrom(base)); err != nil {
+		// Fenced to the object the ownership check read: a host replaced
+		// under the same name since, which may be another person's, is
+		// refused rather than woken.
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := h.client.Patch(c.Context(), host, patch); err != nil {
+			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+				return fiber.NewError(fiber.StatusConflict, "your host changed while it was being woken; try again")
+			}
 			return fiber.NewError(fiber.StatusInternalServerError, "could not wake the host")
 		}
 	}
@@ -86,7 +93,13 @@ func (h *Handlers) DeleteOwnAgentHost(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.client.Delete(c.Context(), host); err != nil && !apierrors.IsNotFound(err) {
+	// Fenced to the object the ownership check read: a host replaced under
+	// the same name since, which may be another person's, is never deleted.
+	uid, version := host.UID, host.ResourceVersion
+	if err := h.client.Delete(c.Context(), host, client.Preconditions{UID: &uid, ResourceVersion: &version}); err != nil && !apierrors.IsNotFound(err) {
+		if apierrors.IsConflict(err) {
+			return fiber.NewError(fiber.StatusConflict, "your host changed while it was being deleted; try again")
+		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not delete the host")
 	}
 	response := agentHostResponse(host)

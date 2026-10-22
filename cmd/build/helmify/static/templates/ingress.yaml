@@ -1,25 +1,27 @@
-{{- if .Values.ingress.enabled }}
+{{- /* Older releases' values have no ingress map; --reuse-values keeps them. */ -}}
+{{- $ingress := .Values.ingress | default dict }}
+{{- if $ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "orka.fullname" . }}
   labels:
     {{- include "orka.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $ingress.className }}
   ingressClassName: {{ . }}
   {{- end }}
-  {{- with .Values.ingress.tls }}
+  {{- with $ingress.tls }}
   tls:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if .Values.ingress.host }}
+  {{- if $ingress.host }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - host: {{ $ingress.host | quote }}
       http:
         paths:
           - path: /

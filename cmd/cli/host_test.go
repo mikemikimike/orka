@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -99,5 +100,65 @@ func TestConnectWaitsForTheAgentHost(t *testing.T) {
 	}
 	if !strings.Contains(out, "Linked github") || !strings.Contains(out, "Host ready: orka-gh-alice") || hostPolls < 3 {
 		t.Fatalf("output = %q, host polls = %d", out, hostPolls)
+	}
+}
+
+// A relink finds the host its earlier link left Failed with
+// ConnectionUnavailable, and waits for it; a transaction token read from
+// stdin authenticates every request of the command, not only the first.
+func TestConnectWaitsThroughARelinkWithAStdinToken(t *testing.T) {
+	previous, previousHost := connectionReadyPollInterval, agentHostReadyPollInterval
+	connectionReadyPollInterval, agentHostReadyPollInterval = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { connectionReadyPollInterval, agentHostReadyPollInterval = previous, previousHost })
+	origBrowser := openBrowserFunc
+	openBrowserFunc = func(string) error { return nil }
+	t.Cleanup(func() { openBrowserFunc = origBrowser })
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteString("txn-from-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	origStdin := os.Stdin
+	os.Stdin = reader
+	t.Cleanup(func() { os.Stdin = origStdin })
+
+	hostPolls, unauthenticated := 0, 0
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Txn-Token") != "txn-from-stdin" {
+			unauthenticated++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/connections":
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"connection":   map[string]any{"name": "github-abc", "namespace": "team-a", "provider": "github", "mode": "readOnly", "state": "Revoked"},
+				"authorizeURL": "https://github.com/login/oauth/authorize?state=signed",
+				"agentHost":    true,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/connections/github-abc":
+			json.NewEncoder(w).Encode(map[string]any{"name": "github-abc", "provider": "github", "mode": "readOnly", "state": "Ready", "ready": true, "grantSequence": 1}) //nolint:errcheck
+		case r.Method == http.MethodGet && r.URL.Path == agentHostAPIPath:
+			hostPolls++
+			host := map[string]any{"name": "gh-alice", "environment": "orka-gh-alice", "phase": "Failed", "reason": "ConnectionUnavailable"}
+			if hostPolls >= 3 {
+				host = map[string]any{"name": "gh-alice", "environment": "orka-gh-alice", "phase": "Ready", "ready": true}
+			}
+			json.NewEncoder(w).Encode(host) //nolint:errcheck
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+	out, err := runHostCLI(t, handler, "connect", "github", "--timeout", "5s", "--txn-token-file", "-")
+	if err != nil {
+		t.Fatalf("connect: %v %q", err, out)
+	}
+	if !strings.Contains(out, "Host ready: orka-gh-alice") || hostPolls < 3 {
+		t.Fatalf("output = %q, host polls = %d", out, hostPolls)
+	}
+	if unauthenticated != 0 {
+		t.Fatalf("%d requests went without the stdin transaction token", unauthenticated)
 	}
 }

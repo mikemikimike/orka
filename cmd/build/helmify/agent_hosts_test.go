@@ -356,3 +356,43 @@ func TestStaticChartIngressForTailscale(t *testing.T) {
 		t.Fatal("the default render must not create an Ingress")
 	}
 }
+
+// An upgrade that reuses an older release's values has no ingress map and no
+// agent-host template or GitHub defaults; it renders as a fresh install would.
+func TestStaticChartAgentHostGitHubRendersFromReusedValues(t *testing.T) {
+	if _, err := helmTemplateStaticChart(t, "--set", "ingress=null"); err != nil {
+		t.Fatalf("a release without an ingress map must render: %v", err)
+	}
+	rendered := requireHelmRender(t, append(agentHostGitHubValues(
+		"--set", "controller.agentHosts.template=null",
+		"--set", "controller.agentHosts.github.providerName=null",
+		"--set", "controller.agentHosts.github.displayName=null",
+		"--set", "controller.agentHosts.github.clientSecret.key=null",
+		"--set", "controller.agentHosts.github.clientSecret.value=not-a-real-secret"),
+		"--show-only", "templates/agent-host-github.yaml")...)
+	var template corev1alpha1.AgentHostTemplate
+	reusedTemplate := requireRenderedDocument(t, rendered, "kind: AgentHostTemplate\n")
+	if err := yaml.Unmarshal([]byte(reusedTemplate), &template); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "samples", "core_v1alpha1_agenthosttemplate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sample corev1alpha1.AgentHostTemplate
+	if err := yaml.Unmarshal(raw, &sample); err != nil {
+		t.Fatal(err)
+	}
+	if template.Name != "copilotd" || !reflect.DeepEqual(template.Spec, sample.Spec) {
+		t.Fatal("without template values the chart must render the default copilotd template")
+	}
+	var provider corev1alpha1.ConnectorProvider
+	reusedProvider := requireRenderedDocument(t, rendered, "kind: ConnectorProvider\n")
+	if err := yaml.Unmarshal([]byte(reusedProvider), &provider); err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name != "github" || provider.Spec.DisplayName != "GitHub" ||
+		provider.Spec.OAuth.ClientSecretRef.Key != "clientSecret" {
+		t.Fatalf("provider = %+v", provider)
+	}
+}
