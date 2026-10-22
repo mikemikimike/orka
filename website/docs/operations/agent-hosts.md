@@ -176,7 +176,8 @@ spec:
   needs is recommended: a host's token carries all of the app's permissions, and a tool
   call's refresh would replace the host's token.
 - When a person links the provider, Orka creates an AgentHost named `gh-<login>` in that
-  namespace, which appears as the environment `orka-gh-<login>`.
+  namespace, which appears as the environment `orka-gh-<login>`. The login is lowercased,
+  and a managed user's underscore becomes `--`: `alice_acme` gets `gh-alice--acme`.
 - Orka writes the link's access token into the host and refreshes it 15 minutes before it
   expires. copilotd picks up the replaced file without a restart. The refresh token never
   leaves Orka.

@@ -79,7 +79,8 @@ check under **Acceptance**.
   - it is the only link its subject has to that provider;
   - its owner has not declined a host (`orka login --no-host`).
 - The controller then creates one AgentHost in the Connection's namespace, named `gh-` plus
-  the lowercased GitHub login. The client shows it as `orka-gh-<login>`. The login comes
+  the lowercased GitHub login, with a managed user's underscore as `--`, which no login
+  contains. The client shows it as `orka-gh-<login>`. The login comes
   from `GET /user` with the first token.
 - If that name is already taken by an AgentHost not created for this person, nothing is
   provisioned, and the conflict is shown next to the link.

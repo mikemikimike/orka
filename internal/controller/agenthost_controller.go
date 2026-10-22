@@ -249,16 +249,21 @@ func (r *AgentHostReconciler) reconcileHost(
 		host.Status.IdleSuspendedAt = nil
 		host.Status.IdleSince = nil
 	}
+	suspended := host.Spec.Suspended || host.Status.IdleSuspendedAt != nil
 	// A host fed by a Connection stops when its link does, suspended or not,
-	// so waking it never bypasses the check.
+	// so waking it never bypasses the check. A check that could not run
+	// still lets a suspension go ahead: stopping needs no link.
 	if host.Spec.GitHubTokenFrom != nil {
 		if err := r.checkHostLink(ctx, host); err != nil {
-			return ctrl.Result{}, err
+			if _, failed := errors.AsType[*agentHostFailure](err); failed || !suspended {
+				return ctrl.Result{}, err
+			}
+			logf.FromContext(ctx).Info("suspending an agent host whose link could not be checked", "agentHost", host.Name, "error", err.Error())
 		}
 	}
 	// Suspension needs nothing but the Pod's receipt, so it is honored even
 	// when the template or token is gone.
-	if host.Spec.Suspended || host.Status.IdleSuspendedAt != nil {
+	if suspended {
 		return r.suspend(ctx, host, names)
 	}
 

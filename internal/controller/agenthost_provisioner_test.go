@@ -176,3 +176,24 @@ func TestProvisionerRetriesBlockedLinks(t *testing.T) {
 		t.Fatalf("a provider change enqueued %v, want every link in the namespace", requests)
 	}
 }
+
+// Every GitHub login, managed user logins included, names a valid host, and
+// no two logins share one.
+func TestProvisionerNamesHostsForEveryLogin(t *testing.T) {
+	for login, want := range map[string]string{
+		"Alice":      "gh-alice",
+		"alice-acme": "gh-alice-acme",
+		"alice_acme": "gh-alice--acme",
+	} {
+		if got := agentHostNameFor(login); got != want {
+			t.Fatalf("agentHostNameFor(%q) = %q, want %q", login, got, want)
+		}
+	}
+	connection := linkedConnection("github")
+	p, c := newProvisioner(t, connection, hostProvider("github"))
+	p.GitHubAccounts = fakeGitHubAccounts{"ghu_first": {ID: 1001, Login: "alice_acme"}}
+	provision(t, p, connection)
+	if hosts := hostsIn(t, c); len(hosts) != 1 || hosts[0].Name != "gh-alice--acme" {
+		t.Fatalf("hosts = %+v", hosts)
+	}
+}

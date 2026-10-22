@@ -28,6 +28,8 @@ const testHostConnection = "github-alice"
 type fakeHostCredentials struct {
 	token       string
 	unavailable bool
+	// broken makes every call fail as a store outage would.
+	broken bool
 	// connection is the Connection that feeds hosts; empty means testHostConnection.
 	connection string
 }
@@ -43,6 +45,9 @@ func (f *fakeHostCredentials) CheckHostLink(_ context.Context, namespace, name s
 	want := f.connection
 	if want == "" {
 		want = testHostConnection
+	}
+	if f.broken {
+		return errors.New("credential store unavailable")
 	}
 	if f.unavailable || namespace != testUserNamespace || name != want {
 		return fmt.Errorf("%w: the Connection is not linked", credential.ErrHostLinkUnavailable)
@@ -290,5 +295,33 @@ func TestAgentHostFromAConnectionLosesItsTokenWhenItsTemplateTurnsStandalone(t *
 	}
 	if got := agentHostReady(h.host()); got.Reason != agentHostReasonInvalidTemplate {
 		t.Fatalf("ready = %+v", got)
+	}
+}
+
+// A suspension goes ahead while the link cannot be checked; a running host
+// in the same state keeps retrying instead.
+func TestAgentHostSuspendsWhileItsLinkCannotBeChecked(t *testing.T) {
+	h, credentials, _ := newConnectionHostHarness(t)
+	h.settle()
+	credentials.broken = true
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: testUserNamespace, Name: "alice"}}
+	if _, err := h.reconciler.Reconcile(context.Background(), request); err == nil {
+		t.Fatal("a running host whose link cannot be checked must retry")
+	}
+	host := h.host()
+	host.Spec.Suspended = true
+	if err := h.client.Update(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		if _, err := h.reconciler.Reconcile(context.Background(), request); err != nil {
+			t.Fatalf("suspension must not wait on the link: %v", err)
+		}
+	}
+	if _, ok := h.pod(); ok {
+		t.Fatal("the host must stop")
+	}
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("the token copy must be deleted")
 	}
 }

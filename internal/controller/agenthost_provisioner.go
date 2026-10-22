@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,8 +92,14 @@ func (r *AgentHostProvisioner) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	name := agentHostNameFor(account.Login)
+	if errs := k8svalidation.IsDNS1123Label(name); len(errs) > 0 {
+		r.event(connection, corev1.EventTypeWarning, agentHostReasonNameTaken,
+			fmt.Sprintf("GitHub login %q gives no valid AgentHost name; no host was provisioned", account.Login))
+		return ctrl.Result{}, nil
+	}
 	host := &corev1alpha1.AgentHost{
-		ObjectMeta: metav1.ObjectMeta{Name: "gh-" + strings.ToLower(account.Login), Namespace: connection.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: connection.Namespace},
 		Spec: corev1alpha1.AgentHostSpec{
 			TemplateRef: corev1alpha1.AgentHostTemplateReference{Name: template},
 			GitHubTokenFrom: &corev1alpha1.AgentHostTokenSource{
@@ -148,6 +155,13 @@ func (r *AgentHostProvisioner) event(object client.Object, kind, reason, message
 	if r.Recorder != nil {
 		r.Recorder.Eventf(object, nil, kind, reason, "Provision", "%s", message)
 	}
+}
+
+// agentHostNameFor names a person's host after their GitHub login. Managed
+// user logins carry an underscore, which a name cannot; it becomes a double
+// hyphen, which no GitHub login contains, so no two logins share a name.
+func agentHostNameFor(login string) string {
+	return "gh-" + strings.ReplaceAll(strings.ToLower(login), "_", "--")
 }
 
 // fedBy reports whether host takes its token from connection.
