@@ -649,10 +649,12 @@ func TestKagentDeployRefusesAnotherAgentsRelay(t *testing.T) {
 
 func TestKagentDeployRefusesARotatedCredential(t *testing.T) {
 	dir, bundle := writeTestKagentBundle(t)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: bundle.Runtime + "-auth", Namespace: kagentTestNamespace},
+	// The runtime's own Secret, so only the credential differs.
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: bundle.Runtime + "-auth", Namespace: kagentTestNamespace,
+		Labels: map[string]string{kagentRuntimeLabel: bundle.Runtime}, Annotations: map[string]string{kagentSourceAnnotation: kagentSource(bundle)}},
 		Data: map[string][]byte{"model-upstream-token": []byte("an older token")}}
 	k, _ := newTestKagentRuntimes(t, kagentTestCluster(t, secret))
-	if err := k.deploy(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "new --runtime-revision") {
+	if err := k.deploy(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "holds another upstream credential") {
 		t.Fatalf("deploy with another credential = %v", err)
 	}
 }
