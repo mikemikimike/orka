@@ -163,7 +163,9 @@ func agentHostResponse(host *corev1alpha1.AgentHost) AgentHostResponse {
 		response.GitHubLogin = account.Login
 	}
 	if ready := meta.FindStatusCondition(host.Status.Conditions, "Ready"); ready != nil {
-		response.Ready = ready.Status == metav1.ConditionTrue
+		// A host being deleted keeps its last Ready condition; it is not
+		// ready for anyone.
+		response.Ready = ready.Status == metav1.ConditionTrue && !response.Deleting
 		response.Reason = ready.Reason
 		response.Message = strings.TrimSpace(ready.Message)
 	}

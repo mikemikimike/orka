@@ -148,6 +148,18 @@ func TestOwnAgentHostIsTheCallersOnly(t *testing.T) {
 	if status, _ := h.do(http.MethodGet, "/api/v1/agent-hosts/me"); status != http.StatusNotFound {
 		t.Fatalf("carol: %d, want 404", status)
 	}
+	// A host being deleted keeps its last Ready condition, but is not ready.
+	if deleting := agentHostResponse(func() *corev1alpha1.AgentHost {
+		host := linkedHost("gh-alice", "alice")
+		now := metav1.Now()
+		host.DeletionTimestamp = &now
+		return host
+	}()); deleting.Ready || !deleting.Deleting {
+		t.Fatalf("deleting host = %+v", deleting)
+	}
+	if status, _ := h.do(http.MethodGet, "/api/v1/agent-hosts/me"); status != http.StatusNotFound {
+		t.Fatalf("carol: %d, want 404", status)
+	}
 	// Deleting reaches only the caller's own host.
 	h.identity = person("bob")
 	if status, deleted := h.do(http.MethodDelete, "/api/v1/agent-hosts/me"); status != http.StatusAccepted || deleted.Name != "gh-bob" || !deleted.Deleting {
