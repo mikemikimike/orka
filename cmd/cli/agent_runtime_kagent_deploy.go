@@ -1106,7 +1106,7 @@ func (k *kagentRuntimes) activate(ctx context.Context, dir string, flags []strin
 		return err
 	}
 	defer os.RemoveAll(work) //nolint:errcheck
-	args, err := kagentActivateArgs(flags, bundleDir, work, stdin)
+	args, err := kagentActivateArgs(ctx, flags, bundleDir, work, stdin)
 	if err != nil {
 		return err
 	}
@@ -1166,7 +1166,7 @@ func (k *kagentRuntimes) activate(ctx context.Context, dir string, flags []strin
 // --dry-run and --txn-token-file, drops a --bundle-dir that names the bundle's own directory, and
 // reads standard input (-f -) once, so the preview and the import see the
 // same input.
-func kagentActivateArgs(flags []string, bundleDir, work string, stdin io.Reader) ([]string, error) {
+func kagentActivateArgs(ctx context.Context, flags []string, bundleDir, work string, stdin io.Reader) ([]string, error) {
 	sameDir := func(path string) error {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
@@ -1184,11 +1184,26 @@ func kagentActivateArgs(flags []string, bundleDir, work string, stdin io.Reader)
 		if _, err := os.Stat(path); err == nil {
 			return "", fmt.Errorf("only one import flag can read standard input")
 		}
-		raw, err := io.ReadAll(stdin)
-		if err != nil {
-			return "", err
+		// An interrupt cancels ctx; a read of a pipe whose writer stays open
+		// would otherwise never return.
+		type read struct {
+			raw []byte
+			err error
 		}
-		return path, os.WriteFile(path, raw, 0o600)
+		done := make(chan read, 1)
+		go func() {
+			raw, err := io.ReadAll(stdin)
+			done <- read{raw, err}
+		}()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case result := <-done:
+			if result.err != nil {
+				return "", result.err
+			}
+			return path, os.WriteFile(path, result.raw, 0o600)
+		}
 	}
 	var args []string
 	for i := 0; i < len(flags); i++ {

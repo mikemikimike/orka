@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -955,11 +956,11 @@ func TestKagentActivateAcceptsTheBundleDirectoryAsWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args, err := kagentActivateArgs([]string{"-f", "x.yaml", "--bundle-dir", "bundle", "--bundle-dir=./bundle"}, bundleDir, t.TempDir(), nil)
+	args, err := kagentActivateArgs(context.Background(), []string{"-f", "x.yaml", "--bundle-dir", "bundle", "--bundle-dir=./bundle"}, bundleDir, t.TempDir(), nil)
 	if err != nil || strings.Join(args, " ") != "-f x.yaml" {
 		t.Fatalf("activate args = %v, %v", args, err)
 	}
-	if _, err := kagentActivateArgs([]string{"--bundle-dir", "elsewhere"}, bundleDir, t.TempDir(), nil); err == nil {
+	if _, err := kagentActivateArgs(context.Background(), []string{"--bundle-dir", "elsewhere"}, bundleDir, t.TempDir(), nil); err == nil {
 		t.Fatal("another bundle directory was accepted")
 	}
 }
@@ -968,7 +969,7 @@ func TestKagentActivateAcceptsTheBundleDirectoryAsWritten(t *testing.T) {
 // silently replaced.
 func TestKagentActivateRefusesANamespaceAmongTheImportFlags(t *testing.T) {
 	for _, flags := range [][]string{{"-f", "x.yaml", "-n", "team-a"}, {"-nteam-a"}, {"--namespace", "team-a"}, {"--namespace=team-a"}} {
-		if _, err := kagentActivateArgs(flags, t.TempDir(), t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "before --") {
+		if _, err := kagentActivateArgs(context.Background(), flags, t.TempDir(), t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "before --") {
 			t.Errorf("%v: err = %v", flags, err)
 		}
 	}
@@ -979,7 +980,7 @@ func TestKagentActivateRefusesANamespaceAmongTheImportFlags(t *testing.T) {
 func TestKagentActivateCachesStandardInput(t *testing.T) {
 	for _, flags := range [][]string{{"-f", "-"}, {"-f-"}, {"-f=-"}, {"--file=-"}, {"--file", "-"},
 		{"--revision-egress", "-"}, {"--revision-egress=-"}, {"--revision-sources", "-"}, {"--revision-sources=-"}} {
-		args, err := kagentActivateArgs(flags, t.TempDir(), t.TempDir(), strings.NewReader("export"))
+		args, err := kagentActivateArgs(context.Background(), flags, t.TempDir(), t.TempDir(), strings.NewReader("export"))
 		if err != nil || len(args) != 2 || !slices.Contains(kagentInputFlags, args[0]) || !kagentReadsStdin(flags) {
 			t.Fatalf("%v: args = %v, %v", flags, args, err)
 		}
@@ -988,9 +989,31 @@ func TestKagentActivateCachesStandardInput(t *testing.T) {
 		}
 	}
 	// Standard input has one reader.
-	if _, err := kagentActivateArgs([]string{"-f", "-", "--revision-egress=-"}, t.TempDir(), t.TempDir(), strings.NewReader("export")); err == nil ||
+	if _, err := kagentActivateArgs(context.Background(), []string{"-f", "-", "--revision-egress=-"}, t.TempDir(), t.TempDir(), strings.NewReader("export")); err == nil ||
 		!strings.Contains(err.Error(), "only one import flag") {
 		t.Fatalf("two standard input readers = %v", err)
+	}
+}
+
+// An interrupt ends activate even while it waits on standard input whose
+// writer stays open.
+func TestKagentActivateArgsStopsReadingOnInterrupt(t *testing.T) {
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = writer.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := kagentActivateArgs(ctx, []string{"-f", "-"}, t.TempDir(), t.TempDir(), reader)
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("activate args after an interrupt = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading standard input outlived the interrupt")
 	}
 }
 
@@ -1002,7 +1025,7 @@ func TestKagentActivateRefusesAnOrkaAPIAmongTheImportFlags(t *testing.T) {
 		{"-t", "secret-value"}, {"-tsecret-value"}, {"-t=secret-value"}, {"--token", "secret-value"},
 		{"--txn-token=secret-value"}, {"--kubeconfig", "other"},
 	} {
-		_, err := kagentActivateArgs(flags, t.TempDir(), t.TempDir(), nil)
+		_, err := kagentActivateArgs(context.Background(), flags, t.TempDir(), t.TempDir(), nil)
 		if err == nil || !strings.Contains(err.Error(), "before --") || strings.Contains(err.Error(), "secret-value") {
 			t.Errorf("%v: err = %v", flags, err)
 		}
@@ -1085,7 +1108,7 @@ func TestKagentActivateReadsTheTransactionTokenFirst(t *testing.T) {
 	}
 	// Given after --, the file would be read inside the import, with the locks held.
 	for _, flags := range [][]string{{"-f", "x.yaml", "--txn-token-file", "missing"}, {"--txn-token-file=missing"}} {
-		if _, err := kagentActivateArgs(flags, t.TempDir(), t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "before --") {
+		if _, err := kagentActivateArgs(context.Background(), flags, t.TempDir(), t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "before --") {
 			t.Errorf("%v: err = %v", flags, err)
 		}
 	}
