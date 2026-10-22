@@ -144,8 +144,8 @@ type AgentHostReconciler struct {
 // AgentHostCredentials supplies the GitHub token of hosts fed by a
 // Connection; credential.Source implements it.
 type AgentHostCredentials interface {
-	HostCredential(ctx context.Context, namespace, name, template string, horizon time.Duration) (credential.HostCredential, error)
-	CheckHostLink(ctx context.Context, namespace, name, template string) error
+	HostCredential(ctx context.Context, namespace, name string, horizon time.Duration) (credential.HostCredential, error)
+	CheckHostLink(ctx context.Context, namespace, name string) error
 }
 
 // GitHubAccountReader reads the GitHub account a token belongs to.
@@ -273,6 +273,13 @@ func (r *AgentHostReconciler) reconcileHost(
 	if err := agenthost.ValidateTemplate(template); err != nil {
 		return ctrl.Result{}, agentHostFailed(agentHostReasonInvalidTemplate, "%v", err)
 	}
+	// Standalone access hands the host's connection token to a Secret in this
+	// namespace, which every person's host shares; a host holding a person's
+	// linked token is reached only through their own GitHub account.
+	if host.Spec.GitHubTokenFrom != nil && template.Spec.Access != corev1alpha1.AgentHostAccessRelay {
+		return ctrl.Result{}, agentHostFailed(agentHostReasonInvalidTemplate,
+			"a host fed by a Connection needs a template with access: Relay")
+	}
 	if strings.TrimSpace(r.AgentImage) == "" {
 		return ctrl.Result{}, agentHostFailed(agentHostReasonHostAgentUnavailable,
 			"the controller has no host agent image; set --agent-host-agent-image")
@@ -379,7 +386,7 @@ func (r *AgentHostReconciler) checkHostLink(ctx context.Context, host *corev1alp
 	if r.HostCredentials == nil || r.GitHubAccounts == nil {
 		return agentHostFailed(agentHostReasonConnectionUnavailable, "connectors are not enabled on this controller")
 	}
-	err := r.HostCredentials.CheckHostLink(ctx, host.Namespace, host.Spec.GitHubTokenFrom.ConnectionRef.Name, host.Spec.TemplateRef.Name)
+	err := r.HostCredentials.CheckHostLink(ctx, host.Namespace, host.Spec.GitHubTokenFrom.ConnectionRef.Name)
 	if errors.Is(err, credential.ErrHostLinkUnavailable) {
 		return agentHostFailed(agentHostReasonConnectionUnavailable, "%v", err)
 	}
@@ -396,7 +403,7 @@ func (r *AgentHostReconciler) connectionToken(
 	names agenthost.Names,
 ) ([]byte, string, error) {
 	name := host.Spec.GitHubTokenFrom.ConnectionRef.Name
-	held, err := r.HostCredentials.HostCredential(ctx, host.Namespace, name, host.Spec.TemplateRef.Name, agentHostTokenHorizon)
+	held, err := r.HostCredentials.HostCredential(ctx, host.Namespace, name, agentHostTokenHorizon)
 	if errors.Is(err, credential.ErrHostLinkUnavailable) {
 		return nil, "", agentHostFailed(agentHostReasonConnectionUnavailable, "%v", err)
 	}

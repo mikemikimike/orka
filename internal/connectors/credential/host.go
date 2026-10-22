@@ -22,7 +22,7 @@ import (
 
 // ErrHostLinkUnavailable reports a Connection that can no longer feed an
 // agent host: it is gone or unlinked, its consent no longer covers the
-// provider, or the provider no longer serves hosts from the host's template.
+// provider, or the provider no longer serves agent hosts.
 var ErrHostLinkUnavailable = errors.New("the agent host's GitHub link is unavailable")
 
 // HostCredential is the access token Orka hands a person's agent host.
@@ -41,8 +41,8 @@ type HostCredential struct {
 // tool path's single-flight refresh, so a host and a tool call never refresh
 // the same grant twice, and a refresh made for either replaces the other's
 // token.
-func (s *Source) HostCredential(ctx context.Context, namespace, name, template string, horizon time.Duration) (HostCredential, error) {
-	connection, ref, credential, err := s.hostLink(ctx, namespace, name, template)
+func (s *Source) HostCredential(ctx context.Context, namespace, name string, horizon time.Duration) (HostCredential, error) {
+	connection, ref, credential, err := s.hostLink(ctx, namespace, name)
 	if err != nil {
 		return HostCredential{}, err
 	}
@@ -58,6 +58,16 @@ func (s *Source) HostCredential(ctx context.Context, namespace, name, template s
 		}
 		credential = refreshed
 	}
+	// A disconnect that began after the first read tombstones custody but
+	// keeps the row for revocation, and the custody read does not consult
+	// tombstones: the Connection is read again before any release.
+	again, err := s.hostConnection(ctx, namespace, name)
+	if err != nil {
+		return HostCredential{}, err
+	}
+	if again.UID != connection.UID {
+		return HostCredential{}, hostLinkUnavailable("the Connection was replaced")
+	}
 	return HostCredential{
 		AccessToken:   credential.AccessToken,
 		ExpiresAt:     credential.ExpiresAt,
@@ -67,16 +77,18 @@ func (s *Source) HostCredential(ctx context.Context, namespace, name, template s
 }
 
 // CheckHostLink reports whether the named Connection can still feed an agent
-// host from template, without refreshing its token: a suspended host keeps
-// its token copy only while it can.
-func (s *Source) CheckHostLink(ctx context.Context, namespace, name, template string) error {
-	_, _, _, err := s.hostLink(ctx, namespace, name, template)
+// host, without refreshing its token: a suspended host keeps its token copy
+// only while it can.
+func (s *Source) CheckHostLink(ctx context.Context, namespace, name string) error {
+	_, _, _, err := s.hostLink(ctx, namespace, name)
 	return err
 }
 
 // hostLink loads a host's Connection and the credential it holds, and checks
-// that the link may feed a host from template.
-func (s *Source) hostLink(ctx context.Context, namespace, name, template string) (
+// that the link may feed an agent host. A host keeps the template it was
+// created from: pointing the provider at another template affects only hosts
+// created afterwards.
+func (s *Source) hostLink(ctx context.Context, namespace, name string) (
 	*corev1alpha1.Connection, store.ConnectorCredentialRef, store.ConnectorCredential, error) {
 	var ref store.ConnectorCredentialRef
 	if s == nil || s.Client == nil || s.Credentials == nil {
@@ -94,8 +106,8 @@ func (s *Source) hostLink(ctx context.Context, namespace, name, template string)
 		}
 		return nil, ref, store.ConnectorCredential{}, fmt.Errorf("load connector provider: %w", err)
 	}
-	if provider.Spec.AgentHost == nil || provider.Spec.AgentHost.TemplateRef.Name != template {
-		return nil, ref, store.ConnectorCredential{}, hostLinkUnavailable("its connector provider no longer serves agent hosts from this template")
+	if provider.Spec.AgentHost == nil {
+		return nil, ref, store.ConnectorCredential{}, hostLinkUnavailable("its connector provider no longer serves agent hosts")
 	}
 	ref, err = connectors.CredentialRef(connection)
 	if err != nil {

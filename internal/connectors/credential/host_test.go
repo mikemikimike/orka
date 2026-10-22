@@ -44,37 +44,43 @@ func TestHostCredentialReturnsTheAccessTokenAndRefreshesBeforeExpiry(t *testing.
 	h.serveHosts("copilotd")
 	h.put(store.ConnectorCredential{AccessToken: "ghu_held", RefreshToken: "ghr_held", ExpiresAt: h.now.Add(4 * time.Hour)})
 
-	held, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, "copilotd", 15*time.Minute)
+	held, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if held.AccessToken != "ghu_held" || h.refresher.calls.Load() != 0 {
 		t.Fatalf("held = %+v, refreshes = %d", held, h.refresher.calls.Load())
 	}
-	if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name, "copilotd"); err != nil {
+	if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name); err != nil {
 		t.Fatal(err)
 	}
 
 	// A token that expires within the horizon is refreshed, and the new one
 	// returned.
 	h.put(store.ConnectorCredential{AccessToken: "ghu_held", RefreshToken: "ghr_held", ExpiresAt: h.now.Add(10 * time.Minute)})
-	held, err = h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, "copilotd", time.Minute)
+	held, err = h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, time.Minute)
 	if err != nil || held.AccessToken != "ghu_held" {
 		t.Fatalf("held = %+v, %v", held, err)
 	}
-	refreshed, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, "copilotd", 15*time.Minute)
+	refreshed, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if refreshed.AccessToken != "gho_new" || h.refresher.calls.Load() != 1 || refreshed.Version == held.Version {
 		t.Fatalf("refreshed = %+v, refreshes = %d", refreshed, h.refresher.calls.Load())
 	}
+
+	// A host keeps its template when the provider moves to another one: once
+	// the person consents to the change, their host is fed again.
+	h.serveHosts("other")
+	if _, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, 15*time.Minute); err != nil {
+		t.Fatalf("a host must outlive its provider's template change: %v", err)
+	}
 }
 
 func TestHostCredentialIsUnavailableWhenTheLinkCannotFeedAHost(t *testing.T) {
 	for name, setup := range map[string]func(h *harness){
 		"provider serves no hosts": func(h *harness) {},
-		"another template":         func(h *harness) { h.serveHosts("other") },
 		"consent predates hosts": func(h *harness) {
 			h.serveHosts("copilotd")
 			connection := h.reload()
@@ -94,11 +100,11 @@ func TestHostCredentialIsUnavailableWhenTheLinkCannotFeedAHost(t *testing.T) {
 			h := newHarness(t)
 			h.put(store.ConnectorCredential{AccessToken: "ghu_held", RefreshToken: "ghr_held", ExpiresAt: h.now.Add(4 * time.Hour)})
 			setup(h)
-			_, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, "copilotd", 15*time.Minute)
+			_, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, 15*time.Minute)
 			if !errors.Is(err, ErrHostLinkUnavailable) {
 				t.Fatalf("err = %v, want ErrHostLinkUnavailable", err)
 			}
-			if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name, "copilotd"); !errors.Is(err, ErrHostLinkUnavailable) {
+			if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name); !errors.Is(err, ErrHostLinkUnavailable) {
 				t.Fatalf("check = %v, want ErrHostLinkUnavailable", err)
 			}
 		})

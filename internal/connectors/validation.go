@@ -672,8 +672,15 @@ func validateTools(provider *corev1alpha1.ConnectorProvider, knownBuiltin Builti
 	if len(tools) == 0 && provider.Spec.AgentHost == nil {
 		return invalid("tools requires at least one entry unless the provider serves agent hosts")
 	}
-	if host := provider.Spec.AgentHost; host != nil && strings.TrimSpace(host.TemplateRef.Name) == "" {
-		return invalid("agentHost.templateRef.name is required")
+	if host := provider.Spec.AgentHost; host != nil {
+		if strings.TrimSpace(host.TemplateRef.Name) == "" {
+			return invalid("agentHost.templateRef.name is required")
+		}
+		// Orka asks api.github.com whose a host's token is, so the token
+		// must come from github.com, and never goes anywhere else.
+		if endpoint, err := url.Parse(provider.Spec.OAuth.TokenURL); err != nil || endpoint.Host != "github.com" {
+			return invalid("agentHost requires a github.com provider: oauth.tokenURL must be on github.com")
+		}
 	}
 	if len(tools) > maxToolCount {
 		return invalid("tools has too many entries")

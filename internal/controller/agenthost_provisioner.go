@@ -80,7 +80,7 @@ func (r *AgentHostProvisioner) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	template := provider.Spec.AgentHost.TemplateRef.Name
-	held, err := r.HostCredentials.HostCredential(ctx, connection.Namespace, connection.Name, template, agentHostTokenHorizon)
+	held, err := r.HostCredentials.HostCredential(ctx, connection.Namespace, connection.Name, agentHostTokenHorizon)
 	if errors.Is(err, credential.ErrHostLinkUnavailable) {
 		return ctrl.Result{}, nil
 	}

@@ -210,9 +210,10 @@ func TestStaticChartAgentHostPolicyMatchesSharedAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sharedDoc := requireRenderedDocument(t, string(shared), "kind: ValidatingAdmissionPolicy\n", "name: agenthost-template-use.orka.ai")
+	const policyKind = "kind: ValidatingAdmissionPolicy\n"
+	sharedDoc := requireRenderedDocument(t, string(shared), policyKind, "name: agenthost-template-use.orka.ai")
 	chart := requireHelmRender(t, "--show-only", "templates/workspace-class-use-policy.yaml")
-	chartDoc := requireRenderedDocument(t, chart, "kind: ValidatingAdmissionPolicy\n", "name: test-orka-agenthost-template-use")
+	chartDoc := requireRenderedDocument(t, chart, policyKind, "name: test-orka-agenthost-template-use")
 
 	rendered := requireHelmRender(t, "--show-only", "templates/deployment.yaml")
 	var deployment appsv1.Deployment
@@ -230,7 +231,8 @@ func TestStaticChartAgentHostPolicyMatchesSharedAdmission(t *testing.T) {
 	}
 	const kustomizeController = "system:serviceaccount:orka-system:orka-controller-manager"
 	var sharedPolicy, chartPolicy admissionregistrationv1.ValidatingAdmissionPolicy
-	if err := yaml.Unmarshal([]byte(strings.ReplaceAll(sharedDoc, kustomizeController, controller)), &sharedPolicy); err != nil {
+	sharedDoc = strings.ReplaceAll(sharedDoc, kustomizeController, controller)
+	if err := yaml.Unmarshal([]byte(sharedDoc), &sharedPolicy); err != nil {
 		t.Fatal(err)
 	}
 	if err := yaml.Unmarshal([]byte(chartDoc), &chartPolicy); err != nil {

@@ -374,6 +374,11 @@ func TestValidateProviderSpec(t *testing.T) {
 		{name: "agent host without a template", mutate: func(p *corev1alpha1.ConnectorProvider) {
 			p.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{}
 		}, want: "agentHost.templateRef.name is required"},
+		{name: "agent host from another token endpoint", mutate: func(p *corev1alpha1.ConnectorProvider) {
+			p.Spec.OAuth.AuthorizeURL = "https://example.ghe.com/login/oauth/authorize"
+			p.Spec.OAuth.TokenURL = "https://example.ghe.com/login/oauth/access_token"
+			p.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}}
+		}, want: "agentHost requires a github.com provider"},
 		{name: "bad tool name", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[0].Name = "List-PRs" }, want: "snake_case"},
 		{name: "duplicate tool", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[1].Name = p.Spec.Tools[0].Name }, want: "more than once"},
 		{name: "bad class", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[0].Class = "coordination" }, want: "class must be read or write"},

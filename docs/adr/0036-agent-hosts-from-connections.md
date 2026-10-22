@@ -63,6 +63,9 @@ check under **Acceptance**.
   host's phase. They say "Host ready", never "Registered": Pod Ready proves the AHP
   listener answers, not that GitHub has registered the environment.
 - The provider declares no OAuth scopes, because GitHub App user tokens carry none.
+- The provider must be on github.com, where Orka reads a token's account. The template
+  must use Relay access: a Standalone host's connection Secret would sit in the namespace
+  that every person's host shares.
 - A dedicated GitHub App, with no tools on its provider and only the repository
   permissions the host's own calls need, is recommended but not required. A provider that
   also serves connector tools works, but its host tokens then carry those tools'

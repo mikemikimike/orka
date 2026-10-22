@@ -32,19 +32,19 @@ type fakeHostCredentials struct {
 	connection string
 }
 
-func (f *fakeHostCredentials) HostCredential(_ context.Context, namespace, name, template string, _ time.Duration) (credential.HostCredential, error) {
-	if err := f.CheckHostLink(context.Background(), namespace, name, template); err != nil {
+func (f *fakeHostCredentials) HostCredential(_ context.Context, namespace, name string, _ time.Duration) (credential.HostCredential, error) {
+	if err := f.CheckHostLink(context.Background(), namespace, name); err != nil {
 		return credential.HostCredential{}, err
 	}
 	return credential.HostCredential{AccessToken: f.token}, nil
 }
 
-func (f *fakeHostCredentials) CheckHostLink(_ context.Context, namespace, name, template string) error {
+func (f *fakeHostCredentials) CheckHostLink(_ context.Context, namespace, name string) error {
 	want := f.connection
 	if want == "" {
 		want = testHostConnection
 	}
-	if f.unavailable || namespace != testUserNamespace || name != want || template != "copilotd" {
+	if f.unavailable || namespace != testUserNamespace || name != want {
 		return fmt.Errorf("%w: the Connection is not linked", credential.ErrHostLinkUnavailable)
 	}
 	return nil
@@ -225,6 +225,23 @@ func TestAgentHostFromAConnectionNeedsConnectors(t *testing.T) {
 		t.Fatal("no Pod without a credential source")
 	}
 	if got := agentHostReady(h.host()); got.Reason != agentHostReasonConnectionUnavailable {
+		t.Fatalf("ready = %+v", got)
+	}
+}
+
+func TestAgentHostFromAConnectionNeedsARelayTemplate(t *testing.T) {
+	h := newAgentHostHarness(t, testTemplate(corev1alpha1.AgentHostAccessStandalone, corev1alpha1.AgentHostCredentialRequired),
+		connectionHost())
+	h.reconciler.HostCredentials = &fakeHostCredentials{token: "ghu_first"}
+	h.reconciler.GitHubAccounts = fakeGitHubAccounts{"ghu_first": alice}
+	h.settle()
+	if _, ok := h.pod(); ok {
+		t.Fatal("a Connection's token must not reach a Standalone host")
+	}
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("no token copy for a Standalone host")
+	}
+	if got := agentHostReady(h.host()); got.Reason != agentHostReasonInvalidTemplate {
 		t.Fatalf("ready = %+v", got)
 	}
 }

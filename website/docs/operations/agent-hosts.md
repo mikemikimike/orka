@@ -184,7 +184,11 @@ spec:
   volume, even while the host is suspended. Linking the same account again restarts the
   host on its volume.
 - Only the controller may create a host fed by a Connection, and only from the template its
-  provider names. A link annotated `orka.ai/agent-host: declined` gets no host.
+  provider names. A host keeps that template when the provider later names another one. A
+  link annotated `orka.ai/agent-host: declined` gets no host.
+- The provider must be on github.com: Orka reads the token's account from api.github.com.
+- The template must use `access: Relay`. A Standalone host's connection Secret sits in the
+  namespace every person's host shares, so these hosts fail with `InvalidTemplate` instead.
 - Deleting the AgentHost deletes its volume. While the link stays, Orka creates a fresh host
   for it.
 - At most one provider per namespace may set `agentHost`. If several do, none provisions.
@@ -263,7 +267,7 @@ because a pending or running workflow can be lost to suspension.
 | `StateVolumeLost` | The host's volume was deleted. Delete and recreate the AgentHost. |
 | `HostAgentUnavailable` | The controller has no `--agent-host-agent-image`. |
 | `HostNamespaceChanged` | The controller's `--agent-host-namespace` changed after the host was created. Delete and recreate it. |
-| `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent, or its provider no longer names the host's template. Linking again restarts the host. |
+| `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent, or its provider no longer serves agent hosts. Linking again restarts the host. |
 | `GitHubIdentityChanged` | The Connection now links a different GitHub account than the one the host's volume belongs to. Link the original account, or delete the AgentHost. |
 
 A host that fails for a missing template or token has its Pod stopped and keeps its
