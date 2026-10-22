@@ -2011,3 +2011,15 @@ func TestConnectionViewsMarkDuplicateLinksUnready(t *testing.T) {
 		}
 	}
 }
+
+// Clients disclose an agent host before consent from the provider view.
+func TestConnectorProviderResponseSaysWhenItServesAgentHosts(t *testing.T) {
+	provider := &corev1alpha1.ConnectorProvider{ObjectMeta: metav1.ObjectMeta{Name: "github"}}
+	if connectorProviderResponse(provider).AgentHost {
+		t.Fatal("a provider without agentHost serves no hosts")
+	}
+	provider.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}}
+	if !connectorProviderResponse(provider).AgentHost {
+		t.Fatal("the provider view must say it serves agent hosts")
+	}
+}

@@ -351,6 +351,11 @@ function ProviderCard({ provider, connection, busy, duplicate, onConnect, onChan
       <CardContent className="space-y-3 text-sm">
         {readTools.length > 0 && <p><span className="text-muted-foreground">Reads:</span> {readTools.join(', ')}</p>}
         {writeTools.length > 0 && <p><span className="text-muted-foreground">Writes (ask for approval):</span> {writeTools.join(', ')}</p>}
+        {provider.agentHost && (
+          <p data-testid={`connector-${provider.name}-agent-host`} className="text-muted-foreground">
+            Linking creates your Copilot environment on Orka. Code running there can read this account&apos;s token, whatever the link&apos;s mode.
+          </p>
+        )}
         {connection?.message && !duplicate && (connection.state !== 'Ready' || !connection.ready) && <p className="text-muted-foreground">{connection.message}</p>}
         {connection?.deleting ? (
           <p className="text-muted-foreground">Revoking tokens and removing the link.</p>

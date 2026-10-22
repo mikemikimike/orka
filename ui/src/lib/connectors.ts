@@ -12,6 +12,8 @@ export interface ConnectorProvider {
   ready: boolean
   scopes?: { read?: string[]; write?: string[] }
   tools: ConnectorTool[]
+  // Linking gives the person an agent host that can read the linked token.
+  agentHost?: boolean
 }
 
 export type ConnectionMode = 'readOnly' | 'readWrite'

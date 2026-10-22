@@ -110,3 +110,29 @@ func TestHostCredentialIsUnavailableWhenTheLinkCannotFeedAHost(t *testing.T) {
 		})
 	}
 }
+
+// A provider that stops serving hosts while a refresh is in flight releases no
+// token, refreshed or not.
+func TestHostCredentialFailsClosedWhenTheProviderOptsOutDuringARefresh(t *testing.T) {
+	h := newHarness(t)
+	h.serveHosts("copilotd")
+	h.put(store.ConnectorCredential{AccessToken: "ghu_held", RefreshToken: "ghr_held", ExpiresAt: h.now.Add(5 * time.Minute)})
+	h.refresher.onRefresh = func() {
+		provider := &corev1alpha1.ConnectorProvider{}
+		if err := h.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "github"}, provider); err != nil {
+			h.t.Error(err)
+			return
+		}
+		provider.Spec.AgentHost = nil
+		if err := h.client.Update(context.Background(), provider); err != nil {
+			h.t.Error(err)
+		}
+	}
+	held, err := h.source.HostCredential(context.Background(), testNamespace, h.connection.Name, 15*time.Minute)
+	if !errors.Is(err, ErrHostLinkUnavailable) || held.AccessToken != "" {
+		t.Fatalf("held = %q, err = %v; want no token and ErrHostLinkUnavailable", held.AccessToken, err)
+	}
+	if h.refresher.calls.Load() != 1 {
+		t.Fatalf("refreshes = %d, want the race to have run", h.refresher.calls.Load())
+	}
+}

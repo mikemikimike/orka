@@ -150,3 +150,29 @@ func TestProvisionerRecreatesADeletedHost(t *testing.T) {
 		t.Fatal("a deleted host is provisioned again while its link stays")
 	}
 }
+
+// A link blocked by another host's name tries again later, and a provider
+// change revisits every link in the namespace, whichever provider they use.
+func TestProvisionerRetriesBlockedLinks(t *testing.T) {
+	connection := linkedConnection("github")
+	taken := testHost()
+	taken.Name = "gh-alice"
+	other := linkedConnection("github-two")
+	other.Name = "github-two-bob"
+	p, c := newProvisioner(t, connection, hostProvider("github"), taken, other)
+	result, err := p.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(connection)})
+	if err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("result = %+v, err = %v; a link blocked by a taken name must retry", result, err)
+	}
+	if err := c.Delete(context.Background(), taken); err != nil {
+		t.Fatal(err)
+	}
+	provision(t, p, connection)
+	if len(hostsIn(t, c)) != 1 {
+		t.Fatal("the link did not take the freed name")
+	}
+	requests := p.connectionsIn(context.Background(), hostProvider("github-two"))
+	if len(requests) != 2 {
+		t.Fatalf("a provider change enqueued %v, want every link in the namespace", requests)
+	}
+}

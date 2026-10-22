@@ -58,15 +58,20 @@ func (s *Source) HostCredential(ctx context.Context, namespace, name string, hor
 		}
 		credential = refreshed
 	}
-	// A disconnect that began after the first read tombstones custody but
-	// keeps the row for revocation, and the custody read does not consult
-	// tombstones: the Connection is read again before any release.
-	again, err := s.hostConnection(ctx, namespace, name)
+	// Every check runs again before release: a disconnect that began after
+	// the first read tombstones custody without the custody read noticing,
+	// and the provider may have stopped serving hosts, or a re-consent may
+	// have replaced the material, while a refresh was in flight. Only what
+	// custody still holds, for a link that still passes, is released.
+	again, _, latest, err := s.hostLink(ctx, namespace, name)
 	if err != nil {
 		return HostCredential{}, err
 	}
 	if again.UID != connection.UID {
 		return HostCredential{}, hostLinkUnavailable("the Connection was replaced")
+	}
+	if latest.Version != credential.Version || latest.AccessToken != credential.AccessToken {
+		return HostCredential{}, errors.New("the Connection's credential changed while it was read; retry")
 	}
 	return HostCredential{
 		AccessToken:   credential.AccessToken,

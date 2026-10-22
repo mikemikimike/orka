@@ -109,6 +109,8 @@ func (r *AgentHostProvisioner) Reconcile(ctx context.Context, req ctrl.Request) 
 		if !fedBy(existing, connection) {
 			r.event(connection, corev1.EventTypeWarning, agentHostReasonNameTaken,
 				fmt.Sprintf("AgentHost %q already exists and was not created for this link; no host was provisioned", host.Name))
+			// Deleting the other host enqueues nothing for this link.
+			return ctrl.Result{RequeueAfter: agentHostResync}, nil
 		}
 		return ctrl.Result{}, nil
 	}
@@ -163,23 +165,22 @@ func (r *AgentHostProvisioner) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.Connection{}).
 		Named("agenthost-provisioner").
-		// A provider that starts serving hosts, or a deleted host, is
-		// provisioned again for its links.
-		Watches(&corev1alpha1.ConnectorProvider{}, handler.EnqueueRequestsFromMapFunc(r.connectionsOf)).
+		// A provider change can start or end a namespace's provider conflict,
+		// so it revisits every link there; a deleted host is provisioned
+		// again for its link.
+		Watches(&corev1alpha1.ConnectorProvider{}, handler.EnqueueRequestsFromMapFunc(r.connectionsIn)).
 		Watches(&corev1alpha1.AgentHost{}, handler.EnqueueRequestsFromMapFunc(hostConnection)).
 		Complete(r)
 }
 
-func (r *AgentHostProvisioner) connectionsOf(ctx context.Context, object client.Object) []reconcile.Request {
+func (r *AgentHostProvisioner) connectionsIn(ctx context.Context, object client.Object) []reconcile.Request {
 	connections := &corev1alpha1.ConnectionList{}
 	if err := r.List(ctx, connections, client.InNamespace(object.GetNamespace())); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(connections.Items))
 	for i := range connections.Items {
-		if connections.Items[i].Spec.ProviderRef.Name == object.GetName() {
-			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&connections.Items[i])})
-		}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&connections.Items[i])})
 	}
 	return requests
 }
