@@ -104,9 +104,9 @@ Features we cover:
 - **Human approval** for actions that matter, with Orka running exactly the action a person
   approved
 - **Connectors**, so an agent can act as *you* on GitHub, with approval on every write
-- **Outbound access policies and transaction tokens** for teams that need tighter control
-- **Stronger sandboxes** with execution workspaces (Agent Sandbox and Agent Substrate) that
-  suspend, resume, and checkpoint an agent's files
+- **Calling your own systems without handing agents the keys**, and **tracking who asked for
+  what**, for teams that need tighter control
+- **Stronger sandboxes** that can pause an agent and keep its files for next time
 
 ### [Part 3 — Agents that keep working: automation, teamwork, and your own tools](03-agents-that-keep-working.md)
 
@@ -126,8 +126,8 @@ Features we cover:
 - **Autonomous Tasks** that plan, act, and re-plan toward a goal
 - **Memory** that agents propose and people approve
 - **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
-- **Your own tools:** HTTP and MCP tools, toolboxes of extra command-line programs, and your own
-  agent runtimes (for example AgentKit or Microsoft Foundry agents)
+- **Your own tools:** connecting your APIs, adding extra programs for coding agents
+  (toolboxes), and packaging an agent you built yourself (AgentKit)
 
 ### [Part 4 — Running Orka for real: visibility, cost, and how it works inside](04-running-orka-for-real.md)
 
@@ -139,11 +139,11 @@ how to measure cost, and how the system is built underneath.
 Features we cover:
 
 - **The durable record:** every Task's phase, result, artifacts, and event timeline
-- **OpenTelemetry tracing and GenAI metrics** in the observability tools you already run
+- **Tracing and metrics** in the monitoring tools you already run
 - **Usage and PR outcomes:** tokens per merged pull request, per team
 - **The dashboard** for watching and steering work
-- **How it works inside:** the controller, warm RuntimePools that scale to zero, digest-pinned
-  images, and the clean-room publisher
+- **How it works inside:** the one program that runs everything, warm pools of coding agents
+  that shut down when idle, pinned images, and what happens when things restart
 - **Day-two operations:** install, upgrade, and where to look when something is stuck
 
 ## Try it before reading further

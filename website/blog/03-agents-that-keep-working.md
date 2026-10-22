@@ -31,7 +31,8 @@ Here is the map of this part:
 | Work as a team | `coordination` on an Agent | Agent + child Tasks |
 | Remember things | Memory proposals | Agent + review |
 | Answer in Teams, Telegram, or to other agents | A gateway adapter | Agent + Tasks |
-| Use your tools | Tools, toolboxes, or your own runtime | Agent |
+| Use your tools and programs | Tools and toolboxes | Agent |
+| Be an agent you built yourself | An AgentKit image | Agent |
 
 ## Agents on a schedule
 
@@ -107,7 +108,9 @@ always decides when to create that fix.
 Some jobs are too big for one agent, or need different skills: a backend change, a frontend
 change, and a review. With
 [multi-agent coordination](https://orka-agents.github.io/orka/docs/multi-agent-coordination),
-one **coordinator** agent splits the work and hands pieces to specialists.
+one **coordinator** agent splits the work and hands pieces to specialists. The specialists are
+ordinary Agents like the ones from Part 1; here, `backend-dev` is a plain AI Agent and `coder`
+is a Codex Agent.
 
 ```yaml
 apiVersion: core.orka.ai/v1alpha1
@@ -150,7 +153,8 @@ works in rounds toward a goal:
 ```
 
 Each round it reads its saved plan, delegates, updates the plan, and stops when the goal is
-met or it reaches `maxIterations`. Each round runs as its own Kubernetes Job and the plan is
+met or it reaches `maxIterations`. Each round runs as its own Kubernetes Job (a one-off run of a
+container) and the plan is
 saved between rounds. A failed round can still fail the whole Task unless you add a retry
 policy. Autonomous mode is for Orka's own `type: ai` coordinators; the built-in coding agents
 do not support it. Combine this with human approval from Part 2 and the coordinator
@@ -165,7 +169,7 @@ future agent believes.
 
 Orka's [memory](https://orka-agents.github.io/orka/docs/memory) takes the careful route:
 
-1. An agent **proposes** a memory with `remember` or `propose_memory`.
+1. An agent **proposes** a memory, using a `remember` tool Orka gives it.
 2. A person **reviews** it through the API.
 3. Accepted memories are **applied** in a separate, explicit step.
 4. Only then do future Tasks in that namespace see it.
@@ -198,27 +202,106 @@ anywhere your team works.
 
 ## Agents with your tools
 
-The last way to grow an agent is to give it more to work with.
+The last way to grow an agent is to give it more to work with. There are three options, from
+smallest to biggest.
 
-- **Skills and custom tools.** Give a plain AI agent reusable skills, call your own HTTP APIs,
-  or call functions on an MCP server your team already runs (for `type: ai` agents, through a
-  trusted gateway). Credentials stay behind the outbound access policies from Part 2. See
-  [Agents, skills, and tools](https://orka-agents.github.io/orka/docs/guides/agents-skills-and-tools).
-- **Toolboxes.** Coding agents can only run the programs in their runtime image. A
-  [toolbox](https://orka-agents.github.io/orka/docs/guides/toolboxes) is an ordinary container
-  image full of extra command-line tools — `yq`, a linter, a compiler — mounted read-only into
-  the agent's `PATH`. Toolboxes add tools and nothing else: no credentials, no extra network
-  access, no root.
-- **Your own agent runtime.** If you have built an agent with
-  [AgentKit](https://github.com/orka-agents/agentkit) or host one in Microsoft Foundry, you can
-  [register it with Orka](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
-  and run it through the same Tasks and records as the built-in agents, with human approval
-  available for the tools Orka runs on its behalf.
+### Connect your APIs
+
+A *tool* is something an agent can call: a web search, a calculator, your company's inventory
+API. You can give Orka's own `type: ai` agents tools that call your HTTP APIs. You can also
+connect them to an MCP server your team already runs. MCP, the Model Context Protocol, is a
+common way to offer tools to AI agents. The credentials for these tools stay behind the
+outbound access policies from Part 2, never with the agent. See
+[Agents, skills, and tools](https://orka-agents.github.io/orka/docs/guides/agents-skills-and-tools).
+
+### Give coding agents more programs: toolboxes
+
+A coding agent can only run the programs that come with it. Ask Codex to edit a YAML file with
+`yq`, and if `yq` is not there, it is stuck.
+
+A [toolbox](https://orka-agents.github.io/orka/docs/guides/toolboxes) fixes that. It is an
+ordinary container image that holds extra programs in one folder. You list it on the Agent, and
+Orka makes those programs available to the agent. Here is the `codex-agent` from Part 1 with a
+toolbox added:
+
+```yaml
+apiVersion: core.orka.ai/v1alpha1
+kind: Agent
+metadata:
+  name: codex-agent
+  namespace: orka-system
+spec:
+  model:
+    name: gpt-6-astra
+  runtime:
+    type: codex
+    toolboxes:
+      - image: registry.example.com/tools/yq-jq@sha256:<digest>
+        mountPath: /opt/yq-jq   # the folder inside the image that holds the programs
+        pathEntries: [bin]      # lets the agent run them by name
+```
+
+A toolbox adds programs and nothing else. It brings no passwords, no extra network access, and
+no admin rights. The image is named by its exact fingerprint (`sha256:...`) so it cannot change
+under you. Toolboxes are off by default; whoever runs Orka turns them on and lists the image
+registries they trust.
+
+### Bring an agent you built: AgentKit
+
+The coding agents so far are well-known tools: Codex, Claude Code, Copilot CLI, OpenCode.
+Sometimes you want your *own* agent, with your own instructions and tools, built for one job.
+
+[AgentKit](https://github.com/orka-agents/agentkit), a companion project, lets you describe that
+agent in one YAML file and build it into an ordinary container image:
+
+```yaml
+#syntax=ghcr.io/orka-agents/agentkit/agentkit:latest
+apiVersion: v1alpha1
+kind: Agent
+metadata:
+  name: url-summarizer
+model:
+  provider: openai-compatible
+  baseURL: https://api.openai.com/v1
+  name: gpt-4o-mini
+  apiKeyEnv: OPENAI_API_KEY   # only the name of the variable; the key is never in the image
+instructions: |
+  Summarize any URL the user gives you in three bullet points.
+expose:
+  openai: true
+```
+
+```bash
+docker buildx build . -f agentkitfile.yaml -t url-summarizer:latest
+```
+
+That image runs anywhere containers run, including your laptop. To use it from Orka, whoever
+runs Orka registers it once as an `AgentRuntime`. Orka checks that it behaves correctly before
+sending it any work. The [bring your own runtime](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
+guide walks through this. After that, an Agent just points at it:
+
+```yaml
+apiVersion: core.orka.ai/v1alpha1
+kind: Agent
+metadata:
+  name: summarizer
+  namespace: orka-system
+spec:
+  runtime:
+    runtimeRef:
+      name: url-summarizer
+```
+
+This Agent sets no model or instructions, because those are already in the image. Tasks use it
+like any other Agent, with the same records, and human approval from Part 2 works for the tools
+Orka runs on its behalf. Agents hosted in Microsoft Foundry plug in the same way, through the
+[Foundry runtime](https://github.com/orka-agents/orka-runtime-foundry).
 
 ## What you have now
 
 Look back at what we added in this part: a `schedule` field, a `RepositoryMonitor`, a
-`coordination` block, a review step for memory, a gateway adapter, and some tools. Each one is
+`coordination` block, a review step for memory, a gateway adapter, tools, a toolbox, and an
+agent you built yourself. Each one is
 small. None of them replaced anything from Part 1 or Part 2. They snap onto the same
 Provider–Agent–Task core, and they inherit the same security and the same records.
 

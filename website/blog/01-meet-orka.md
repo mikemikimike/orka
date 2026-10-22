@@ -63,7 +63,8 @@ kubectl -n orka-system get task hello --watch
 ```
 
 When the phase says `Succeeded`, Orka has run its first Task. That might look like a lot of
-ceremony for `echo`, but notice what you got for free: the work ran in its own Pod, it has a
+ceremony for `echo`, but notice what you got for free: the work ran in its own Pod (Kubernetes'
+unit for running a container), it has a
 name you can look up later, and it has a status you can check from anywhere.
 
 > **Tip:** create everything in the `orka-system` namespace. Orka watches one namespace, and
@@ -85,7 +86,8 @@ something you will see across the whole series: **Orka is a set of small pieces 
 
 ## Step 3: Ask a model
 
-First, store a model key in a Kubernetes Secret and create a Provider that points at it:
+First, store a model key in a Kubernetes Secret (the cluster's built-in store for passwords and
+keys) and create a Provider that points at it:
 
 ```bash
 kubectl -n orka-system create secret generic anthropic-secret \
@@ -219,11 +221,14 @@ spec:
     branch: main
 ```
 
-Orka clones the repository, gives the agent a working copy, and records what it does. The
-first coding Task warms up a pool for that runtime, which takes a few minutes; after that,
-new Tasks start in seconds.
+Orka clones the repository, gives the agent a working copy, and records what it does.
 
-Change `intent: read` to `intent: write` and add publication credentials, and the agent can
+Coding agents are slow to start from scratch, so Orka keeps a *pool* for each one: a running
+Pod that can host several agents' private sessions at once and shuts down when nobody is using
+it. The first coding Task starts the pool, which takes a few minutes; after that, new Tasks
+start in seconds.
+
+Change `intent: read` to `intent: write` and add a Git credential for publishing, and the agent can
 change the code and Orka will publish it to a branch. Set `createPR: true` and add a GitHub API
 credential, and Orka opens the pull request too. Here is the part worth remembering for
 Part 2: **the agent itself never holds a Git credential.** It only edits files. A separate
@@ -253,7 +258,8 @@ same work from wherever they already are:
   read results, approve actions. You can
   [try it in your browser](https://orka-agents.github.io/orka/demo/) on sample data first.
 - **Chat.** Describe what you want in plain language — "run a container that prints the date
-  and tell me what it printed" — and an orchestrator creates and runs the Tasks for you.
+  and tell me what it printed" — and an orchestrator (an AI agent whose job is to run other
+  Tasks) creates and runs them for you.
 - **The coding tools you already use.** Orka serves
   [OpenAI-compatible](https://orka-agents.github.io/orka/docs/openai-compat) and
   [Anthropic-compatible](https://orka-agents.github.io/orka/docs/anthropic-compat) endpoints.

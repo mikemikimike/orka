@@ -48,12 +48,13 @@ coding agent that writes to a repository, check the delivery record too.
 ## See agents in the observability tools you already run
 
 Orka speaks [OpenTelemetry](https://opentelemetry.io/), the open standard most observability
-tools understand. Turn on telemetry and point Orka at your collector, and you get:
+tools understand. Turn on telemetry and point Orka at your OpenTelemetry collector (the service
+that gathers this data), and you get:
 
-- **traces** that follow one request through the controller, chat, tool calls, and the AI
+- **traces** that follow one request step by step through Orka, chat, tool calls, and the AI
   worker,
-- **GenAI metrics** such as model and tool latency and token counts, using the OpenTelemetry
-  conventions for generative AI,
+- **AI-specific metrics** such as how long model and tool calls take and how many tokens they
+  use,
 - alongside the usual Prometheus metrics and structured logs.
 
 Telemetry is off by default. When it is on, Orka records metadata, token counts, and timings,
@@ -84,7 +85,7 @@ measurements have gaps.
 
 ## The dashboard
 
-Orka's [web dashboard](https://orka-agents.github.io/orka/docs/ui) is built into the controller,
+Orka's [web dashboard](https://orka-agents.github.io/orka/docs/ui) is built into Orka itself,
 so there is nothing extra to deploy. It is off by default; one Helm value turns it on:
 
 ```bash
@@ -105,7 +106,8 @@ when something looks wrong.
 
 ### One controller, three places to run work
 
-Orka is **one controller** that turns Task resources into work. Requests come in through the
+Orka is **one controller**: a single program running in your cluster that watches for Tasks and
+turns them into work. Requests come in through the
 API, CLI, dashboard, chat, compatible endpoints, gateways, and GitHub webhooks. The controller
 checks who is asking, creates or updates the Task, and sends it to the right place:
 
@@ -146,8 +148,8 @@ Kubernetes Jobs and follow their own retry rules.)
 Orka needs **no external database.** It keeps:
 
 - **control decisions** — who is in charge, which session owns what, which branch is claimed —
-  in Kubernetes resources and Leases, where the cluster itself prevents two writers from
-  stepping on each other,
+  in Kubernetes' own records, including locks called Leases, where the cluster itself prevents
+  two writers from stepping on each other,
 - **records** — results, artifacts, transcripts, plans, memory, monitor history, usage — in an
   embedded SQLite database on the controller's volume.
 
