@@ -183,8 +183,9 @@ spec:
 - The host belongs to the first GitHub account it was given. A later token for another
   account fails it with `GitHubIdentityChanged` and keeps the volume.
 - Disconnecting stops the host, deletes its token copy and keeps the AgentHost and its
-  volume, even while the host is suspended. Linking the same account again restarts the
-  host on its volume.
+  volume. Linking the same account again restarts the host on its volume.
+- A suspended host keeps no token copy. Waking it writes a fresh one, after checking the
+  account.
 - Only the controller may create a host fed by a Connection, and only from the template its
   provider names. A host keeps that template when the provider later names another one. A
   link annotated `orka.ai/agent-host: declined` gets no host.

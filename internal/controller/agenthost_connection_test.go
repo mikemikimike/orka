@@ -171,9 +171,9 @@ func TestAgentHostStopsWhenItsConnectionIsUnavailable(t *testing.T) {
 	}
 }
 
-// Suspension does not keep a token copy past its Connection.
+// A suspended host keeps no token copy, and waking it checks the account.
 func TestAgentHostSuspendedChecksItsConnection(t *testing.T) {
-	h, credentials, _ := newConnectionHostHarness(t)
+	h, credentials, accounts := newConnectionHostHarness(t)
 	h.settle()
 	host := h.host()
 	host.Spec.Suspended = true
@@ -181,15 +181,30 @@ func TestAgentHostSuspendedChecksItsConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.settle()
-	if _, ok := h.tokenCopy(); !ok {
-		t.Fatal("a suspended host keeps its token copy while its Connection is linked")
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("a suspended host keeps no token copy")
 	}
 	credentials.unavailable = true
 	h.settle()
-	if _, ok := h.tokenCopy(); ok {
-		t.Fatal("a suspended host must lose its token copy with its Connection")
-	}
 	if got := agentHostReady(h.host()); got.Reason != agentHostReasonConnectionUnavailable {
+		t.Fatalf("ready = %+v", got)
+	}
+
+	// Waking the host after the link was given to another GitHub account
+	// writes no token and fails the host.
+	credentials.unavailable = false
+	credentials.token = "ghu_mallory"
+	accounts["ghu_mallory"] = corev1alpha1.AgentHostGitHubAccount{ID: 2002, Login: "mallory"}
+	host = h.host()
+	host.Spec.Suspended = false
+	if err := h.client.Update(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("another account's token must not reach the host")
+	}
+	if got := agentHostReady(h.host()); got.Reason != agentHostReasonGitHubIdentityChanged {
 		t.Fatalf("ready = %+v", got)
 	}
 }

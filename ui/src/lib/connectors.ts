@@ -37,6 +37,8 @@ export interface Connection {
 export interface ConnectionAuthorizeResponse {
   connection: Connection
   authorizeURL?: string
+  // The provider gives the person an agent host that can read the token.
+  agentHost?: boolean
 }
 
 /** Query parameters the OAuth callback sends the browser back with. */

@@ -141,9 +141,9 @@ check under **Acceptance**.
 - When that happens, the controller stops the Pod, confirms it is gone, deletes the token
   copy and keeps the AgentHost and its volume. The host is `Failed` with
   `ConnectionUnavailable`.
-- This check runs before suspension, so a suspended host loses its token copy too, and
-  waking it cannot bypass the check. Reconnecting with the same GitHub account restarts the
-  host on its volume.
+- This check runs before suspension, so waking a host cannot bypass it. A suspended host
+  keeps no token copy at all; waking it writes a fresh one after the account check.
+  Reconnecting with the same GitHub account restarts the host on its volume.
 - Deleting the AgentHost still deletes its volume, as in 0035. That stays an
   administrator's action.
 - Disconnecting deletes Orka's copy of the token, as in 0033. Revoking the grant through

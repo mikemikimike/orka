@@ -741,7 +741,8 @@ func (r *AgentHostReconciler) reconcileConnectionSecret(
 	return r.Update(ctx, secret)
 }
 
-// suspend stops the host's Pod and keeps its volume and Secrets.
+// suspend stops the host's Pod and keeps its volume and Secrets, except the
+// token copy of a host fed by a Connection.
 func (r *AgentHostReconciler) suspend(
 	ctx context.Context,
 	host *corev1alpha1.AgentHost,
@@ -758,6 +759,13 @@ func (r *AgentHostReconciler) suspend(
 		setAgentHostState(host, corev1alpha1.AgentHostPhaseSuspended, "", metav1.ConditionFalse,
 			agentHostReasonSuspended, "the host's Pod is stopping", reason)
 		return ctrl.Result{RequeueAfter: agentHostCleanupRequeue}, nil
+	}
+	// A stopped host needs no token. Waking it writes a fresh one, after
+	// checking that it belongs to the host's GitHub account.
+	if host.Spec.GitHubTokenFrom != nil {
+		if err := r.deleteOwned(ctx, host, agentHostKindSecret, "", names.GitHubTokenSecret); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	message := "the host is suspended; its state volume is kept"
 	if reason == agentHostReasonIdle {
