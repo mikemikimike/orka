@@ -155,6 +155,45 @@ kubectl -n "$ns" port-forward "pod/$pod" "8788:$port"
 Add the host as `ws://127.0.0.1:8788/?tkn=<token>`. Port-forward needs
 `pods/portforward` on that Pod.
 
+### Hosts from GitHub Connections
+
+With [connectors](../guides/connectors.md) enabled, people can get a host by linking
+GitHub, with no Secret and no Kubernetes access. An operator adds a template to one GitHub
+`ConnectorProvider` in the watch namespace, backed by a GitHub App with expiring user
+tokens:
+
+```yaml
+spec:
+  # ...the provider's OAuth settings, as in Connectors
+  agentHost:
+    templateRef:
+      name: copilotd
+```
+
+- The provider needs no tools. A dedicated GitHub App with only the permissions the host
+  needs is recommended: a host's token carries all of the app's permissions, and a tool
+  call's refresh would replace the host's token.
+- When a person links the provider, Orka creates an AgentHost named `gh-<login>` in that
+  namespace, which appears as the environment `orka-gh-<login>`.
+- Orka writes the link's access token into the host and refreshes it 15 minutes before it
+  expires. copilotd picks up the replaced file without a restart. The refresh token never
+  leaves Orka.
+- The host belongs to the first GitHub account it was given. A later token for another
+  account fails it with `GitHubIdentityChanged` and keeps the volume.
+- Disconnecting stops the host, deletes its token copy and keeps the AgentHost and its
+  volume, even while the host is suspended. Linking the same account again restarts the
+  host on its volume.
+- Only the controller may create a host fed by a Connection, and only from the template its
+  provider names. A link annotated `orka.ai/agent-host: declined` gets no host.
+- Deleting the AgentHost deletes its volume. While the link stays, Orka creates a fresh host
+  for it.
+- At most one provider per namespace may set `agentHost`. If several do, none provisions.
+  The same happens when the name `gh-<login>` is taken by another AgentHost. Each case is
+  reported as an event.
+
+Linking such a provider again is required after `agentHost` is added or changed: it is part
+of the consent the person gave.
+
 ## The host contract
 
 Orka adds to the template's container named `host`, and promises nothing else:
@@ -224,8 +263,10 @@ because a pending or running workflow can be lost to suspension.
 | `StateVolumeLost` | The host's volume was deleted. Delete and recreate the AgentHost. |
 | `HostAgentUnavailable` | The controller has no `--agent-host-agent-image`. |
 | `HostNamespaceChanged` | The controller's `--agent-host-namespace` changed after the host was created. Delete and recreate it. |
+| `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent, or its provider no longer names the host's template. Linking again restarts the host. |
+| `GitHubIdentityChanged` | The Connection now links a different GitHub account than the one the host's volume belongs to. Link the original account, or delete the AgentHost. |
 
 A host that fails for a missing template or token has its Pod stopped and keeps its
-volume; when the token's Secret is gone, Orka also deletes its copy.
+volume. When the token's Secret or Connection is gone, Orka also deletes its copy.
 
 Deleting an AgentHost removes every object Orka created for it, and only those.

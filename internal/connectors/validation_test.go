@@ -367,6 +367,13 @@ func TestValidateProviderSpec(t *testing.T) {
 			p.Spec.OAuth.AdditionalAuthorizeParameters = map[string]string{"prompt": "a\nb"}
 		}, want: "without control bytes"},
 		{name: "no tools", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools = nil }, want: "at least one"},
+		{name: "no tools for an agent-host provider", mutate: func(p *corev1alpha1.ConnectorProvider) {
+			p.Spec.Tools = nil
+			p.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}}
+		}},
+		{name: "agent host without a template", mutate: func(p *corev1alpha1.ConnectorProvider) {
+			p.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{}
+		}, want: "agentHost.templateRef.name is required"},
 		{name: "bad tool name", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[0].Name = "List-PRs" }, want: "snake_case"},
 		{name: "duplicate tool", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[1].Name = p.Spec.Tools[0].Name }, want: "more than once"},
 		{name: "bad class", mutate: func(p *corev1alpha1.ConnectorProvider) { p.Spec.Tools[0].Class = "coordination" }, want: "class must be read or write"},
@@ -676,6 +683,9 @@ func TestProviderAuthorityDigestAndConsent(t *testing.T) {
 		"secret ref": func(p *corev1alpha1.ConnectorProvider) { p.Spec.OAuth.ClientSecretRef.Key = "other" },
 		"client auth": func(p *corev1alpha1.ConnectorProvider) {
 			p.Spec.OAuth.ClientAuthentication = corev1alpha1.ConnectorClientAuthSecretPost
+		},
+		"serving agent hosts": func(p *corev1alpha1.ConnectorProvider) {
+			p.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}}
 		},
 	} {
 		changed := provider.DeepCopy()

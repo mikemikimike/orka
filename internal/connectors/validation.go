@@ -669,8 +669,11 @@ func validScopeToken(scope string) bool {
 
 func validateTools(provider *corev1alpha1.ConnectorProvider, knownBuiltin BuiltinToolCheck) *Issue {
 	tools := provider.Spec.Tools
-	if len(tools) == 0 {
-		return invalid("tools requires at least one entry")
+	if len(tools) == 0 && provider.Spec.AgentHost == nil {
+		return invalid("tools requires at least one entry unless the provider serves agent hosts")
+	}
+	if host := provider.Spec.AgentHost; host != nil && strings.TrimSpace(host.TemplateRef.Name) == "" {
+		return invalid("agentHost.templateRef.name is required")
 	}
 	if len(tools) > maxToolCount {
 		return invalid("tools has too many entries")
@@ -995,6 +998,12 @@ func ProviderAuthorityDigest(provider *corev1alpha1.ConnectorProvider) string {
 	slices.SortFunc(builtins, func(a, b corev1alpha1.ConnectorTool) int { return strings.Compare(a.Name, b.Name) })
 	for _, tool := range builtins {
 		parts = append(parts, "builtin", tool.Name, string(tool.Class), BuiltinConnectorToolAudience)
+	}
+	// Serving agent hosts hands the person's access tokens to their host,
+	// where its code can read them: a consent that never disclosed that does
+	// not cover it.
+	if host := provider.Spec.AgentHost; host != nil {
+		parts = append(parts, "agentHost", host.TemplateRef.Name)
 	}
 	return lengthPrefixedDigest(parts)
 }

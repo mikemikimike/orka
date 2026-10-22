@@ -36,6 +36,7 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/agenthost"
+	"github.com/orka-agents/orka/internal/connectors/credential"
 )
 
 // +kubebuilder:rbac:groups=core.orka.ai,resources=agenthosts,verbs=get;list;watch;update;patch
@@ -66,6 +67,8 @@ const (
 	agentHostReasonStateVolumeLost        = "StateVolumeLost"
 	agentHostReasonHostAgentUnavailable   = "HostAgentUnavailable"
 	agentHostReasonHostNamespaceChanged   = "HostNamespaceChanged"
+	agentHostReasonConnectionUnavailable  = "ConnectionUnavailable"
+	agentHostReasonGitHubIdentityChanged  = "GitHubIdentityChanged"
 
 	agentHostKindSecret           = "Secret"
 	agentHostKindConnectionSecret = "ConnectionSecret"
@@ -82,13 +85,17 @@ const (
 	agentHostNonceBytes        = 16
 	// agentHostWakeClockSkew lets a wake request dated slightly ahead count now.
 	agentHostWakeClockSkew = time.Minute
+	// agentHostTokenHorizon is how long before its expiry a host's token from
+	// a Connection is refreshed.
+	agentHostTokenHorizon = 15 * time.Minute
 
 	// Kubelet reasons for a container that is starting normally.
 	agentHostWaitingInitializing = "PodInitializing"
 	agentHostWaitingCreating     = "ContainerCreating"
 
-	agentHostTemplateIndex = "spec.templateRef.name"
-	agentHostSecretIndex   = "spec.githubTokenSecretRef.name"
+	agentHostTemplateIndex   = "spec.templateRef.name"
+	agentHostSecretIndex     = "spec.githubTokenSecretRef.name"
+	agentHostConnectionIndex = "spec.githubTokenFrom.connectionRef.name"
 )
 
 // agentHostFailure stops reconciliation with a Ready=False reason the user can act on.
@@ -126,8 +133,24 @@ type AgentHostReconciler struct {
 	Controller agenthost.ControllerPeer
 	// IdleStatus reads a running host's idle status.
 	IdleStatus agenthost.StatusReader
-	Now        func() time.Time
-	Random     func([]byte) (int, error)
+	// HostCredentials supplies the token of hosts fed by a Connection, and
+	// GitHubAccounts says whose it is. Without them such hosts fail.
+	HostCredentials AgentHostCredentials
+	GitHubAccounts  GitHubAccountReader
+	Now             func() time.Time
+	Random          func([]byte) (int, error)
+}
+
+// AgentHostCredentials supplies the GitHub token of hosts fed by a
+// Connection; credential.Source implements it.
+type AgentHostCredentials interface {
+	HostCredential(ctx context.Context, namespace, name, template string, horizon time.Duration) (credential.HostCredential, error)
+	CheckHostLink(ctx context.Context, namespace, name, template string) error
+}
+
+// GitHubAccountReader reads the GitHub account a token belongs to.
+type GitHubAccountReader interface {
+	Account(ctx context.Context, token string) (corev1alpha1.AgentHostGitHubAccount, error)
 }
 
 func (r *AgentHostReconciler) now() time.Time {
@@ -226,6 +249,13 @@ func (r *AgentHostReconciler) reconcileHost(
 		host.Status.IdleSuspendedAt = nil
 		host.Status.IdleSince = nil
 	}
+	// A host fed by a Connection stops when its link does, suspended or not,
+	// so waking it never bypasses the check.
+	if host.Spec.GitHubTokenFrom != nil {
+		if err := r.checkHostLink(ctx, host); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	// Suspension needs nothing but the Pod's receipt, so it is honored even
 	// when the template or token is gone.
 	if host.Spec.Suspended || host.Status.IdleSuspendedAt != nil {
@@ -247,7 +277,7 @@ func (r *AgentHostReconciler) reconcileHost(
 		return ctrl.Result{}, agentHostFailed(agentHostReasonHostAgentUnavailable,
 			"the controller has no host agent image; set --agent-host-agent-image")
 	}
-	githubToken, tokenSource, err := r.githubToken(ctx, host, template)
+	githubToken, tokenSource, err := r.githubToken(ctx, host, names, template)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -292,20 +322,31 @@ func (r *AgentHostReconciler) reconcileHost(
 	if err := r.reconcileConnectionSecret(ctx, host, names, template, connectionToken); err != nil {
 		return ctrl.Result{}, err
 	}
-	return r.reconcilePod(ctx, host, names, template, tokenSource)
+	result, err := r.reconcilePod(ctx, host, names, template, tokenSource)
+	if err == nil && host.Spec.GitHubTokenFrom != nil && (result.RequeueAfter == 0 || result.RequeueAfter > agentHostResync) {
+		// Come back before the token is due for refresh, and to notice a
+		// rotation whose notification was lost.
+		result.RequeueAfter = agentHostResync
+	}
+	return result, err
 }
 
 // githubToken returns the user's token when the template uses one, or nil,
-// and where it comes from as Secret name and key. Admission checks that
-// whoever set githubTokenSecretRef may read that Secret.
+// and where it comes from: a Secret name and key, or a Connection. Admission
+// checks that whoever set githubTokenSecretRef may read that Secret, and
+// that only the controller sets githubTokenFrom.
 func (r *AgentHostReconciler) githubToken(
 	ctx context.Context,
 	host *corev1alpha1.AgentHost,
+	names agenthost.Names,
 	template *corev1alpha1.AgentHostTemplate,
 ) ([]byte, string, error) {
 	policy := template.Spec.GitHubToken
 	if policy == "" || policy == corev1alpha1.AgentHostCredentialNone {
 		return nil, "", nil
+	}
+	if host.Spec.GitHubTokenFrom != nil {
+		return r.connectionToken(ctx, host, names)
 	}
 	ref := host.Spec.GitHubTokenSecretRef
 	if ref == nil {
@@ -331,6 +372,73 @@ func (r *AgentHostReconciler) githubToken(
 		return nil, "", agentHostFailed(agentHostReasonGitHubTokenUnavailable, "Secret %q has no data at key %q", ref.Name, key)
 	}
 	return token, ref.Name + "/" + key, nil
+}
+
+// checkHostLink fails a host whose Connection can no longer feed it.
+func (r *AgentHostReconciler) checkHostLink(ctx context.Context, host *corev1alpha1.AgentHost) error {
+	if r.HostCredentials == nil || r.GitHubAccounts == nil {
+		return agentHostFailed(agentHostReasonConnectionUnavailable, "connectors are not enabled on this controller")
+	}
+	err := r.HostCredentials.CheckHostLink(ctx, host.Namespace, host.Spec.GitHubTokenFrom.ConnectionRef.Name, host.Spec.TemplateRef.Name)
+	if errors.Is(err, credential.ErrHostLinkUnavailable) {
+		return agentHostFailed(agentHostReasonConnectionUnavailable, "%v", err)
+	}
+	return err
+}
+
+// connectionToken returns the access token of the host's Connection,
+// refreshed ahead of its expiry. A token the host does not hold yet must
+// belong to the GitHub account the host's volume does; the first one pins
+// that account before it reaches the host.
+func (r *AgentHostReconciler) connectionToken(
+	ctx context.Context,
+	host *corev1alpha1.AgentHost,
+	names agenthost.Names,
+) ([]byte, string, error) {
+	name := host.Spec.GitHubTokenFrom.ConnectionRef.Name
+	held, err := r.HostCredentials.HostCredential(ctx, host.Namespace, name, host.Spec.TemplateRef.Name, agentHostTokenHorizon)
+	if errors.Is(err, credential.ErrHostLinkUnavailable) {
+		return nil, "", agentHostFailed(agentHostReasonConnectionUnavailable, "%v", err)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("get the host's token from Connection %s: %w", name, err)
+	}
+	token := []byte(held.AccessToken)
+	holds, err := r.tokenCopyHolds(ctx, names, token)
+	if err != nil {
+		return nil, "", err
+	}
+	if host.Status.GitHub == nil || !holds {
+		account, err := r.GitHubAccounts.Account(ctx, held.AccessToken)
+		if err != nil {
+			return nil, "", err
+		}
+		if pinned := host.Status.GitHub; pinned != nil && pinned.ID != account.ID {
+			return nil, "", agentHostFailed(agentHostReasonGitHubIdentityChanged,
+				"Connection %s now links GitHub account %q, but the host belongs to %q; reconnect with %q, or delete the AgentHost",
+				name, account.Login, pinned.Login, pinned.Login)
+		}
+		if host.Status.GitHub == nil {
+			host.Status.GitHub = &account
+			if err := r.Status().Update(ctx, host); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	return token, "connection:" + name, nil
+}
+
+// tokenCopyHolds says whether the host's token copy already holds token.
+func (r *AgentHostReconciler) tokenCopyHolds(ctx context.Context, names agenthost.Names, token []byte) (bool, error) {
+	secret := &corev1.Secret{}
+	err := r.reader().Get(ctx, types.NamespacedName{Namespace: names.Namespace, Name: names.GitHubTokenSecret}, secret)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(secret.Data[agenthost.TokenKey], token), nil
 }
 
 // ensureConnectionToken creates the host's connection token once and returns it.
@@ -668,7 +776,9 @@ func (r *AgentHostReconciler) stopFailedHost(
 		return err
 	}
 	host.Status.PodName = ""
-	if failure.reason == agentHostReasonGitHubTokenRequired || failure.reason == agentHostReasonGitHubTokenUnavailable {
+	switch failure.reason {
+	case agentHostReasonGitHubTokenRequired, agentHostReasonGitHubTokenUnavailable,
+		agentHostReasonConnectionUnavailable, agentHostReasonGitHubIdentityChanged:
 		return ignoreCollision(r.deleteOwned(ctx, host, agentHostKindSecret, "", names.GitHubTokenSecret))
 	}
 	return nil
@@ -984,6 +1094,15 @@ func (r *AgentHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}); err != nil {
 		return err
 	}
+	if err := indexer.IndexField(context.Background(), &corev1alpha1.AgentHost{}, agentHostConnectionIndex,
+		func(object client.Object) []string {
+			if from := object.(*corev1alpha1.AgentHost).Spec.GitHubTokenFrom; from != nil {
+				return []string{from.ConnectionRef.Name}
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
 	componentLabel := predicate.NewPredicateFuncs(func(object client.Object) bool {
 		return object.GetLabels()[agenthost.LabelComponent] == agenthost.ComponentValue
 	})
@@ -995,6 +1114,9 @@ func (r *AgentHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1alpha1.AgentHostTemplate{}, handler.EnqueueRequestsFromMapFunc(
 			r.hostsUsing(agentHostTemplateIndex))).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.hostsUsing(agentHostSecretIndex))).
+		// A refresh, re-link or disconnect of a host's Connection reaches the
+		// host at once.
+		Watches(&corev1alpha1.Connection{}, handler.EnqueueRequestsFromMapFunc(r.hostsUsing(agentHostConnectionIndex))).
 		Complete(r)
 }
 
