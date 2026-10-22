@@ -124,9 +124,10 @@ Features we cover:
 - **Multi-agent coordination:** one agent delegates to specialists, inside limits you set
 - **Autonomous Tasks** that plan, act, and re-plan toward a goal
 - **Memory** that agents propose and people approve
-- **Sessions and workspaces:** agents that continue a conversation and keep their files, in
-  sandboxes (Agent Sandbox and Agent Substrate) that can pause, resume, save checkpoints, and
-  start over from them
+- **Sessions:** agents that continue a conversation, including one you started with Codex on
+  your laptop and imported into Orka
+- **Workspaces:** a sandbox per conversation (Agent Sandbox or Agent Substrate) that can suspend
+  when idle, resume later, save checkpoints, and restore or fork from them
 - **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
 - **Your own tools:** connecting your APIs, adding extra programs for coding agents
   (toolboxes), and packaging an agent you built yourself (AgentKit)

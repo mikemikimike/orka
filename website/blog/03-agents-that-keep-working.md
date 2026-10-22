@@ -30,7 +30,7 @@ Here is the map of this part:
 | Care for a repository | `RepositoryMonitor` | Agents + Tasks |
 | Work as a team | `coordination` on an Agent | Agent + child Tasks |
 | Remember things | Memory proposals | Agent + review |
-| Pick up where they left off | Sessions and execution workspaces | Task |
+| Pick up where they left off | Sessions, session import, and execution workspaces | Task |
 | Answer in Teams, Telegram, or to other agents | A gateway adapter | Agent + Tasks |
 | Use your tools and programs | Tools and toolboxes | Agent |
 | Be an agent you built yourself | An AgentKit image | Agent |
@@ -181,7 +181,8 @@ need more context.
 ## Agents that pick up where they left off
 
 Real work rarely fits in one go. You ask an agent to start a refactor, look at what it did, and
-come back an hour later with "now update the tests." For that, the agent needs two things: the
+come back an hour later with "now update the tests." Sometimes you even start on your laptop and
+want to hand the work over to the cluster. For any of that, the agent needs two things: the
 conversation so far, and the files it was working on.
 
 ### Sessions: the conversation
@@ -198,6 +199,35 @@ spec:
 
 Tasks in one Session run one at a time, in order, so two messages never trip over each other.
 
+### Start on your laptop, continue in Orka
+
+Say you have been working with Codex on your laptop, and the job turns out to be bigger than
+you thought. You would like it to keep going in the cluster, with the same conversation, while
+you close your laptop.
+
+Orka can import that conversation into a Session. First stop Codex, then:
+
+```bash
+orka session migrate import refactor-auth \
+  --codex-home ~/.codex \
+  --thread <your Codex thread ID> \
+  --journal-dir ~/orka-import-journal \
+  --source-stopped
+```
+
+Now send a normal Codex Task with `sessionRef.name: refactor-auth` and `create: true`. The agent in the cluster
+picks up the *same* Codex conversation, not a summary of it. After each Task, Orka saves Codex's
+own record of the conversation, so the next Task continues exactly where the last one stopped.
+
+When you want it back, `orka session migrate export refactor-auth`, pointed at a fresh Codex
+folder on your laptop, installs the latest saved conversation there, and you resume it locally.
+
+A few honest limits today: this works for Codex only, with a specific Codex version and its
+reasoning mode turned off, so the conversation contains no encrypted reasoning. Bring a conversation back into
+a fresh Codex folder rather than your everyday one. The
+[session migration guide](https://orka-agents.github.io/orka/docs/guides/codex-session-migration)
+has the details.
+
 ### Execution workspaces: the files, and a place of their own
 
 By default, a coding agent runs in the shared pool from Part 1. That pool is fast, but it is
@@ -211,29 +241,59 @@ Two are supported today:
   project that runs each agent in its own sandbox Pod with its own storage.
 - **[Agent Substrate](https://github.com/agent-substrate/substrate)**, which runs each agent under
   gVisor (a sandbox that sits between a program and the machine) on dedicated machines, and can
-  save snapshots of an agent's files.
+  take snapshots of an agent's files.
 
 Here is what that gives Orka:
 
 | With a workspace, an agent can... | Agent Sandbox | Agent Substrate |
 | --- | --- | --- |
 | Work behind its own wall, one conversation per sandbox | Yes | Yes |
-| Pause when idle, and resume later with its files intact | Yes | Yes |
-| Save a checkpoint of its files | No | Yes |
-| Start a new workspace from a checkpoint, for example to restore or to try a second approach from the same point | No | Yes |
+| Suspend when idle, and resume later with its files intact | Yes | Yes |
+| Save a checkpoint of its files that outlives the workspace | No | Yes |
+| Restore a checkpoint into a new workspace, or fork it into several | No | Yes |
 
-**Pause and resume** means an idle agent stops using the cluster but keeps its work. Come back
-tomorrow with "now update the tests," and the agent starts again with the same files. Orka keeps
-the *files*, never the running program's memory, and the resumed agent gets fresh credentials,
-so nothing that should have expired comes back to life.
+### Suspend and resume
 
-**Checkpoints** go a step further. Save the state of an agent's files, then start a brand-new
-workspace from it: to recover from a mistake, or to fork the work and try two different ideas
-from the same starting point.
+An agent waiting for your next message does not need to keep running. With a workspace that
+allows it, Orka **suspends** an idle agent: it stops the agent completely and keeps only its
+files. Agent Sandbox keeps the files on a storage volume; Agent Substrate takes a snapshot of
+them. Orka double-checks that the old agent is really gone before it calls the workspace
+suspended, so nothing is quietly left running.
+
+When your next message arrives, Orka **resumes**: it starts a fresh agent on the saved files and
+continues the Session. Two things are deliberately *not* brought back:
+
+- **Running memory.** The agent starts fresh, like a computer after a restart. Its files and the
+  conversation are there; whatever was only in memory is not.
+- **Old credentials.** The resumed agent gets new ones, so nothing that should have expired
+  comes back to life.
+
+The workspace class decides when this happens, for example "suspend after an hour idle, delete
+after a week."
+
+### Snapshots, checkpoints, and restore
+
+Suspending is about one workspace taking a nap. A **checkpoint** is a saved copy of a
+workspace's files that you keep on purpose, and it lives on even after the original workspace
+is deleted. Agent Substrate supports them.
+
+From a checkpoint you can:
+
+- **Restore:** start a brand-new workspace from it. Use this to undo a wrong turn, or to recover
+  after the original is gone.
+- **Fork:** start *several* new workspaces from the same checkpoint. Each one is independent, so
+  you can let one agent try approach A and another try approach B from the exact same starting
+  point.
+
+The same rules as resume apply: a restored workspace gets the files, never the old running
+memory or old credentials. Checkpoints are also protected like everything else in Orka: you need
+permission on the source workspace to save one, and permission on the checkpoint to use it.
+
+### Choosing a workspace
 
 Choosing a workspace is the same composable idea again. Whoever runs Orka publishes a few named
-*workspace classes*, such as "sandboxed, pauses after an hour idle." A Task just asks for one by
-name:
+*workspace classes*, such as "Agent Sandbox, suspend after an hour idle." A Task just asks for one
+by name:
 
 ```yaml
 spec:
@@ -256,7 +316,7 @@ does the pushing.
 
 Workspaces are off by default, and each sandbox project is installed and run separately from
 Orka. To see them in action, watch
-[pausing a workspace and keeping its files](https://www.youtube.com/watch?v=DyS9JioSRa0) (Agent
+[suspending a workspace and keeping its files](https://www.youtube.com/watch?v=DyS9JioSRa0) (Agent
 Sandbox) and [checkpointing and restoring a workspace](https://www.youtube.com/watch?v=jsdRB-0LLAc)
 (Agent Substrate). The [execution workspaces guide](https://orka-agents.github.io/orka/docs/concepts/execution-workspaces)
 has the setup.
