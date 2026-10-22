@@ -867,6 +867,20 @@ func ResolveProviderReferences(ctx context.Context, reader client.Reader, provid
 	if value, ok := secret.Data[ref.Key]; !ok || len(strings.TrimSpace(string(value))) == 0 {
 		return unresolved(ReasonReferenceInvalid, "client secret Secret key was not found or is empty"), nil
 	}
+	// A provider that serves agent hosts is ready only once their template
+	// exists and reaches each host only through its owner's account.
+	if host := provider.Spec.AgentHost; host != nil {
+		template := &corev1alpha1.AgentHostTemplate{}
+		if err := reader.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: host.TemplateRef.Name}, template); err != nil {
+			if apierrors.IsNotFound(err) {
+				return unresolved(ReasonReferenceNotFound, "agentHost template was not found"), nil
+			}
+			return nil, fmt.Errorf("resolve agent host template: %w", err)
+		}
+		if template.Spec.Access != corev1alpha1.AgentHostAccessRelay {
+			return unresolved(ReasonReferenceInvalid, "agentHost template must use access: Relay"), nil
+		}
+	}
 	return nil, nil
 }
 

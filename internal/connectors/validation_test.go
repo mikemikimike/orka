@@ -791,3 +791,45 @@ func TestValidScopeTokenRefusesCommas(t *testing.T) {
 		}
 	}
 }
+
+// A provider that serves agent hosts resolves only with a Relay template.
+func TestResolveProviderReferencesNeedsARelayAgentHostTemplate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	provider := validProvider()
+	provider.Spec.AgentHost = &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "oauth", Namespace: "tenant"},
+		Data:       map[string][]byte{"clientSecret": []byte("s3cret")},
+	}
+	template := func(access corev1alpha1.AgentHostAccess) *corev1alpha1.AgentHostTemplate {
+		return &corev1alpha1.AgentHostTemplate{
+			ObjectMeta: metav1.ObjectMeta{Name: "copilotd", Namespace: "tenant"},
+			Spec:       corev1alpha1.AgentHostTemplateSpec{Access: access},
+		}
+	}
+	for name, test := range map[string]struct {
+		objects []runtime.Object
+		want    string
+	}{
+		"no template":           {objects: []runtime.Object{secret}, want: ReasonReferenceNotFound},
+		"a Standalone template": {objects: []runtime.Object{secret, template(corev1alpha1.AgentHostAccessStandalone)}, want: ReasonReferenceInvalid},
+		"a Relay template":      {objects: []runtime.Object{secret, template(corev1alpha1.AgentHostAccessRelay)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reader := ctrlfake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(test.objects...).Build()
+			issue, err := ResolveProviderReferences(context.Background(), reader, provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (issue == nil) != (test.want == "") || (issue != nil && issue.Reason != test.want) {
+				t.Fatalf("issue = %v, want reason %q", issue, test.want)
+			}
+		})
+	}
+}

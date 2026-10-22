@@ -125,7 +125,9 @@ func (s *Source) hostLink(ctx context.Context, namespace, name string) (
 	if err != nil {
 		return nil, ref, store.ConnectorCredential{}, err
 	}
-	if _, err := s.validateProvider(ctx, connection, credential, nil); err != nil {
+	// The provider just read is judged, so only a provider that does not
+	// authorize the link stops a host; a failed read above is retried.
+	if err := checkProvider(connection, provider, credential, nil); err != nil {
 		return nil, ref, store.ConnectorCredential{}, hostLinkUnavailable(err.Error())
 	}
 	return connection, ref, credential, nil

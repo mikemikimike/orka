@@ -308,6 +308,12 @@ func TestAgentHostSuspendsWhileItsLinkCannotBeChecked(t *testing.T) {
 	if _, err := h.reconciler.Reconcile(context.Background(), request); err == nil {
 		t.Fatal("a running host whose link cannot be checked must retry")
 	}
+	if _, ok := h.pod(); !ok {
+		t.Fatal("a check that could not run must not stop a running host")
+	}
+	if _, ok := h.tokenCopy(); !ok {
+		t.Fatal("a check that could not run must not delete the token copy")
+	}
 	host := h.host()
 	host.Spec.Suspended = true
 	if err := h.client.Update(context.Background(), host); err != nil {

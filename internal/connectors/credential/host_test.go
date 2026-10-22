@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/connectors"
@@ -134,5 +136,35 @@ func TestHostCredentialFailsClosedWhenTheProviderOptsOutDuringARefresh(t *testin
 	}
 	if h.refresher.calls.Load() != 1 {
 		t.Fatalf("refreshes = %d, want the race to have run", h.refresher.calls.Load())
+	}
+}
+
+// A provider read that fails is retried, never taken for a link that stopped
+// authorizing the host: a host is stopped only for a provider it has read.
+func TestHostLinkReadFailuresAreRetried(t *testing.T) {
+	h := newHarness(t)
+	h.serveHosts("copilotd")
+	h.put(store.ConnectorCredential{AccessToken: "ghu_held", RefreshToken: "ghr_held", ExpiresAt: h.now.Add(4 * time.Hour)})
+	failProvider := func(n int) client.Reader {
+		reads := 0
+		return interceptor.NewClient(h.client.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1alpha1.ConnectorProvider); ok {
+					if reads++; reads == n {
+						return context.DeadlineExceeded
+					}
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+	}
+	h.source.APIReader = failProvider(1)
+	if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name); err == nil || errors.Is(err, ErrHostLinkUnavailable) {
+		t.Fatalf("err = %v, want a retryable error", err)
+	}
+	// A link check reads its provider once, so no second read can fail it.
+	h.source.APIReader = failProvider(2)
+	if err := h.source.CheckHostLink(context.Background(), testNamespace, h.connection.Name); err != nil {
+		t.Fatalf("err = %v", err)
 	}
 }
