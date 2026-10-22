@@ -1,16 +1,18 @@
 ---
 title: "Part 2 — Trust by design: keys, approvals, and sandboxes"
-series: "Orka, piece by piece"
-part: 2
-status: draft
+slug: trust-by-design
+date: 2026-10-21T11:00
+authors: [orka]
+tags: [orka-piece-by-piece]
+description: "How Orka keeps model keys and Git credentials away from agents, and the approvals and sandboxes you can add on top."
 ---
-
-# Part 2 — Trust by design: keys, approvals, and sandboxes
 
 *Part 2 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
 In [Part 1](01-meet-orka.md) we gave a coding agent a real repository. Now the obvious
 question: **is that safe?**
+
+<!-- truncate -->
 
 Here is the uncomfortable truth about AI agents. They read untrusted text all day — issues
 written by strangers, web pages, code comments, dependency READMEs. Any of that text can try

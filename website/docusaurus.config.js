@@ -41,7 +41,21 @@ const config = {
           editUrl: ({docPath}) =>
             `https://github.com/orka-agents/orka/edit/main/website/docs/${docPath}`,
         },
-        blog: false,
+        blog: {
+          path: 'blog',
+          routeBasePath: 'blog',
+          blogTitle: 'Orka blog',
+          blogDescription: 'Posts about running AI agents on Kubernetes with Orka.',
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+          showReadingTime: true,
+          tags: 'tags.yml',
+          onInlineTags: 'throw',
+          onInlineAuthors: 'throw',
+          onUntruncatedBlogPosts: 'throw',
+          editUrl: ({blogPath}) =>
+            `https://github.com/orka-agents/orka/edit/main/website/blog/${blogPath}`,
+        },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -72,6 +86,11 @@ const config = {
           {
             to: 'pathname:///demo/',
             label: 'Dashboard demo',
+            position: 'left',
+          },
+          {
+            to: '/blog',
+            label: 'Blog',
             position: 'left',
           },
           {
@@ -115,6 +134,10 @@ const config = {
               {
                 label: 'Demo videos',
                 to: '/docs/demos',
+              },
+              {
+                label: 'Blog',
+                to: '/blog',
               },
               {
                 label: 'Examples',

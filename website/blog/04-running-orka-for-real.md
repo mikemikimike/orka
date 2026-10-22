@@ -1,17 +1,19 @@
 ---
 title: "Part 4 — Running Orka for real: visibility, cost, and how it works inside"
-series: "Orka, piece by piece"
-part: 4
-status: draft
+slug: running-orka-for-real
+date: 2026-10-21T13:00
+authors: [orka]
+tags: [orka-piece-by-piece]
+description: "What Orka records, how to trace and measure cost per merged pull request, and how it works inside."
 ---
-
-# Part 4 — Running Orka for real: visibility, cost, and how it works inside
 
 *Part 4 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
 The first three parts were about what agents can do. This last part is for the person who
 keeps the lights on: the platform engineer, the SRE, or the developer who ended up "owning the
 AI thing." Their questions are different:
+
+<!-- truncate -->
 
 - What did the agents do, and can I prove it?
 - Where do I see that in the tools I already use?

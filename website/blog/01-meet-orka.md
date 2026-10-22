@@ -1,11 +1,11 @@
 ---
 title: "Part 1 — Meet Orka: your first agent in five minutes"
-series: "Orka, piece by piece"
-part: 1
-status: draft
+slug: meet-orka
+date: 2026-10-21T10:00
+authors: [orka]
+tags: [orka-piece-by-piece]
+description: "Install Orka, run a first Task, ask a model, and hand a repository to a coding agent, all in about five minutes."
 ---
-
-# Part 1 — Meet Orka: your first agent in five minutes
 
 *Part 1 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
@@ -13,6 +13,8 @@ Imagine you want an AI agent to review a repository for security problems. Today
 means someone installs a coding tool on their laptop, pastes in their personal API key, points
 it at a checkout, and shares the result in a chat message. It works, once. Then a teammate
 wants to do the same thing, and another, and the security team asks whose key that was.
+
+<!-- truncate -->
 
 Orka takes the same job and gives it a proper home. In this part we will:
 

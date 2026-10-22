@@ -1,11 +1,11 @@
 ---
 title: "Orka, piece by piece: a four-part introduction"
-series: "Orka, piece by piece"
-part: 0
-status: draft
+slug: orka-piece-by-piece
+date: 2026-10-21T09:00
+authors: [orka]
+tags: [orka-piece-by-piece]
+description: "Orka runs AI agents on Kubernetes with the keys kept in the cluster. A four-part, beginner-friendly tour of what it is and how its pieces fit together."
 ---
-
-# Orka, piece by piece: a four-part introduction
 
 AI agents are good at real work now. They can answer questions, fix bugs, review pull
 requests, and open new ones. The hard part is no longer *whether* an agent can do the work.
@@ -15,6 +15,8 @@ It is everything around the work:
 - Whose API key is it using, and who else has a copy?
 - What did it actually do yesterday, and how much did that cost?
 - How does the rest of the team use it without everyone setting it up on their own laptop?
+
+<!-- truncate -->
 
 **Orka** is an open-source project that answers those questions by running AI agents on
 Kubernetes. You describe a piece of work, Orka runs it somewhere isolated in your cluster,

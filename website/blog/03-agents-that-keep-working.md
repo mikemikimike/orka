@@ -1,11 +1,11 @@
 ---
 title: "Part 3 — Agents that keep working: automation, teamwork, and your own tools"
-series: "Orka, piece by piece"
-part: 3
-status: draft
+slug: agents-that-keep-working
+date: 2026-10-21T12:00
+authors: [orka]
+tags: [orka-piece-by-piece]
+description: "Schedules, pull request review, issue-to-PR automation, agent teams, memory, chat gateways, and your own tools, built from the same three pieces."
 ---
-
-# Part 3 — Agents that keep working: automation, teamwork, and your own tools
 
 *Part 3 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
@@ -13,6 +13,8 @@ So far, a person has started every Task. That is useful, but it is not where the
 agents really shows up. The value shows up when agents become part of how your team already
 works: reviewing every pull request, picking up issues, running the nightly checks nobody
 wants to run, answering questions in the team chat.
+
+<!-- truncate -->
 
 This part shows how to get there. The good news: **you do not learn a new system for each of
 these.** Every feature here is built from the same pieces from [Part 1](01-meet-orka.md) —
