@@ -162,7 +162,8 @@ func TestOwnAgentHostIsTheCallersOnly(t *testing.T) {
 	}
 	// Deleting reaches only the caller's own host.
 	h.identity = person("bob")
-	if status, deleted := h.do(http.MethodDelete, "/api/v1/agent-hosts/me"); status != http.StatusAccepted || deleted.Name != "gh-bob" || !deleted.Deleting {
+	if status, deleted := h.do(http.MethodDelete, "/api/v1/agent-hosts/me"); status != http.StatusAccepted || deleted.Name != "gh-bob" ||
+		!deleted.Deleting || deleted.Ready {
 		t.Fatalf("delete: %d %+v", status, deleted)
 	}
 	if _, ok := h.host("gh-bob"); ok {
@@ -256,5 +257,28 @@ func TestOwnAgentHostWritesAreFencedToTheHostThatWasChecked(t *testing.T) {
 				t.Fatal("the replacement host must be untouched")
 			}
 		})
+	}
+}
+
+// A host kept after its provider stopped serving hosts stays its person's to
+// see and delete.
+func TestOwnAgentHostOutlivesItsProvidersOptIn(t *testing.T) {
+	h := newAgentHostAPI(t, linkedHost("gh-alice", "alice"))
+	provider := &corev1alpha1.ConnectorProvider{}
+	if err := h.client.Get(context.Background(), types.NamespacedName{Namespace: agentHostTestNamespace, Name: "github"}, provider); err != nil {
+		t.Fatal(err)
+	}
+	provider.Spec.AgentHost = nil
+	if err := h.client.Update(context.Background(), provider); err != nil {
+		t.Fatal(err)
+	}
+	if status, host := h.do(http.MethodGet, "/api/v1/agent-hosts/me"); status != http.StatusOK || host.Name != "gh-alice" {
+		t.Fatalf("get: %d %+v", status, host)
+	}
+	if status, _ := h.do(http.MethodDelete, "/api/v1/agent-hosts/me"); status != http.StatusAccepted {
+		t.Fatalf("delete: %d", status)
+	}
+	if _, ok := h.host("gh-alice"); ok {
+		t.Fatal("the host must be deleted")
 	}
 }
