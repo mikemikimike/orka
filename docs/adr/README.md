@@ -18,6 +18,7 @@ that way, read here.
 | **Accepted** | The decision is in force. The code should match it. |
 | **Superseded** | A later ADR replaced this one. Kept for the reasoning it records. |
 | **Deferred** | The decision was made but the work has not landed, usually because it depends on something outside Orka. |
+| **Proposed** | The decision is under review and has not been implemented. |
 
 ## The records
 
@@ -109,6 +110,14 @@ How Orka accepts work from and returns work to external systems exactly once. Se
 | [0011](0011-vendor-neutral-transaction-and-outbound-access.md) | Separate transaction governance from outbound resource access | Accepted |
 | [0019](0019-genai-semconv-constants-strategy.md) | Hand-roll GenAI semantic-convention constants | Accepted |
 | [0033](0033-user-connectors.md) | Per-user connectors for third-party services | Accepted, landing in stages |
+
+### Repository monitors
+
+How monitors review and repair pull requests.
+
+| # | Decision | Status |
+| --- | --- | --- |
+| [0038](0038-repository-monitor-repair-validation.md) | Validate repository monitor repairs before publishing them | Proposed |
 
 ## Writing a new one
 
