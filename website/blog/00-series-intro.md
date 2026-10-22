@@ -105,7 +105,7 @@ Features we cover:
   approved
 - **Connectors**, so an agent can act as *you* on GitHub, with approval on every write
 - **Calling your own systems without handing agents the keys**
-- **Stronger sandboxes** that can pause an agent and keep its files for next time
+- **Stronger walls** around agents, from sandboxed Pods to a sandbox per conversation
 
 ### [Part 3 — Agents that keep working: automation, teamwork, and your own tools](03-agents-that-keep-working.md)
 
@@ -124,6 +124,9 @@ Features we cover:
 - **Multi-agent coordination:** one agent delegates to specialists, inside limits you set
 - **Autonomous Tasks** that plan, act, and re-plan toward a goal
 - **Memory** that agents propose and people approve
+- **Sessions and workspaces:** agents that continue a conversation and keep their files, in
+  sandboxes (Agent Sandbox and Agent Substrate) that can pause, resume, save checkpoints, and
+  start over from them
 - **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
 - **Your own tools:** connecting your APIs, adding extra programs for coding agents
   (toolboxes), and packaging an agent you built yourself (AgentKit)

@@ -30,6 +30,7 @@ Here is the map of this part:
 | Care for a repository | `RepositoryMonitor` | Agents + Tasks |
 | Work as a team | `coordination` on an Agent | Agent + child Tasks |
 | Remember things | Memory proposals | Agent + review |
+| Pick up where they left off | Sessions and execution workspaces | Task |
 | Answer in Teams, Telegram, or to other agents | A gateway adapter | Agent + Tasks |
 | Use your tools and programs | Tools and toolboxes | Agent |
 | Be an agent you built yourself | An AgentKit image | Agent |
@@ -177,6 +178,89 @@ Orka's [memory](https://orka-agents.github.io/orka/docs/memory) takes the carefu
 Every step records who did it. Agents can also search past conversation transcripts when they
 need more context.
 
+## Agents that pick up where they left off
+
+Real work rarely fits in one go. You ask an agent to start a refactor, look at what it did, and
+come back an hour later with "now update the tests." For that, the agent needs two things: the
+conversation so far, and the files it was working on.
+
+### Sessions: the conversation
+
+A **Session** is a conversation that spans several Tasks. Give each Task the same `sessionRef`
+and Orka hands the agent the earlier conversation, so your follow-up makes sense:
+
+```yaml
+spec:
+  sessionRef:
+    name: refactor-auth
+    create: true   # start the Session if it does not exist yet
+```
+
+Tasks in one Session run one at a time, in order, so two messages never trip over each other.
+
+### Execution workspaces: the files, and a place of their own
+
+By default, a coding agent runs in the shared pool from Part 1. That pool is fast, but it is
+shared, and it shuts down when nobody is using it. An **execution workspace** gives one
+conversation a sandbox of its own instead.
+
+Orka does not build that sandbox itself. It plugs into sandbox projects you run alongside it.
+Two are supported today:
+
+- **[Agent Sandbox](https://github.com/kubernetes-sigs/agent-sandbox)**, a Kubernetes community
+  project that runs each agent in its own sandbox Pod with its own storage.
+- **[Agent Substrate](https://github.com/agent-substrate/substrate)**, which runs each agent under
+  gVisor (a sandbox that sits between a program and the machine) on dedicated machines, and can
+  save snapshots of an agent's files.
+
+Here is what that gives Orka:
+
+| With a workspace, an agent can... | Agent Sandbox | Agent Substrate |
+| --- | --- | --- |
+| Work behind its own wall, one conversation per sandbox | Yes | Yes |
+| Pause when idle, and resume later with its files intact | Yes | Yes |
+| Save a checkpoint of its files | No | Yes |
+| Start a new workspace from a checkpoint, for example to restore or to try a second approach from the same point | No | Yes |
+
+**Pause and resume** means an idle agent stops using the cluster but keeps its work. Come back
+tomorrow with "now update the tests," and the agent starts again with the same files. Orka keeps
+the *files*, never the running program's memory, and the resumed agent gets fresh credentials,
+so nothing that should have expired comes back to life.
+
+**Checkpoints** go a step further. Save the state of an agent's files, then start a brand-new
+workspace from it: to recover from a mistake, or to fork the work and try two different ideas
+from the same starting point.
+
+Choosing a workspace is the same composable idea again. Whoever runs Orka publishes a few named
+*workspace classes*, such as "sandboxed, pauses after an hour idle." A Task just asks for one by
+name:
+
+```yaml
+spec:
+  type: agent
+  agentRef:
+    name: codex-agent
+  sessionRef:
+    name: refactor-auth
+    create: true
+  execution:
+    workspace:
+      classRef:
+        name: sandbox-coding
+      reusePolicy: session   # keep using the same workspace for this conversation
+```
+
+The Task does not say which sandbox project is underneath, and it does not need to. Everything
+else from Part 2 still applies: the agent still has no Git credential, and the publisher still
+does the pushing.
+
+Workspaces are off by default, and each sandbox project is installed and run separately from
+Orka. To see them in action, watch
+[pausing a workspace and keeping its files](https://www.youtube.com/watch?v=DyS9JioSRa0) (Agent
+Sandbox) and [checkpointing and restoring a workspace](https://www.youtube.com/watch?v=jsdRB-0LLAc)
+(Agent Substrate). The [execution workspaces guide](https://orka-agents.github.io/orka/docs/concepts/execution-workspaces)
+has the setup.
+
 ## Agents where your team already talks
 
 [Gateways](https://orka-agents.github.io/orka/docs/gateways) bring agents into the
@@ -300,7 +384,8 @@ Orka runs on its behalf. Agents hosted in Microsoft Foundry plug in the same way
 ## What you have now
 
 Look back at what we added in this part: a `schedule` field, a `RepositoryMonitor`, a
-`coordination` block, a review step for memory, a gateway adapter, tools, a toolbox, and an
+`coordination` block, a review step for memory, a Session and a workspace, a gateway adapter,
+tools, a toolbox, and an
 agent you built yourself. Each one is
 small. None of them replaced anything from Part 1 or Part 2. They snap onto the same
 Provider–Agent–Task core, and they inherit the same security and the same records.

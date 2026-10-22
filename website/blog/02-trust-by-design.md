@@ -143,41 +143,23 @@ One limit to know: calling an MCP server your team already runs currently works 
 `type: ai` agents, through a trusted gateway, and needs some extra setup. It is not yet
 available to the built-in coding agents or the compatible endpoints.
 
-## Stronger walls: execution workspaces
+## Stronger walls: workspaces and sandboxed runtimes
 
 By default, a coding agent runs as a private session inside a shared, Orka-managed Pod (Part 1
-called this a pool). Each
-session gets its own operating-system user and its own private files. That shared Pod is
-meant for work from one team that already trusts each other, though; it is not a hard wall
-between strangers. Different namespaces get different pools.
+called this a pool). Each session gets its own operating-system user and its own private files.
+That shared Pod is meant for work from one team that already trusts each other, though; it is
+not a hard wall between strangers. Different namespaces get different pools.
 
-When you want a stronger wall, or want an agent's files to survive between conversations,
-you can run it in an
-[execution workspace](https://orka-agents.github.io/orka/docs/concepts/execution-workspaces)
-instead: a sandbox dedicated to one conversation, provided by a separate sandbox system. Two
-are supported today:
+When you want a stronger wall, Orka can run a coding agent in an **execution workspace**
+instead: a sandbox dedicated to a single conversation, provided by a separate sandbox project
+that plugs into Orka. Workspaces do more than add a wall. They can also pause an agent and keep
+its files for later, so we cover them properly in
+[Part 3](03-agents-that-keep-working.md#agents-that-pick-up-where-they-left-off).
 
-| | Agent Sandbox | Agent Substrate |
-| --- | --- | --- |
-| What it is | The Kubernetes community project [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) | [Agent Substrate](https://github.com/agent-substrate/substrate), which runs each agent under gVisor |
-| Pause when idle, resume later with files intact | Yes | Yes |
-| Save a checkpoint, restore it, or fork from it | No | Yes |
-
-(gVisor is a sandbox that sits between a program and the machine, so the program never talks to
-the real operating system directly.)
-
-When a workspace pauses, Orka keeps the *files* but never the running memory. On resume it
-starts fresh with new credentials, so nothing that should have expired comes back to life.
-
-Picking a sandbox is, again, composable. An operator publishes a few named workspace
-classes; a Task just asks for one by name. The Task does not change shape, and the rest of
-your setup does not care which sandbox is underneath.
-
-Separately, `ai` and `container` Tasks can run under gVisor or Kata Containers (which runs each
-Pod in its own small virtual machine), if your cluster offers them, for a stronger wall around
-those Pods. That adds isolation, not
-memory: files still do not carry over between conversations. Execution workspaces are what
-keep files.
+For `ai` and `container` Tasks, there is a simpler option. They can run under gVisor (a sandbox
+that sits between a program and the machine) or Kata Containers (which runs each Pod in its own
+small virtual machine), if your cluster offers them. That puts a stronger wall around those Pods
+without changing anything else.
 
 ## Putting it together
 
@@ -191,7 +173,7 @@ Here is how the layers stack, from "comes with every install" to "add when you n
 | Human approval (for Orka-run tools) | Consequential actions without a person's OK | Opt in |
 | Connectors | Agents acting as a shared bot instead of the requester | Opt in |
 | Outbound access policies | API keys handed to agents | Opt in |
-| Execution workspaces | Weak isolation for coding agents; losing files between conversations | Opt in |
+| Execution workspaces (Part 3) | Weak isolation for coding agents | Opt in |
 | gVisor or Kata for `ai` and `container` Tasks | Weak isolation for those Pods | Opt in |
 
 You do not have to start at the bottom of this table. Most people start with the defaults and
