@@ -3236,13 +3236,18 @@ spec:
       - agenthosts
   validations:
   - expression: |-
-      request.operation != 'CREATE' || authorizer.group('core.orka.ai')
+      request.operation != 'CREATE' || has(object.spec.githubTokenFrom) || authorizer.group('core.orka.ai')
 
         .resource('agenthosttemplates')
         .namespace(request.namespace)
         .name(object.spec.templateRef.name)
         .check('use').allowed()
     message: caller is not authorized to use the selected AgentHostTemplate
+    reason: Forbidden
+  - expression: '!has(object.spec.githubTokenFrom) || request.operation != ''CREATE''
+      || request.userInfo.username == ''system:serviceaccount:orka-system:orka-controller-manager'''
+    message: only the Orka controller may create an AgentHost that takes its token
+      from a Connection
     reason: Forbidden
   - expression: |-
       !has(object.spec.githubTokenSecretRef) || (request.operation == 'UPDATE' &&
