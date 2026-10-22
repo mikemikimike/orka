@@ -122,17 +122,6 @@ GitHub account to Orka once. After that, agents they start can use GitHub tools 
   different account or gain permissions. If you change or remove the link, the Task's later
   calls fail; start a new Task to use the new link.
 
-### Transaction tokens: "who asked, and what did they allow?"
-
-This one is for larger organizations. A
-[transaction token](https://orka-agents.github.io/orka/docs/concepts/transaction-tokens) is a
-short-lived, signed note that says who started a piece of work and what they allowed it to do.
-
-When a request arrives with one, Orka can check every operation against it, stamp the real
-requester onto every Task the request creates, and hand *narrower* tokens to any agents it
-delegates to. A child agent can never get more permission than its parent. If anything about
-the token cannot be verified, Orka refuses rather than guessing.
-
 ### Outbound access: give agents your APIs without giving them your keys
 
 Agents become far more useful when they can call your own systems: an inventory API, a
@@ -151,7 +140,8 @@ A classic example from the demo videos: let an agent *check* stock, but block it
 *buying* anything.
 
 One limit to know: calling an MCP server your team already runs currently works for Orka's own
-`type: ai` agents, through a trusted gateway and with a transaction token for the Task. It is not yet available to the built-in coding agents or the compatible endpoints.
+`type: ai` agents, through a trusted gateway, and needs some extra setup. It is not yet
+available to the built-in coding agents or the compatible endpoints.
 
 ## Stronger walls: execution workspaces
 
@@ -200,7 +190,6 @@ Here is how the layers stack, from "comes with every install" to "add when you n
 | Namespaces and per-Task records | Teams seeing each other's work; "what happened?" | Yes |
 | Human approval (for Orka-run tools) | Consequential actions without a person's OK | Opt in |
 | Connectors | Agents acting as a shared bot instead of the requester | Opt in |
-| Transaction tokens | Losing track of who asked and what they allowed | Opt in |
 | Outbound access policies | API keys handed to agents | Opt in |
 | Execution workspaces | Weak isolation for coding agents; losing files between conversations | Opt in |
 | gVisor or Kata for `ai` and `container` Tasks | Weak isolation for those Pods | Opt in |

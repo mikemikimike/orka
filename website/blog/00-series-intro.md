@@ -104,8 +104,7 @@ Features we cover:
 - **Human approval** for actions that matter, with Orka running exactly the action a person
   approved
 - **Connectors**, so an agent can act as *you* on GitHub, with approval on every write
-- **Calling your own systems without handing agents the keys**, and **tracking who asked for
-  what**, for teams that need tighter control
+- **Calling your own systems without handing agents the keys**
 - **Stronger sandboxes** that can pause an agent and keep its files for next time
 
 ### [Part 3 — Agents that keep working: automation, teamwork, and your own tools](03-agents-that-keep-working.md)
