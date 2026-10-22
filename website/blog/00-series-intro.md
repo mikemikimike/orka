@@ -62,11 +62,13 @@ The same Task can start from:
 - a message in Microsoft Teams or Telegram, or a call from another agent
 - a cron schedule that runs while you sleep
 
-Behind every one of those doors is the same Task, with the same record and the same rules.
+Most of those doors lead to the same Task, with the same record and the same rules. The
+coding-tool door is a little different: there, Orka acts as a shared model endpoint, so your
+team stops handing out provider keys, but the tool itself keeps running where it already runs.
 
 ## The series
 
-### Part 1 — Meet Orka: your first agent in five minutes
+### [Part 1 — Meet Orka: your first agent in five minutes](01-meet-orka.md)
 
 **The question it answers:** *What is Orka, and what does using it feel like?*
 
@@ -85,7 +87,7 @@ Features we cover:
   OpenAI- and Anthropic-compatible endpoints for tools like Claude Code
 - **The dashboard demo**, which runs in your browser with no install
 
-### Part 2 — Trust by design: keys, approvals, and sandboxes
+### [Part 2 — Trust by design: keys, approvals, and sandboxes](02-trust-by-design.md)
 
 **The question it answers:** *Why is it safe to let agents do real work?*
 
@@ -106,7 +108,7 @@ Features we cover:
 - **Stronger sandboxes** with execution workspaces (Agent Sandbox and Agent Substrate) that
   suspend, resume, and checkpoint an agent's files
 
-### Part 3 — Agents that keep working: automation, teamwork, and your own tools
+### [Part 3 — Agents that keep working: automation, teamwork, and your own tools](03-agents-that-keep-working.md)
 
 **The question it answers:** *How do I go from one Task to agents that are part of how my team works?*
 
@@ -127,7 +129,7 @@ Features we cover:
 - **Your own tools:** HTTP and MCP tools, toolboxes of extra command-line programs, and your own
   agent runtimes (for example AgentKit or Microsoft Foundry agents)
 
-### Part 4 — Running Orka for real: visibility, cost, and how it works inside
+### [Part 4 — Running Orka for real: visibility, cost, and how it works inside](04-running-orka-for-real.md)
 
 **The question it answers:** *How do I operate this for a team and trust what it tells me?*
 
@@ -152,4 +154,4 @@ browser on sample data, with a guided tour, and sends nothing anywhere. The
 [demo videos](https://orka-agents.github.io/orka/docs/demos) show the same features on a live
 cluster.
 
-See you in Part 1.
+See you in [Part 1](01-meet-orka.md).

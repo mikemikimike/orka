@@ -18,11 +18,11 @@ wants to do the same thing, and another, and the security team asks whose key th
 
 Orka takes the same job and gives it a proper home. In this part we will:
 
-1. install Orka,
-2. run a first Task,
-3. ask a model a question,
-4. hand a real repository to a coding agent,
-5. and look at all the ways people can start that same work.
+1. install Orka and run a first Task (this part really does take about five minutes),
+2. ask a model a question,
+3. hand a real repository to a coding agent (this needs one extra setup step, so budget a
+   little longer),
+4. and look at all the ways people can start that same work.
 
 ## What is Orka, in one paragraph
 
@@ -150,15 +150,37 @@ spec:
 EOF
 ```
 
-After a minute or so the Task reaches `Succeeded`, and you can read the answer from the API
-or the CLI. The person who created this Task never saw the API key. That is the point.
+After a minute or so the Task reaches `Succeeded`. To read the answer, connect to Orka's API
+(a `kubectl port-forward` and a short-lived token, covered in
+[Connect to the API](https://orka-agents.github.io/orka/docs/getting-started#connect-to-the-api)),
+then ask for the result:
+
+```bash
+curl -H "Authorization: Bearer ${ORKA_TOKEN}" \
+  http://localhost:8080/api/v1/tasks/hello-task/result
+```
+
+If you [install the `orka` CLI](https://orka-agents.github.io/orka/docs/getting-started#the-cli),
+the same thing is `orka task result hello-task`.
+
+The person who created this Task never saw the API key. That is the point.
 
 ## Step 4: Hand a repository to a coding agent
 
 The second kind of Task runs a real coding agent: **Codex, Claude Code, GitHub Copilot CLI, or
 OpenCode**. These are the same tools developers run in a terminal, now running in your cluster.
 
-An Agent for a coding agent is short. It names the model and the runtime:
+**First, one setup step.** Coding agents do not use the Provider from Step 3. They reach their
+model through a small gateway you run, so the model key never enters the agent's process.
+Follow the [provider proxy guide](https://orka-agents.github.io/orka/docs/provider-proxy)
+once, and check that the proxy is ready before you continue:
+
+```bash
+kubectl -n orka-system get deploy -l app.kubernetes.io/component=provider-auth-proxy
+```
+
+Now the Agent. For a coding agent it is short: it names the model (one your gateway offers)
+and the runtime:
 
 ```yaml
 apiVersion: core.orka.ai/v1alpha1
@@ -173,8 +195,10 @@ spec:
     type: codex
 ```
 
-Swap `codex` for `claude`, `copilot`, or `opencode` and pick a matching model. Nothing else
-in your setup changes. That is composability again: the runtime is a piece you can swap.
+Swap `codex` for `claude`, `copilot`, or `opencode` and pick a matching model. (OpenCode
+asks for a little more: a `provider/model` name and explicit `model.contextWindow` and
+`model.maxTokens` values.) Your Tasks do not change. That is composability again: the runtime
+is a piece you can swap.
 
 Now a Task that reviews a public repository without changing anything:
 
@@ -200,13 +224,10 @@ first coding Task warms up a pool for that runtime, which takes a few minutes; a
 new Tasks start in seconds.
 
 Change `intent: read` to `intent: write` and add publication credentials, and the agent can
-change the code and Orka will open the branch and pull request. Here is the part worth
-remembering for Part 2: **the agent itself never holds a Git credential.** It only edits
-files. A separate component checks the change and does the push.
-
-(Coding agents reach their model through a small gateway you run, rather than through the
-Provider from Step 3, so their model key also stays out of the agent's hands. The
-[provider proxy guide](https://orka-agents.github.io/orka/docs/provider-proxy) sets it up once.)
+change the code and Orka will publish it to a branch. Set `createPR: true` and add a GitHub API
+credential, and Orka opens the pull request too. Here is the part worth remembering for
+Part 2: **the agent itself never holds a Git credential.** It only edits files. A separate
+component checks the change and does the push.
 
 ## The third type: plain containers
 
@@ -237,13 +258,15 @@ same work from wherever they already are:
   [OpenAI-compatible](https://orka-agents.github.io/orka/docs/openai-compat) and
   [Anthropic-compatible](https://orka-agents.github.io/orka/docs/anthropic-compat) endpoints.
   Point Claude Code, Codex, OpenCode, Cursor, or Continue at Orka, and nobody on the team
-  needs their own provider key. (By default Orka adds its own tools and instructions to these
-  requests; one header turns that off when your tool brings its own.)
+  needs their own provider key. This door works a little differently from the others: the tool
+  keeps running on your laptop, and Orka serves as its shared model endpoint, so these requests
+  do not necessarily become Tasks. (By default Orka adds its own tools and instructions to them;
+  one header turns that off when your tool brings its own.)
 - **Your team chat, your repository, your calendar.** Teams and Telegram messages, GitHub
   labels and pull requests, and cron schedules can all start Tasks. That is Part 3.
 
-Whichever door someone uses, they end up with the same kind of Task, governed by the same
-Agents and recorded the same way. A platform team sets things up once; everyone else uses
+Apart from the coding-tool endpoints, whichever door someone uses, they end up with the same
+kind of Task, governed by the same Agents and recorded the same way. A platform team sets things up once; everyone else uses
 what they already know.
 
 ## What you have now
@@ -258,7 +281,7 @@ In five minutes and a few YAML files, you have:
 
 ## Next up
 
-In **Part 2 — Trust by design**, we look at *why* it is safe to let these agents do real work:
+In **[Part 2 — Trust by design](02-trust-by-design.md)**, we look at *why* it is safe to let these agents do real work:
 where every credential lives, how a person can approve an action before it happens, how an
 agent can act as you on GitHub without ever seeing your token, and how to run agents in
 stronger sandboxes when you need them.

@@ -97,9 +97,10 @@ has a complete runnable example.
 ### Find security issues
 
 [Repository security scanning](https://orka-agents.github.io/orka/docs/repository-security-scanning)
-builds an editable threat model of a repository, scans its history and new commits for likely
-vulnerabilities, checks each finding in an isolated worker, and can propose a fix as a pull
-request. A person always decides when to create that fix.
+builds an editable threat model of a repository and scans its history and new commits for
+likely vulnerabilities. It can double-check selected findings by trying them in an isolated
+worker (by default only a few per run), and it can propose a fix as a pull request. A person
+always decides when to create that fix.
 
 ## Agents that work as a team
 
@@ -138,10 +139,21 @@ Claude-based researcher for context, then hand the code change to Codex.
 
 ### Autonomous Tasks
 
-Turn on `autonomous: true` and the coordinator works in rounds toward a goal. Each round it
-reads its saved plan, delegates, updates the plan, and stops when the goal is met or it hits
-the round limit you set. Each round runs as its own Kubernetes Job, so a crashed Pod loses one
-round, not the whole job. Combine this with human approval from Part 2 and the coordinator
+Add `autonomous: true` and a round limit to the coordinator's `coordination` block, and it
+works in rounds toward a goal:
+
+```yaml
+  coordination:
+    enabled: true
+    autonomous: true
+    maxIterations: 20   # leave this out and the rounds are unlimited
+```
+
+Each round it reads its saved plan, delegates, updates the plan, and stops when the goal is
+met or it reaches `maxIterations`. Each round runs as its own Kubernetes Job and the plan is
+saved between rounds. A failed round can still fail the whole Task unless you add a retry
+policy. Autonomous mode is for Orka's own `type: ai` coordinators; the built-in coding agents
+do not support it. Combine this with human approval from Part 2 and the coordinator
 pauses whenever it needs a person's OK. See
 [Autonomous Tasks](https://orka-agents.github.io/orka/docs/autonomous-tasks).
 
@@ -189,8 +201,8 @@ anywhere your team works.
 The last way to grow an agent is to give it more to work with.
 
 - **Skills and custom tools.** Give a plain AI agent reusable skills, call your own HTTP APIs,
-  or call functions on an MCP server your team already runs. Credentials stay behind the
-  outbound access policies from Part 2. See
+  or call functions on an MCP server your team already runs (for `type: ai` agents, through a
+  trusted gateway). Credentials stay behind the outbound access policies from Part 2. See
   [Agents, skills, and tools](https://orka-agents.github.io/orka/docs/guides/agents-skills-and-tools).
 - **Toolboxes.** Coding agents can only run the programs in their runtime image. A
   [toolbox](https://orka-agents.github.io/orka/docs/guides/toolboxes) is an ordinary container
@@ -200,7 +212,8 @@ The last way to grow an agent is to give it more to work with.
 - **Your own agent runtime.** If you have built an agent with
   [AgentKit](https://github.com/orka-agents/agentkit) or host one in Microsoft Foundry, you can
   [register it with Orka](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
-  and run it through the same Tasks, approvals, and records as the built-in agents.
+  and run it through the same Tasks and records as the built-in agents, with human approval
+  available for the tools Orka runs on its behalf.
 
 ## What you have now
 
@@ -215,7 +228,7 @@ without rebuilding anything.
 
 ## Next up
 
-In **Part 4 — Running Orka for real**, we look at it from the operator's side: what Orka
+In **[Part 4 — Running Orka for real](04-running-orka-for-real.md)**, we look at it from the operator's side: what Orka
 records, how to trace agents with OpenTelemetry, how to measure cost as tokens per merged pull
 request, and how Orka is built underneath.
 

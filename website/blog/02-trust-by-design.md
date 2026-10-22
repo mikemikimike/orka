@@ -67,9 +67,11 @@ do it.
 
 ### Everything is scoped and recorded
 
-Every API call is authenticated and authorized. Tasks carry verified information about who
-created them. Work is scoped to a Kubernetes namespace, so teams can be kept apart. And every
-Task leaves a record: what it was asked, what it did, what it produced.
+Every API call is authenticated and authorized. Work is scoped to a Kubernetes namespace, so
+teams can be kept apart. And every Task leaves a record: what it was asked, what it did, what
+it produced. When people sign in with your identity provider (OIDC) or a transaction token,
+their Tasks also carry a verified record of *who* asked. A plain `kubectl apply` or a
+ServiceAccount token does not carry that person-level identity.
 
 None of this needs extra setup. It is how Orka works out of the box.
 
@@ -95,6 +97,12 @@ mark certain tools as needing approval. When the agent wants to use one, Orka:
 That last point matters. Orka does not ask the model to "try again now that it is approved."
 It runs the stored action, so what the person approved is what happens.
 
+Approval covers tools that *Orka* runs on the agent's behalf. It is available to Orka's own
+autonomous AI coordinators and to external agent runtimes such as AgentKit and Microsoft
+Foundry agents. It does not pause a built-in coding agent's own shell commands or file edits;
+for those, the protection is the one above: the agent edits files, and the publisher decides
+what gets pushed.
+
 ### Connectors: let the agent act as you
 
 Sometimes the right answer is for the agent to act as the *person who asked*, not as a shared
@@ -106,9 +114,12 @@ GitHub account to Orka once. After that, agents they start can use GitHub tools 
 - Only the Orka controller ever holds the linked token. Agent Pods, Task specs, logs, and
   events never see it.
 - Nobody can link an account for somebody else.
-- Every write through a linked account goes through human approval automatically.
-- The exact link is frozen when a Task starts, so changing or removing it later never changes
-  what a running Task can do.
+- Every write through a linked account goes through human approval automatically. Because
+  of that, write tools are offered only to agents that support approval (Orka's AI agents and
+  external runtimes such as AgentKit). Built-in coding agents get the read-only GitHub tools.
+- The exact link is frozen when a Task starts, so a running Task can never quietly switch to a
+  different account or gain permissions. If you change or remove the link, the Task's later
+  calls fail; start a new Task to use the new link.
 
 ### Outbound access: give agents your APIs without giving them your keys
 
@@ -126,6 +137,10 @@ upstream keys.
 A classic example from the demo videos: let an agent *check* stock, but block it from
 *buying* anything.
 
+One limit to know: calling an existing MCP server your team already runs currently works for
+Orka's own `type: ai` agents, through a trusted gateway and with a transaction token for the
+Task. It is not yet available to the built-in coding agents or the compatible endpoints.
+
 ### Transaction tokens: "who asked, and what did they allow?"
 
 This one is for larger organizations. A
@@ -140,7 +155,9 @@ the token cannot be verified, Orka refuses rather than guessing.
 ## Stronger walls: execution workspaces
 
 By default, a coding agent runs as a private session inside a shared, Orka-managed Pod. Each
-session gets its own user ID and its own private files, so sessions are kept apart.
+session gets its own operating-system user and its own private files. That shared Pod is
+meant for work from one team that already trusts each other, though; it is not a hard wall
+between strangers. Different namespaces get different pools.
 
 When you want a stronger wall, or want an agent's files to survive between conversations,
 you can run it in an
@@ -159,8 +176,12 @@ starts fresh with new credentials, so nothing that should have expired comes bac
 
 Picking a sandbox is, again, composable. An operator publishes a few named workspace
 classes; a Task just asks for one by name. The Task does not change shape, and the rest of
-your setup does not care which sandbox is underneath. You can also run ordinary Orka Pods
-under gVisor or Kata Containers for stronger isolation without changing anything else.
+your setup does not care which sandbox is underneath.
+
+Separately, `ai` and `container` Tasks can run under a gVisor or Kata Containers runtime that
+your cluster already offers, for a stronger wall around those Pods. That adds isolation, not
+memory: files still do not carry over between conversations. Execution workspaces are what
+keep files.
 
 ## Putting it together
 
@@ -171,18 +192,19 @@ Here is how the layers stack, from "comes with every install" to "add when you n
 | Keys in Secrets, scoped tokens for people | Shared keys on laptops; painful key rotation | Yes |
 | Agent has no Git credential; publisher pushes | A fooled agent pushing or opening PRs on its own | Yes |
 | Namespaces and per-Task records | Teams seeing each other's work; "what happened?" | Yes |
-| Human approval | Consequential actions without a person's OK | Opt in |
+| Human approval (for Orka-run tools) | Consequential actions without a person's OK | Opt in |
 | Connectors | Agents acting as a shared bot instead of the requester | Opt in |
 | Outbound access policies | API keys handed to agents | Opt in |
 | Transaction tokens | Losing track of who asked and what they allowed | Opt in |
-| Execution workspaces, gVisor or Kata | Weak isolation; losing files between conversations | Opt in |
+| Execution workspaces | Weak isolation for coding agents; losing files between conversations | Opt in |
+| gVisor or Kata for `ai` and `container` Tasks | Weak isolation for those Pods | Opt in |
 
 You do not have to start at the bottom of this table. Most people start with the defaults and
 add a layer when a real need shows up.
 
 ## Next up
 
-In **Part 3 — Agents that keep working**, we stop running one Task at a time. We put agents on
+In **[Part 3 — Agents that keep working](03-agents-that-keep-working.md)**, we stop running one Task at a time. We put agents on
 schedules, have them review every pull request, turn labeled issues into pull requests, let
 one agent delegate to a team of others, and bring agents into Teams and Telegram — all built
 from the same three pieces you met in Part 1.

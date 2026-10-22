@@ -28,7 +28,6 @@ Every Task in Orka leaves a durable record you can come back to later:
 
 - its **phase** (`Pending`, `Running`, `Succeeded`, `Failed`, ...) and the reason when it fails,
 - its **result** and any **artifacts** it produced,
-- its **logs**,
 - and an **event timeline**: an ordered history of what happened during the Task — model calls,
   tool calls, approvals, delegations — not just the final answer.
 
@@ -36,6 +35,9 @@ For coding agents that change a repository, there is one more piece: a **deliver
 Remember the publisher from [Part 2](02-trust-by-design.md)? After it pushes, it checks the
 remote branch and records exactly what landed. So "the agent said it opened a PR" becomes "Orka
 verified this exact change is on this branch."
+
+Worker logs are there for troubleshooting too, but treat the status, result, artifacts, and
+timeline as the record; Orka does not promise to keep a complete raw log for every Task.
 
 All of this is reachable from every door you met in [Part 1](01-meet-orka.md): the REST API,
 `orka task status` and `orka task result` in the CLI, and the dashboard.
@@ -54,9 +56,10 @@ tools understand. Turn on telemetry and point Orka at your collector, and you ge
   conventions for generative AI,
 - alongside the usual Prometheus metrics and structured logs.
 
-Telemetry is off by default. When it is on, the *content* of prompts and completions is still
-not captured unless you explicitly opt in. Your traces show what happened and how long it took
-without quietly copying sensitive text into another system. See
+Telemetry is off by default. When it is on, Orka records metadata, token counts, and timings,
+but not the text of prompts or completions; there is currently no setting that captures them.
+Your traces show what happened and how long it took without quietly copying sensitive text
+into another system. See
 [Observability](https://orka-agents.github.io/orka/docs/observability).
 
 ## Measure cost in a way that means something
@@ -71,8 +74,8 @@ delegated helpers, reviews, and repairs, and it **includes failed and cancelled 
 you paid for that too.
 
 ```bash
-orka usage summary -n payments
-orka usage work WORK_ID -n payments
+orka usage summary -n orka-system
+orka usage work WORK_ID -n orka-system   # copy a work ID from the summary
 ```
 
 The same report is on the dashboard's **Usage** page. It is honest about its limits: it
@@ -124,16 +127,19 @@ finish the work it has (it "drains") before removing it. Running Tasks are not c
 
 ### Pinned images
 
-Orka refers to its runtime images by **digest** (an exact fingerprint), not by a tag like
-`latest`. The agent that runs tomorrow is exactly the one you tested today, and nobody can swap
-it by pushing a new tag.
+Coding-agent pools run their images by **digest** (an exact fingerprint), not by a tag like
+`latest`, so a running session can never have its image swapped underneath it. If you
+configure a tag, Orka turns it into a digest when the controller starts, and a later restart
+looks the tag up again. To be sure the agent that runs tomorrow is exactly the one you tested
+today, configure the digest itself.
 
 ### Restarts are boring, on purpose
 
-Controllers restart: upgrades, node maintenance, crashes. Orka records each prompt attempt
-before sending it, so a restart never sends the same prompt to an agent twice. If Orka truly
-cannot tell whether something finished, it reports the outcome as *uncertain* rather than
-guessing.
+Controllers restart: upgrades, node maintenance, crashes. For coding agents, Orka records each
+prompt attempt before sending it, and after a restart it never automatically resends one the
+agent might already have received. If Orka truly cannot tell whether something finished, it
+reports the outcome as *uncertain* rather than guessing. (`ai` and `container` Tasks run as
+Kubernetes Jobs and follow their own retry rules.)
 
 ### Where state lives
 
