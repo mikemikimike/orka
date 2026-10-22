@@ -141,6 +141,9 @@ func newConnectCmd() *cobra.Command {
 				// consent finished rather than reporting the old grant.
 				if current.Ready && (!started.Connection.Ready || current.GrantSequence > started.Connection.GrantSequence) {
 					fmt.Fprintf(out, "Linked %s (%s)\n", current.Provider, current.Mode) //nolint:errcheck
+					if started.AgentHost {
+						return waitForAgentHost(ctx, cmd)
+					}
 					return nil
 				}
 				// A fresh consent was just started, so the state the link

@@ -1,0 +1,193 @@
+/*
+Copyright (c) 2026.
+
+MIT License - see LICENSE file for details.
+*/
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+	"github.com/orka-agents/orka/internal/connectors"
+)
+
+const agentHostTestNamespace = "team"
+
+type agentHostAPI struct {
+	t        *testing.T
+	client   client.Client
+	app      *fiber.App
+	identity *UserInfo
+}
+
+func person(subject string) *UserInfo {
+	return &UserInfo{AuthType: AuthTypeOIDC, Username: subject, Subject: subject, Issuer: connectorTestIssuer, Namespace: agentHostTestNamespace}
+}
+
+// linkedHost is the host the controller would create for subject's link.
+func linkedHost(name, subject string) *corev1alpha1.AgentHost {
+	return &corev1alpha1.AgentHost{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agentHostTestNamespace},
+		Spec: corev1alpha1.AgentHostSpec{
+			TemplateRef: corev1alpha1.AgentHostTemplateReference{Name: "copilotd"},
+			GitHubTokenFrom: &corev1alpha1.AgentHostTokenSource{ConnectionRef: corev1alpha1.LocalObjectReference{
+				Name: connectors.ConnectionName("github", connectorTestIssuer, subject),
+			}},
+		},
+		Status: corev1alpha1.AgentHostStatus{
+			Phase:  corev1alpha1.AgentHostPhaseReady,
+			GitHub: &corev1alpha1.AgentHostGitHubAccount{ID: 1, Login: name[len("gh-"):]},
+			Conditions: []metav1.Condition{{
+				Type: "Ready", Status: metav1.ConditionTrue, Reason: "HostReady", LastTransitionTime: metav1.Now(),
+			}},
+		},
+	}
+}
+
+func newAgentHostAPI(t *testing.T, objects ...client.Object) *agentHostAPI {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	provider := &corev1alpha1.ConnectorProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: agentHostTestNamespace},
+		Spec: corev1alpha1.ConnectorProviderSpec{
+			AgentHost: &corev1alpha1.ConnectorAgentHost{TemplateRef: corev1alpha1.LocalObjectReference{Name: "copilotd"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objects, provider)...).Build()
+	h := &agentHostAPI{t: t, client: c, identity: person("alice")}
+	handlers := NewHandlers(HandlersConfig{
+		Client: c, APIReader: c, WatchNamespace: agentHostTestNamespace,
+		Connectors: ConnectorConfig{Enabled: true},
+	})
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		if h.identity != nil {
+			c.Locals(UserInfoContextKey, h.identity)
+		}
+		return c.Next()
+	})
+	app.Get("/api/v1/agent-hosts/me", handlers.GetOwnAgentHost)
+	app.Post("/api/v1/agent-hosts/me/wake", handlers.WakeOwnAgentHost)
+	app.Delete("/api/v1/agent-hosts/me", handlers.DeleteOwnAgentHost)
+	h.app = app
+	return h
+}
+
+func (h *agentHostAPI) do(method, path string) (int, AgentHostResponse) {
+	h.t.Helper()
+	resp, err := h.app.Test(httptest.NewRequest(method, path, nil))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	var body AgentHostResponse
+	if resp.StatusCode < 300 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			h.t.Fatalf("decode %s: %v", raw, err)
+		}
+	}
+	return resp.StatusCode, body
+}
+
+func (h *agentHostAPI) host(name string) (*corev1alpha1.AgentHost, bool) {
+	h.t.Helper()
+	host := &corev1alpha1.AgentHost{}
+	err := h.client.Get(context.Background(), types.NamespacedName{Namespace: agentHostTestNamespace, Name: name}, host)
+	if apierrors.IsNotFound(err) {
+		return nil, false
+	}
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return host, true
+}
+
+// Each person reaches only the host fed by their own link.
+func TestOwnAgentHostIsTheCallersOnly(t *testing.T) {
+	// A host someone created by hand names alice's link; it is not the
+	// controller's, and the API never serves it.
+	stray := linkedHost("gh-stray", "alice")
+	stray.Spec.GitHubTokenFrom.ConnectionRef.Name = "github-someone-else"
+	h := newAgentHostAPI(t, linkedHost("gh-alice", "alice"), linkedHost("gh-bob", "bob"), stray)
+
+	status, alice := h.do(http.MethodGet, "/api/v1/agent-hosts/me")
+	if status != http.StatusOK || alice.Name != "gh-alice" || alice.Environment != "orka-gh-alice" || !alice.Ready || alice.GitHubLogin != "alice" {
+		t.Fatalf("alice: %d %+v", status, alice)
+	}
+	h.identity = person("bob")
+	if status, bob := h.do(http.MethodGet, "/api/v1/agent-hosts/me"); status != http.StatusOK || bob.Name != "gh-bob" {
+		t.Fatalf("bob: %d %+v", status, bob)
+	}
+	h.identity = person("carol")
+	if status, _ := h.do(http.MethodGet, "/api/v1/agent-hosts/me"); status != http.StatusNotFound {
+		t.Fatalf("carol: %d, want 404", status)
+	}
+	// Deleting reaches only the caller's own host.
+	h.identity = person("bob")
+	if status, deleted := h.do(http.MethodDelete, "/api/v1/agent-hosts/me"); status != http.StatusAccepted || deleted.Name != "gh-bob" || !deleted.Deleting {
+		t.Fatalf("delete: %d %+v", status, deleted)
+	}
+	if _, ok := h.host("gh-bob"); ok {
+		t.Fatal("bob's host must be deleted")
+	}
+	if _, ok := h.host("gh-alice"); !ok {
+		t.Fatal("alice's host must stay")
+	}
+}
+
+func TestOwnAgentHostNeedsAVerifiedPerson(t *testing.T) {
+	h := newAgentHostAPI(t, linkedHost("gh-alice", "alice"))
+	h.identity = &UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:team:robot", Namespace: agentHostTestNamespace}
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		if status, _ := h.do(method, "/api/v1/agent-hosts/me"); status != http.StatusForbidden {
+			t.Fatalf("%s as a ServiceAccount: %d, want 403", method, status)
+		}
+	}
+	if _, ok := h.host("gh-alice"); !ok {
+		t.Fatal("nothing may be deleted")
+	}
+}
+
+func TestWakeOwnAgentHost(t *testing.T) {
+	idle := linkedHost("gh-alice", "alice")
+	// Suspended this very second: the wake must still date after it.
+	asleep := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	idle.Status.IdleSuspendedAt = &asleep
+	idle.Status.Phase = corev1alpha1.AgentHostPhaseSuspended
+	h := newAgentHostAPI(t, idle)
+	status, woken := h.do(http.MethodPost, "/api/v1/agent-hosts/me/wake")
+	if status != http.StatusOK || !woken.Suspended {
+		t.Fatalf("wake: %d %+v", status, woken)
+	}
+	if host, _ := h.host("gh-alice"); host.Spec.WakeRequestedAt == nil || !host.Spec.WakeRequestedAt.After(asleep.Time) {
+		t.Fatalf("wakeRequestedAt = %v, want after the idle suspension", host.Spec.WakeRequestedAt)
+	}
+
+	// An operator's suspension is theirs to lift.
+	held := linkedHost("gh-alice", "alice")
+	held.Spec.Suspended = true
+	h = newAgentHostAPI(t, held)
+	if status, _ := h.do(http.MethodPost, "/api/v1/agent-hosts/me/wake"); status != http.StatusConflict {
+		t.Fatalf("wake an operator-suspended host: %d, want 409", status)
+	}
+}

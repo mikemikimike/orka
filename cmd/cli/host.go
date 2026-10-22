@@ -1,0 +1,197 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+// agentHostAPIPath is the signed-in person's own agent host.
+const agentHostAPIPath = "/api/v1/agent-hosts/me"
+
+// agentHostReadyPollInterval paces waiting for a host after linking.
+var agentHostReadyPollInterval = 2 * time.Second
+
+// agentHostView is the API's view of the person's own agent host.
+type agentHostView struct {
+	Name              string `json:"name"`
+	Namespace         string `json:"namespace"`
+	Environment       string `json:"environment"`
+	Phase             string `json:"phase"`
+	Ready             bool   `json:"ready"`
+	Reason            string `json:"reason,omitempty"`
+	Message           string `json:"message,omitempty"`
+	GitHubLogin       string `json:"githubLogin,omitempty"`
+	Suspended         bool   `json:"suspended"`
+	OperatorSuspended bool   `json:"operatorSuspended,omitempty"`
+	Connection        string `json:"connection"`
+	Deleting          bool   `json:"deleting,omitempty"`
+}
+
+func newHostCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "host",
+		Short: "See and manage your agent host for the Copilot app",
+		Long: "Your agent host runs the Copilot app's environment on Orka. Orka creates it when you link " +
+			"GitHub through a provider that serves agent hosts, and it appears in the Copilot app as orka-<host>.",
+	}
+	cmd.AddCommand(newHostStatusCmd(), newHostWakeCmd(), newHostDeleteCmd())
+	return cmd
+}
+
+func newHostStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show your agent host",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			host, err := getOwnAgentHost(context.Background(), cmd)
+			if err != nil {
+				return err
+			}
+			format, err := outputFormat(cmd)
+			if err != nil {
+				return err
+			}
+			if format != outputTable {
+				return printStructured(cmd, host)
+			}
+			printAgentHost(cmd.OutOrStdout(), host)
+			return nil
+		},
+	}
+	addOutputFlag(cmd, outputTable)
+	return cmd
+}
+
+func newHostWakeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "wake",
+		Short: "Start your agent host after it idled out",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c := newClientFromCmd(cmd)
+			raw, err := c.DoJSON(context.Background(), http.MethodPost, agentHostAPIPath+"/wake", nil, nil)
+			if err != nil {
+				return agentHostError(err)
+			}
+			var host agentHostView
+			if err := decodeInto(raw, &host); err != nil {
+				return err
+			}
+			if host.Suspended {
+				fmt.Fprintf(cmd.OutOrStdout(), "Waking %s. Check with 'orka host status'.\n", host.Environment) //nolint:errcheck
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s is not suspended.\n", host.Environment) //nolint:errcheck
+			}
+			return nil
+		},
+	}
+}
+
+func newHostDeleteCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete your agent host and its volume",
+		Long: "Delete your agent host and its volume: its clones, worktrees and sessions are lost. While you stay " +
+			"linked, Orka creates a fresh host; disconnect with 'orka connection delete' to have none.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !yes {
+				return errors.New("deleting your host also deletes its volume, with its clones, worktrees and sessions; rerun with --yes")
+			}
+			c := newClientFromCmd(cmd)
+			raw, err := c.DoJSON(context.Background(), http.MethodDelete, agentHostAPIPath, nil, nil)
+			if err != nil {
+				return agentHostError(err)
+			}
+			var host agentHostView
+			if err := decodeInto(raw, &host); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleting %s and its volume. While GitHub stays linked, Orka creates a fresh host.\n", host.Environment) //nolint:errcheck
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm deleting the host and its volume")
+	return cmd
+}
+
+func getOwnAgentHost(ctx context.Context, cmd *cobra.Command) (agentHostView, error) {
+	c := newClientFromCmd(cmd)
+	raw, err := c.DoJSON(ctx, http.MethodGet, agentHostAPIPath, nil, nil)
+	if err != nil {
+		return agentHostView{}, agentHostError(err)
+	}
+	var host agentHostView
+	if err := decodeInto(raw, &host); err != nil {
+		return agentHostView{}, err
+	}
+	return host, nil
+}
+
+func printAgentHost(out io.Writer, host agentHostView) {
+	state := host.Phase
+	if state == "" {
+		state = "Pending"
+	}
+	fmt.Fprintf(out, "%s: %s\n", host.Environment, state) //nolint:errcheck
+	fmt.Fprintf(out, "  host: %s\n", host.Name)           //nolint:errcheck
+	if host.GitHubLogin != "" {
+		fmt.Fprintf(out, "  GitHub account: %s\n", host.GitHubLogin) //nolint:errcheck
+	}
+	if !host.Ready && host.Reason != "" {
+		fmt.Fprintf(out, "  reason: %s: %s\n", host.Reason, host.Message) //nolint:errcheck
+	}
+	switch {
+	case host.Deleting:
+		fmt.Fprintln(out, "  being deleted") //nolint:errcheck
+	case host.OperatorSuspended:
+		fmt.Fprintln(out, "  suspended by an operator") //nolint:errcheck
+	case host.Suspended:
+		fmt.Fprintln(out, "  suspended while idle; run 'orka host wake'") //nolint:errcheck
+	}
+}
+
+// waitForAgentHost waits until the person's host is ready after linking a
+// provider that serves agent hosts, and says how the Copilot app lists it.
+func waitForAgentHost(ctx context.Context, cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "Waiting for your agent host...") //nolint:errcheck
+	for {
+		host, err := getOwnAgentHost(ctx, cmd)
+		switch {
+		case err == nil && host.Ready:
+			fmt.Fprintf(out, "Host ready: %s. Pick it in the Copilot app's Environments.\n", host.Environment) //nolint:errcheck
+			return nil
+		case err == nil && host.Phase == "Failed":
+			return fmt.Errorf("your agent host %s failed: %s: %s", host.Name, host.Reason, host.Message)
+		case err != nil && !strings.Contains(err.Error(), "HTTP 404"):
+			// The host is created moments after the link; until then the
+			// API answers 404.
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("your agent host is not ready yet; check with 'orka host status'")
+		case <-time.After(agentHostReadyPollInterval):
+		}
+	}
+}
+
+func agentHostError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "HTTP 403") {
+		return errors.Join(err, errors.New("your agent host belongs to a signed-in person: pass your OIDC token with --token, or a context token with --txn-token"))
+	}
+	return err
+}

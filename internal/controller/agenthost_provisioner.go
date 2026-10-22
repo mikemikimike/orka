@@ -28,7 +28,7 @@ import (
 	"github.com/orka-agents/orka/internal/connectors/credential"
 )
 
-// +kubebuilder:rbac:groups=core.orka.ai,resources=agenthosts,verbs=create
+// +kubebuilder:rbac:groups=core.orka.ai,resources=agenthosts,verbs=create;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 const (
