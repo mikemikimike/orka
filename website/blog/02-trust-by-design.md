@@ -99,8 +99,8 @@ That last point matters. Orka does not ask the model to "try again now that it i
 It runs the stored action, so what the person approved is what happens.
 
 Approval covers tools that *Orka* runs on the agent's behalf. It works for Orka's own AI agents
-when they run on their own, and for agents you build yourself and plug into Orka (Part 3 covers
-both). It does not pause a built-in coding agent's own shell commands or file edits;
+when they work toward a goal on their own, and for agents you build yourself and plug into Orka,
+when they are set up for it (Part 3 covers both). It does not pause a built-in coding agent's own shell commands or file edits;
 for those, the protection is the one above: the agent edits files, and the publisher decides
 what gets pushed.
 
@@ -115,9 +115,9 @@ GitHub account to Orka once. After that, agents they start can use GitHub tools 
 - Only the Orka controller ever holds the linked token. Agent Pods, Task specs, logs, and
   events never see it.
 - Nobody can link an account for somebody else.
-- Every write through a linked account goes through human approval automatically. Because
-  of that, write tools are offered only to agents that support approval (the ones above). The
-  built-in coding agents get the read-only GitHub tools.
+- Every write through a linked account goes through human approval automatically. Today, those
+  write tools are offered only to agents you plug into Orka yourself that are set up for
+  approval. The built-in coding agents get the read-only GitHub tools.
 - The exact link is frozen when a Task starts, so a running Task can never quietly switch to a
   different account or gain permissions. If you change or remove the link, the Task's later
   calls fail; start a new Task to use the new link.

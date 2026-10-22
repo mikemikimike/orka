@@ -44,6 +44,7 @@ apiVersion: core.orka.ai/v1alpha1
 kind: Task
 metadata:
   name: nightly-triage
+  namespace: orka-system
 spec:
   type: ai
   agentRef:
@@ -73,8 +74,9 @@ bound to the exact commit, and can post the findings back as a review comment.
 
 Notice how Part 2 shows up here. The review Task is read-only and holds no Git credential.
 The comment is posted by Orka itself, after it re-checks that the pull request has not changed,
-and every GitHub write goes into an audit log. Orka never merges anything; it can publish a
-"ready" check that GitHub's own auto-merge waits on, and your normal branch rules stay in charge.
+and every GitHub write goes into an audit log. The monitor never merges a pull request; it can
+publish a "ready" check that GitHub's own auto-merge waits on, and your normal branch rules stay
+in charge.
 
 ### Turn an issue into a pull request
 
@@ -197,7 +199,8 @@ spec:
     create: true   # start the Session if it does not exist yet
 ```
 
-Tasks in one Session run one at a time, in order, so two messages never trip over each other.
+Tasks in one Session run one at a time, so two messages never trip over each other. If a
+follow-up depends on the previous answer, wait for that Task to finish before sending it.
 
 ### Start on your laptop, continue in Orka
 
@@ -205,25 +208,29 @@ Say you have been working with Codex on your laptop, and the job turns out to be
 you thought. You would like it to keep going in the cluster, with the same conversation, while
 you close your laptop.
 
-Orka can import that conversation into a Session. First stop Codex, then:
+Orka can import that conversation into a new Session. First point the `orka` CLI at your Orka
+server and sign in (`orka config set-server` and `orka config set-token`), and stop Codex. Then:
 
 ```bash
-orka session migrate import refactor-auth \
+orka session migrate import refactor-auth-laptop \
   --codex-home ~/.codex \
   --thread <your Codex thread ID> \
   --journal-dir ~/orka-import-journal \
   --source-stopped
 ```
 
-Now send a normal Codex Task with `sessionRef.name: refactor-auth` and `create: true`. The agent in the cluster
-picks up the *same* Codex conversation, not a summary of it. After each Task, Orka saves Codex's
-own record of the conversation, so the next Task continues exactly where the last one stopped.
+The Session name must be new; import never overwrites an existing Session. Now send a normal
+Codex Task with `sessionRef.name: refactor-auth-laptop` and `create: true`. The agent in the
+cluster picks up the *same* Codex conversation, not a summary of it. After each successful Task,
+Orka saves Codex's own record of the conversation, so the next Task continues where that one
+stopped. If a Task fails, the last good record is kept.
 
-When you want it back, `orka session migrate export refactor-auth`, pointed at a fresh Codex
+When you want it back, `orka session migrate export refactor-auth-laptop`, pointed at a fresh Codex
 folder on your laptop, installs the latest saved conversation there, and you resume it locally.
 
-A few honest limits today: this works for Codex only, with a specific Codex version and its
-reasoning mode turned off, so the conversation contains no encrypted reasoning. Bring a conversation back into
+A few honest limits today: this works for Codex only, with a specific Codex version, and only
+for conversations that never used Codex's reasoning mode (reasoning leaves encrypted data in the
+history, and turning it off later does not remove that). Bring a conversation back into
 a fresh Codex folder rather than your everyday one. The
 [session migration guide](https://orka-agents.github.io/orka/docs/guides/codex-session-migration)
 has the details.
@@ -255,8 +262,8 @@ Here is what that gives Orka:
 ### Suspend and resume
 
 An agent waiting for your next message does not need to keep running. With a workspace that
-allows it, Orka **suspends** an idle agent: it stops the agent completely and keeps only its
-files. Agent Sandbox keeps the files on a storage volume; Agent Substrate takes a snapshot of
+allows it, Orka **suspends** the agent when a Task finishes: it stops the agent completely and
+keeps only its files. Agent Sandbox keeps the files on a storage volume; Agent Substrate takes a snapshot of
 them. Orka double-checks that the old agent is really gone before it calls the workspace
 suspended, so nothing is quietly left running.
 
@@ -268,8 +275,8 @@ continues the Session. Two things are deliberately *not* brought back:
 - **Old credentials.** The resumed agent gets new ones, so nothing that should have expired
   comes back to life.
 
-The workspace class decides when this happens, for example "suspend after an hour idle, delete
-after a week."
+The workspace class decides the rules, for example "suspend between Tasks, throw away saved
+files nobody has used for a day, and never keep a workspace longer than a week."
 
 ### Snapshots, checkpoints, and restore
 
@@ -292,7 +299,7 @@ permission on the source workspace to save one, and permission on the checkpoint
 ### Choosing a workspace
 
 Choosing a workspace is the same composable idea again. Whoever runs Orka publishes a few named
-*workspace classes*, such as "Agent Sandbox, suspend after an hour idle." A Task just asks for one
+*workspace classes*, such as "Agent Sandbox, suspend between Tasks." A Task just asks for one
 by name:
 
 ```yaml
@@ -420,8 +427,10 @@ docker buildx build . -f agentkitfile.yaml -t url-summarizer:latest
 ```
 
 That image runs anywhere containers run, including your laptop. To use it from Orka, whoever
-runs Orka registers it once as an `AgentRuntime`. Orka checks that it behaves correctly before
-sending it any work. The [bring your own runtime](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
+runs Orka does a one-time setup: add Orka's small supervisor program on top of the image (the
+supervisor runs your agent and keeps credentials and permissions outside it), deploy it, and
+register it as an `AgentRuntime`. Orka checks that it behaves correctly before sending it any
+work. The [bring your own runtime](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
 guide walks through this. After that, an Agent just points at it:
 
 ```yaml
@@ -437,8 +446,8 @@ spec:
 ```
 
 This Agent sets no model or instructions, because those are already in the image. Tasks use it
-like any other Agent, with the same records, and human approval from Part 2 works for the tools
-Orka runs on its behalf. Agents hosted in Microsoft Foundry plug in the same way, through the
+like any other Agent, with the same records. If the runtime is set up for it, human approval
+from Part 2 can cover the tools Orka runs on its behalf. Agents hosted in Microsoft Foundry plug in the same way, through the
 [Foundry runtime](https://github.com/orka-agents/orka-runtime-foundry).
 
 ## What you have now

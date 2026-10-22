@@ -115,12 +115,14 @@ checks who is asking, creates or updates the Task, and sends it to the right pla
 | --- | --- |
 | `container` | Its own short-lived Kubernetes Job |
 | `ai` | Its own Kubernetes Job running Orka's AI worker |
-| `agent` | A private session inside a warm **RuntimePool** |
+| `agent` (built-in coding agents) | A private session inside a warm **RuntimePool**, or a dedicated one for an execution workspace |
+| `agent` (an agent you plugged in, like AgentKit) | The service you registered, which you run yourself |
 
 ### Warm pools that scale to zero
 
 Starting a coding agent from scratch is slow: big image, lots of setup. So instead of a fresh
-Job per Task, Orka keeps a **RuntimePool** for each coding-agent runtime. A pool Pod hosts
+Job per Task, Orka keeps warm **RuntimePools** for the built-in coding agents, kept separate
+per namespace and per agent setup. A pool Pod hosts
 several private sessions when it is busy, so a new Task usually starts in seconds, and it
 **scales to zero** when idle, so you are not paying for agents that are doing nothing.
 
@@ -189,8 +191,9 @@ pieces you need and leave the rest off. Nothing new replaces what you already bu
 
 **Orka meets people where they are.** `kubectl` for the Kubernetes crowd, a CLI for scripters,
 a dashboard for clickers, chat for anyone, Claude Code and Codex for developers, GitHub for
-maintainers, Teams and Telegram for everyone else. Every door leads to the same Task, with the
-same keys kept safe, the same rules, and the same record.
+maintainers, Teams and Telegram for everyone else. Almost every door leads to the same Task,
+with the same keys kept safe, the same rules, and the same record; the coding-tool endpoints
+share the same keys and model rules without needing a Task.
 
 Orka is experimental and changing quickly, and the project wants to hear from you. Try it on a
 laptop, break it, and tell us what you find.

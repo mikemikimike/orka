@@ -127,7 +127,8 @@ Features we cover:
 - **Sessions:** agents that continue a conversation, including one you started with Codex on
   your laptop and imported into Orka
 - **Workspaces:** a sandbox per conversation (Agent Sandbox or Agent Substrate) that can suspend
-  when idle, resume later, save checkpoints, and restore or fork from them
+  between Tasks and resume later; Agent Substrate can also save checkpoints and restore or fork
+  from them
 - **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
 - **Your own tools:** connecting your APIs, adding extra programs for coding agents
   (toolboxes), and packaging an agent you built yourself (AgentKit)

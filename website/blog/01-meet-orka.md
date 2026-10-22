@@ -165,7 +165,9 @@ curl -H "Authorization: Bearer ${ORKA_TOKEN}" \
 If you [install the `orka` CLI](https://orka-agents.github.io/orka/docs/getting-started#the-cli),
 the same thing is `orka task result hello-task`.
 
-The person who created this Task never saw the API key. That is the point.
+Here you created the key yourself, but on a team that is usually done once, by an
+administrator. After that, anyone can send Tasks to the `assistant` Agent without ever being
+handed the model key. That is the point.
 
 ## Step 4: Hand a repository to a coding agent
 
@@ -228,9 +230,10 @@ Pod that can host several agents' private sessions at once and shuts down when n
 it. The first coding Task starts the pool, which takes a few minutes; after that, new Tasks
 start in seconds.
 
-Change `intent: read` to `intent: write` and add a Git credential for publishing, and the agent can
-change the code and Orka will publish it to a branch. Set `createPR: true` and add a GitHub API
-credential, and Orka opens the pull request too. Here is the part worth remembering for
+To let an agent change code, create a new Task (on a repository you can push to) with
+`intent: write` and a Git credential for publishing, and Orka will publish the change to a
+branch. Add `createPR: true`, the branch to merge into, and a GitHub API credential, and Orka
+opens the pull request too. Here is the part worth remembering for
 Part 2: **the agent itself never holds a Git credential.** It only edits files. A separate
 component checks the change and does the push.
 
@@ -266,8 +269,9 @@ same work from wherever they already are:
   Point Claude Code, Codex, OpenCode, Cursor, or Continue at Orka, and nobody on the team
   needs their own provider key. This door works a little differently from the others: the tool
   keeps running on your laptop, and Orka serves as its shared model endpoint, so these requests
-  do not necessarily become Tasks. (By default Orka adds its own tools and instructions to them;
-  one header turns that off when your tool brings its own.)
+  do not necessarily become Tasks. One thing to know: by default Orka swaps your tool's own
+  tools for Orka's server-side ones. To keep your tool working exactly as it does today, with its
+  tools running on your laptop, send the header `X-Orka-Tools: disabled`.
 - **Your team chat, your repository, your calendar.** Teams and Telegram messages, GitHub
   labels and pull requests, and cron schedules can all start Tasks. That is Part 3.
 
