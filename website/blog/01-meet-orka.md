@@ -182,15 +182,15 @@ header called `X-Orka-Tools`:
 
 | | A shared model endpoint (`X-Orka-Tools: disabled`) | A coordinator (the default) |
 | --- | --- | --- |
-| What your tool can do | Exactly what it did before: read and edit files and run commands on your laptop | Orka swaps your tool's own tools for its own: start agents in the cluster, check on them, cancel them, open pull requests, check CI |
+| What your tool can do | Keeps its own tools: it still reads and edits files and runs commands on your laptop (a few model options, such as extended thinking, are not passed through) | The model gets Orka's tools instead of your tool's: start agent Tasks in the cluster, check on them, cancel them, open pull requests, check CI |
 | What Orka does | Holds the key and passes model calls through | Holds the key *and* does the work in the cluster |
-| Pick it when | You want your usual tool, minus the personal API key | You want to type "fix issue 42 and open a pull request" and let the cluster do it |
+| Pick it when | You want your usual tool, minus the personal API key | Coding agents and repository access are set up, and you want to type "fix issue 42 and open a pull request" and let the cluster do it |
 
 The first role is the easy win: everyone keeps their workflow, and the keys move into the
 cluster. Those requests are plain model calls; they do not become Tasks. The second turns
-your terminal into one more door to everything in this series: whatever it starts is an
-ordinary Task, with the same records and rules, though your tool can no longer touch the files
-on your laptop while it is in that mode. Setup differs a little per tool, and the two guides
+your terminal into one more door to everything in this series: work it hands to agents
+becomes ordinary Tasks, with the same records and rules. In that mode, the model no longer
+gets your tool's file and shell tools; Orka runs its own tools in the cluster instead. Setup differs a little per tool, and the two guides
 linked above cover what each one needs.
 
 ## The shape of it
