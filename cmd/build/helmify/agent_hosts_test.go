@@ -108,6 +108,13 @@ func TestStaticChartAgentHostRoleMatchesKustomize(t *testing.T) {
 	if role == nil || binding == nil {
 		t.Fatalf("render has no Role and RoleBinding in %s", agentHostTestNamespace)
 	}
+	// Like the namespace, they outlive a change of host namespace, so the
+	// controller can still clean up the hosts left in the old one.
+	for _, doc := range []*workerRBACDocument{role, binding} {
+		if got := doc.Metadata.Annotations["helm.sh/resource-policy"]; got != "keep" {
+			t.Errorf("%s helm.sh/resource-policy = %q, want keep", doc.Kind, got)
+		}
+	}
 	kustomize, err := os.ReadFile("../../../config/agent-hosts/rbac.yaml")
 	if err != nil {
 		t.Fatalf("read Kustomize agent-host RBAC: %v", err)
