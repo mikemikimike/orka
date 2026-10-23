@@ -202,6 +202,16 @@ func TestStaticChartRejectsInvalidAgentHostValues(t *testing.T) {
 			args: []string{"--set-string", "controller.agentHosts.namespace="},
 			want: "controller.agentHosts.namespace is required",
 		},
+		{
+			name: "namespace that is no DNS label",
+			args: []string{"--set-string", "controller.agentHosts.namespace=host_ns"},
+			want: "must be a DNS-1123 label",
+		},
+		{
+			name: "namespace too long",
+			args: []string{"--set-string", "controller.agentHosts.namespace=" + strings.Repeat("a", 64)},
+			want: "must be a DNS-1123 label",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := append(agentHostsEnabled(), tt.args...)
