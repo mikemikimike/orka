@@ -40,10 +40,16 @@ controller's Role in it, the controller flags and the AgentHost admission webhoo
 `orka-host-agent` sidecar comes from the controller image, so pin it by digest, or set
 `controller.agentHosts.agentImage` to another digest-pinned image that carries it. Agent
 hosts need `controller.mode: harness-v2`, and the host namespace must differ from the
-release namespace and `controller.acpRuntime.namespace`. Helm keeps the host namespace,
-with the hosts' volumes and the controller's Role in it, when you disable agent hosts,
-change `controller.agentHosts.namespace`, roll back or uninstall, so hosts left there can
-still be deleted; delete the namespace yourself once no AgentHost needs it.
+release namespace and `controller.acpRuntime.namespace`.
+
+Before you disable agent hosts, uninstall, or roll back to a release without them, delete
+every AgentHost and wait until it is gone. Without agent hosts the controller stops
+reconciling them, so their Pods keep running and their deletion never finishes; an upgrade
+that disables agent hosts is refused while AgentHosts remain. Helm keeps the host
+namespace, with the hosts' volumes and the controller's Role in it, so a controller with
+agent hosts on can still finish cleaning up, including hosts left in an earlier namespace
+after `controller.agentHosts.namespace` changes. Delete the namespace yourself once no
+AgentHost needs it.
 
 With the Kustomize install:
 
