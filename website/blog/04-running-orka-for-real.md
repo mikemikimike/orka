@@ -11,7 +11,8 @@ description: "What Orka records, how to trace and measure cost per merged pull r
 
 The first three parts were about what agents can do. This last part is for the person who
 keeps the lights on: the platform engineer, the SRE, or the developer who ended up "owning the
-AI thing." Their questions are different:
+AI thing." If agents are coworkers, this is the person who runs the office. Their questions are
+different:
 
 <!-- truncate -->
 
@@ -72,27 +73,15 @@ Orka's [usage report](https://orka-agents.github.io/orka/docs/usage-and-pr-outco
 cost around outcomes. Its main measure is **tokens per merged pull request**, per team (a team
 is a Kubernetes namespace). It follows each issue from planning through implementation, retries,
 delegated helpers, reviews, and repairs, and it **includes failed and cancelled work** — because
-you paid for that too.
-
-```bash
-orka usage summary -n orka-system
-orka usage work WORK_ID -n orka-system   # copy a work ID from the summary
-```
-
-The same report is on the dashboard's **Usage** page. It is honest about its limits: it
+you paid for that too. You can read it from the CLI (`orka usage summary -n orka-system`) or on the
+dashboard's **Usage** page. It is honest about its limits: it
 measures model usage, not developer productivity or hours saved, and it shows you where its
 measurements have gaps.
 
 ## The dashboard
 
 Orka's [web dashboard](https://orka-agents.github.io/orka/docs/ui) is built into Orka itself,
-so there is nothing extra to deploy. It is off by default; one Helm value turns it on:
-
-```bash
-helm upgrade orka orka/orka --namespace orka-system --reuse-values \
-  --set controller.dashboard.enabled=true
-```
-
+so there is nothing extra to deploy. It is off by default, and one Helm setting turns it on.
 From there you can watch Tasks run, read results and timelines, approve or decline actions,
 follow repository monitors and security findings, check usage, and chat with the
 orchestrator. If you want to look before installing anything, the
@@ -102,20 +91,8 @@ browser on sample data.
 ## When a model provider has a bad day
 
 Model services have outages and rate limits like any other service. For Orka's own `type: ai`
-Agents, you can list backup Providers under `model.fallbacks`:
-
-```yaml
-spec:
-  providerRef:
-    name: anthropic
-  model:
-    name: claude-opus-5
-    fallbacks:
-      - providerRef: openai
-        model: gpt-6-astra
-```
-
-Orka retries the main Provider first. If it keeps failing, rejects the key, or cannot be
+Agents, you can list backup Providers under `model.fallbacks`, for example "Anthropic first,
+then OpenAI." Orka retries the main Provider first. If it keeps failing, rejects the key, or cannot be
 reached, Orka moves to the next one on the list. Each backup is just another Provider, with its
 own key in its own Secret.
 
@@ -214,9 +191,9 @@ A short list for whoever takes over an Orka install:
 
 ## Wrapping up the series
 
-Over four parts we went from one `echo` Task to agents that review every pull request, turn
-issues into pull requests, work in teams, answer in Teams and Telegram, and report their cost
-per merged PR. Two ideas carried us the whole way:
+Over four parts we went from three small building blocks to agents that review every pull
+request, turn issues into pull requests, work in teams, answer in Teams and Telegram, and
+report their cost per merged PR. Two ideas carried us the whole way:
 
 **Orka is composable.** Three building blocks — Provider, Agent, Task — and small additions
 on top: a schedule, a monitor, a coordination block, a gateway, a sandbox, a tool. You add the
@@ -234,6 +211,18 @@ Underneath both ideas sits one habit from Part 2: keep jobs apart. For a coding 
 that talks to the model, the part that does the work, and the part that delivers it are separate,
 and the real model key and Git credential stay out of the agent's reach, so an agent that gets
 fooled cannot take them.
+
+## Where this is going
+
+We started the series with a guess about where agents are heading: out of the chat window and
+into how teams work, many kinds of them, acting for people, and waiting a lot in between. Orka
+is built around that guess.
+
+The agents will keep changing. There will be new coding tools, new models every few months,
+agents from cloud platforms, and agents your own team builds for one job. Each of them should
+be able to step into the same workplace: the same kind of Task, the same keys kept out of reach,
+the same approvals, the same record. Swapping the agent should feel like swapping a part, not
+rebuilding the shop. That is what all the small, composable pieces are for.
 
 Orka is experimental and changing quickly, and the project wants to hear from you. Try it on a
 laptop, break it, and tell us what you find.

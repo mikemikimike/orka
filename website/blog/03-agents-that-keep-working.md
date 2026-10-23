@@ -10,9 +10,11 @@ description: "Schedules, pull request review, issue-to-PR automation, agent team
 *Part 3 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
 So far, a person has started every Task. That is useful, but it is not where the value of
-agents really shows up. The value shows up when agents become part of how your team already
-works: reviewing every pull request, picking up issues, running the nightly checks nobody
-wants to run, answering questions in the team chat.
+agents really shows up. In the introduction we said agents are moving out of the chat window
+and into how teams work: reviewing every pull request, picking up issues, running the nightly
+checks nobody wants to run, answering questions in the team chat. The difference is a bit like
+the difference between a tool you pick up and a teammate who shows up. This part is about that
+move.
 
 <!-- truncate -->
 
@@ -37,14 +39,9 @@ Here is the map of this part:
 
 ## Agents on a schedule
 
-Any Task can run on a schedule. Add one line:
+Any Task can run on a schedule. It takes one line, plus a time zone if you want one:
 
 ```yaml
-apiVersion: core.orka.ai/v1alpha1
-kind: Task
-metadata:
-  name: nightly-triage
-  namespace: orka-system
 spec:
   type: ai
   agentRef:
@@ -119,14 +116,7 @@ ordinary Agents like the ones from Part 1; here, `backend-dev` is a plain AI Age
 is a Codex Agent.
 
 ```yaml
-apiVersion: core.orka.ai/v1alpha1
-kind: Agent
-metadata:
-  name: coordinator
-  namespace: orka-system
 spec:
-  providerRef:
-    name: anthropic
   coordination:
     enabled: true
     maxDepth: 2
@@ -148,22 +138,13 @@ Claude-based researcher for context, then hand the code change to Codex.
 
 ### Autonomous Tasks
 
-Add `autonomous: true` and a round limit to the coordinator's `coordination` block, and it
-works in rounds toward a goal:
-
-```yaml
-  coordination:
-    enabled: true
-    autonomous: true
-    maxIterations: 20   # leave this out and the rounds are unlimited
-```
-
-Each round it reads its saved plan, delegates, updates the plan, and stops when the goal is
-met or it reaches `maxIterations`. Each round runs as its own Kubernetes Job (a one-off run of a
-container) and the plan is
-saved between rounds. A failed round can still fail the whole Task unless you add a retry
-policy. Autonomous mode is for Orka's own `type: ai` coordinators; the built-in coding agents
-do not support it. Combine this with human approval from Part 2 and the coordinator
+Turn on `autonomous` in the coordinator's `coordination` block and it works in rounds toward a
+goal. Each round it reads its saved plan, delegates, and updates the plan. It stops when the
+goal is met or it hits the round limit you set with `maxIterations` (without one, the rounds
+are unlimited). Each round runs as its own Kubernetes Job (a one-off run of a container), and
+the plan is saved between rounds. A failed round can still fail the whole Task unless you add
+a retry policy. Autonomous mode is for Orka's own `type: ai` coordinators; the built-in coding
+agents do not support it. Combine this with human approval from Part 2 and the coordinator
 pauses whenever it needs a person's OK. See
 [Autonomous Tasks](https://orka-agents.github.io/orka/docs/autonomous-tasks).
 
@@ -201,17 +182,9 @@ remembering also needs someone in charge of it. Orka keeps three kinds apart:
 
 ### Sessions: the conversation
 
-A **Session** is a conversation that spans several Tasks. Give each Task the same `sessionRef`
-and Orka hands the agent the earlier conversation, so your follow-up makes sense:
-
-```yaml
-spec:
-  sessionRef:
-    name: refactor-auth
-    create: true   # start the Session if it does not exist yet
-```
-
-Tasks in one Session run one at a time, so two messages never trip over each other. If a
+A **Session** is a conversation that spans several Tasks. Give each Task the same Session name
+(and let the first one create it), and Orka hands the agent the earlier conversation, so your
+follow-up makes sense. Tasks in one Session run one at a time, so two messages never trip over each other. If a
 follow-up depends on the previous answer, wait for that Task to finish before sending it.
 
 ### Start on your laptop, continue in Orka
@@ -220,25 +193,15 @@ Say you have been working with Codex on your laptop, and the job turns out to be
 you thought. You would like it to keep going in the cluster, with the same conversation, while
 you close your laptop.
 
-Orka can import that conversation into a new Session. First point the `orka` CLI at your Orka
-server and sign in (`orka config set-server` and `orka config set-token`), and stop Codex. Then:
-
-```bash
-orka session migrate import refactor-auth-laptop \
-  --codex-home ~/.codex \
-  --thread <your Codex thread ID> \
-  --journal-dir ~/orka-import-journal \
-  --source-stopped
-```
-
-The Session name must be new; import never overwrites an existing Session. Now send a normal
-Codex Task with `sessionRef.name: refactor-auth-laptop` and `create: true`. The agent in the
-cluster picks up the *same* Codex conversation, not a summary of it. After each successful Task,
+Orka can import that conversation. Stop Codex, and one `orka session migrate import` command
+copies the conversation into a new Session in the cluster (import never overwrites an existing
+one). Send a normal Codex Task to that Session, and the agent in the cluster picks up the
+*same* Codex conversation, not a summary of it. After each successful Task,
 Orka saves Codex's own record of the conversation, so the next Task continues where that one
 stopped. If a Task fails, the last good record is kept.
 
-When you want it back, `orka session migrate export refactor-auth-laptop`, pointed at a fresh Codex
-folder on your laptop, installs the latest saved conversation there, and you resume it locally.
+When you want it back, `orka session migrate export` installs the latest saved conversation
+into a fresh Codex folder on your laptop, and you resume it locally.
 
 A few honest limits today: this works for Codex only, with a specific Codex version, and only
 for conversations that never used Codex's reasoning mode (reasoning leaves encrypted data in the
@@ -317,12 +280,6 @@ by name:
 
 ```yaml
 spec:
-  type: agent
-  agentRef:
-    name: codex-agent
-  sessionRef:
-    name: refactor-auth
-    create: true
   execution:
     workspace:
       classRef:
@@ -372,9 +329,8 @@ smallest to biggest.
 ### Teach it how your team works: skills and a persona
 
 A **skill** is a short, reusable set of instructions, such as "run `make lint` after every
-change" or "write release notes in this format." You save it in Orka once
-(`orka skill import ./SKILL.md --name release-notes -n orka-system`) and list it by name on any of Orka's own
-`type: ai` Agents that need it. Keep skills short: their text is sent with every request to
+change" or "write release notes in this format." You save it in Orka once and list it by name
+on any of Orka's own `type: ai` Agents that need it. Keep skills short: their text is sent with every request to
 the model, so each one costs a little on every call. Coding agents do not take skills; put that
 guidance in their instructions instead.
 
@@ -397,26 +353,8 @@ A coding agent can only run the programs that come with it. Ask Codex to edit a 
 `yq`, and if `yq` is not there, it is stuck.
 
 A [toolbox](https://orka-agents.github.io/orka/docs/guides/toolboxes) fixes that. It is an
-ordinary container image that holds extra programs in one folder. You list it on the Agent, and
-Orka makes those programs available to the agent. Here is the `codex-agent` from Part 1 with a
-toolbox added:
-
-```yaml
-apiVersion: core.orka.ai/v1alpha1
-kind: Agent
-metadata:
-  name: codex-agent
-  namespace: orka-system
-spec:
-  model:
-    name: gpt-6-astra
-  runtime:
-    type: codex
-    toolboxes:
-      - image: registry.example.com/tools/yq-jq@sha256:<digest>
-        mountPath: /opt/yq-jq   # the folder inside the image that holds the programs
-        pathEntries: [bin]      # lets the agent run them by name
-```
+ordinary container image that holds extra programs in one folder. You list it on the Agent,
+say which folder holds the programs, and Orka makes them available to the agent by name.
 
 A toolbox adds programs and nothing else. It brings no passwords, no extra network access, and
 no admin rights. The image is named by its exact fingerprint (`sha256:...`) so it cannot change
@@ -429,49 +367,17 @@ The coding agents so far are well-known tools: Codex, Claude Code, Copilot CLI, 
 Sometimes you want your *own* agent, with your own instructions and tools, built for one job.
 
 [AgentKit](https://github.com/orka-agents/agentkit), a companion project, lets you describe that
-agent in one YAML file and build it into an ordinary container image:
-
-```yaml
-#syntax=ghcr.io/orka-agents/agentkit/agentkit:latest
-apiVersion: v1alpha1
-kind: Agent
-metadata:
-  name: url-summarizer
-model:
-  provider: openai-compatible
-  baseURL: https://api.openai.com/v1
-  name: gpt-4o-mini
-  apiKeyEnv: OPENAI_API_KEY   # only the name of the variable; the key is never in the image
-instructions: |
-  Summarize any URL the user gives you in three bullet points.
-expose:
-  openai: true
-```
-
-```bash
-docker buildx build . -f agentkitfile.yaml -t url-summarizer:latest
-```
+agent in one YAML file (its model, its instructions, its tools) and build it into an ordinary
+container image with Docker. The image never contains the model key, only the name of the
+setting the key will come from.
 
 That image runs anywhere containers run, including your laptop. To use it from Orka, whoever
 runs Orka does a one-time setup: add Orka's small supervisor program on top of the image (the
 supervisor runs your agent and keeps credentials and permissions outside it), deploy it, and
 register it as an `AgentRuntime`. Orka checks that it behaves correctly before sending it any
 work. The [bring your own runtime](https://orka-agents.github.io/orka/docs/guides/bring-your-own-agent-runtime)
-guide walks through this. After that, an Agent just points at it:
-
-```yaml
-apiVersion: core.orka.ai/v1alpha1
-kind: Agent
-metadata:
-  name: summarizer
-  namespace: orka-system
-spec:
-  runtime:
-    runtimeRef:
-      name: url-summarizer
-```
-
-This Agent sets no model or instructions, because those are already in the image. Tasks use it
+guide walks through this. After that, an Agent just points at it by name, with no model or
+instructions of its own, because those are already in the image. Tasks use it
 like any other Agent, with the same records. If the runtime is set up for it, human approval
 from Part 2 can cover the tools Orka runs on its behalf. Agents hosted in Microsoft Foundry plug in the same way, through the
 [Foundry runtime](https://github.com/orka-agents/orka-runtime-foundry).

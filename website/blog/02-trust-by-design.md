@@ -10,7 +10,8 @@ description: "How Orka keeps model keys and Git credentials away from agents, an
 *Part 2 of 4 in "Orka, piece by piece." [Start with the series introduction](00-series-intro.md).*
 
 In [Part 1](01-meet-orka.md) we gave a coding agent a real repository. Now the obvious
-question: **is that safe?**
+question: **is that safe?** And it only gets more pressing as agents take on more work, and
+more of it on people's behalf.
 
 <!-- truncate -->
 
@@ -131,6 +132,7 @@ what gets pushed.
 
 ### Connectors: let the agent act as you
 
+As agents do more for people, *who asked, and on whose behalf* matters as much as what ran.
 Sometimes the right answer is for the agent to act as the *person who asked*, not as a shared
 bot account. If you comment on an issue through an agent, it should say it was you.
 

@@ -7,9 +7,9 @@ tags: [orka-piece-by-piece]
 description: "Orka runs AI agents on Kubernetes with the keys kept in the cluster. A four-part, beginner-friendly tour of what it is and how its pieces fit together."
 ---
 
-AI agents are good at real work now. They can answer questions, fix bugs, review pull
-requests, and open new ones. The hard part is no longer *whether* an agent can do the work.
-It is everything around the work:
+AI agents have changed jobs. Not long ago they answered questions in a chat window. Now they
+fix bugs, review pull requests, triage issues, and open pull requests of their own. The hard
+part is no longer *whether* an agent can do the work. It is everything around the work:
 
 - Where does the agent run, and what can it touch?
 - Whose API key is it using, and who else has a copy?
@@ -18,10 +18,34 @@ It is everything around the work:
 
 <!-- truncate -->
 
-**Orka** is an open-source project that answers those questions by running AI agents on
-Kubernetes. You describe a piece of work, Orka runs it somewhere isolated in your cluster,
-keeps a record of what happened, and gives you the result. The model keys stay in the
-cluster. People and automation get a scoped token instead.
+## Where this is going
+
+A few things look likely over the next couple of years.
+
+- **Agents move from the chat window into how teams work.** Not one person asking one agent a
+  question, but agents reviewing every pull request, picking up labeled issues, running the
+  nightly checks, and answering in the team chat.
+- **There will be many kinds of agents, not one.** Well-known coding tools like Codex and
+  Claude Code, agents hosted on cloud platforms, and small agents your own team builds for a
+  single job. The models underneath them will keep changing every few months.
+- **Agents act for people.** They comment on an issue as you, file a ticket for you, and reach
+  the systems you can reach. *Who asked, and on whose behalf* starts to matter as much as which
+  model ran.
+- **Agents wait a lot.** They work in bursts, then wait on a person, on automated checks, or on
+  the next message. Paying for an agent to sit idle makes little sense.
+
+Put together, agents start to look less like a tool you open and more like coworkers. And
+coworkers need a workplace: somewhere to work, a badge that opens the right doors, rules,
+someone to sign off on big decisions, and a record of what got done.
+
+**Orka is an open-source workplace for AI agents, built on Kubernetes.** You describe a piece
+of work, Orka runs it somewhere isolated in your cluster, keeps a record of what happened, and
+gives you the result. The model keys stay in the cluster; people and automation get a scoped
+token instead.
+
+Orka's bet is simple: the agents and models will keep changing, so the workplace around them
+should stay steady. Whichever agent runs, the work is the same kind of Task, with the same keys
+kept safe, the same rules, and the same record.
 
 This series is for people who have never used Orka. You do not need to be a Kubernetes
 expert, but it helps to know that Kubernetes runs containers for you and that you talk to it
@@ -80,13 +104,13 @@ that have nothing to do.
 
 ## The series
 
-### [Part 1 — Meet Orka: your first agent in five minutes](01-meet-orka.md)
+### [Part 1 — Meet Orka: a workplace for AI agents](01-meet-orka.md)
 
 **The question it answers:** *What is Orka, and what does using it feel like?*
 
-We install Orka with one Helm command, run a first Task, ask a model a question, and then hand
-a real repository to a coding agent. Along the way, we meet the three building blocks and the
-three kinds of work a Task can do.
+A tour of what Orka is made of: the three building blocks, the three kinds of work a Task can
+do, how a coding agent works on a repository without holding the keys, and the many ways
+people reach that work, including the coding tool already on their laptop.
 
 Features we cover:
 
@@ -96,7 +120,6 @@ Features we cover:
 - **Provider, Agent, Task**, and how one points at the next
 - **Coding agents that open pull requests**, without the agent ever holding a Git credential
 - **Three jobs, kept apart:** talking to the model, doing the work, and delivering the result
-- **Timeouts and stopping a Task**
 - **Many front doors:** `kubectl`, the `orka` CLI, the dashboard, and chat
 - **Using Orka from Claude Code and other coding tools** on your laptop, either as a shared
   model endpoint that keeps the keys, or as a coordinator that starts work in the cluster
