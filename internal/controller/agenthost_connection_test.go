@@ -32,13 +32,19 @@ type fakeHostCredentials struct {
 	broken bool
 	// connection is the Connection that feeds hosts; empty means testHostConnection.
 	connection string
+	// neverExpires hands out a token without an expiry.
+	neverExpires bool
 }
 
 func (f *fakeHostCredentials) HostCredential(_ context.Context, namespace, name string, _ time.Duration) (credential.HostCredential, error) {
 	if err := f.CheckHostLink(context.Background(), namespace, name); err != nil {
 		return credential.HostCredential{}, err
 	}
-	return credential.HostCredential{AccessToken: f.token}, nil
+	held := credential.HostCredential{AccessToken: f.token}
+	if !f.neverExpires {
+		held.ExpiresAt = time.Now().Add(8 * time.Hour)
+	}
+	return held, nil
 }
 
 func (f *fakeHostCredentials) CheckHostLink(_ context.Context, namespace, name string) error {
@@ -145,6 +151,29 @@ func TestAgentHostTakesItsTokenFromItsConnection(t *testing.T) {
 	}
 	if after, _ := h.pod(); after.UID != pod.UID {
 		t.Fatal("a refreshed token must not restart the host")
+	}
+}
+
+// Code in the host can read its token, so a Connection token that never
+// expires, as a GitHub App without user-token expiration issues, is refused.
+func TestAgentHostRefusesATokenThatNeverExpires(t *testing.T) {
+	h, credentials, _ := newConnectionHostHarness(t)
+	credentials.neverExpires = true
+	h.settle()
+	if _, ok := h.pod(); ok {
+		t.Fatal("a host must not run on a token that never expires")
+	}
+	if _, ok := h.tokenCopy(); ok {
+		t.Fatal("a token that never expires must not be copied into the host")
+	}
+	if ready := agentHostReady(h.host()); ready == nil || ready.Reason != agentHostReasonGitHubTokenNeverExpires {
+		t.Fatalf("ready = %+v", ready)
+	}
+	// Once the link holds an expiring token, the host runs.
+	credentials.neverExpires = false
+	h.settle()
+	if _, ok := h.pod(); !ok {
+		t.Fatal("an expiring token must start the host")
 	}
 }
 

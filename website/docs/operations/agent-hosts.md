@@ -204,7 +204,8 @@ spec:
   and a managed user's underscore becomes `--`: `alice_acme` gets `gh-alice--acme`.
 - Orka writes the link's access token into the host and refreshes it 15 minutes before it
   expires. copilotd picks up the replaced file without a restart. The refresh token never
-  leaves Orka.
+  leaves Orka. A token that never expires is refused with `GitHubTokenNeverExpires`, since
+  code in the host could keep using a copy of it.
 - The host belongs to the first GitHub account it was given. A later token for another
   account fails it with `GitHubIdentityChanged` and keeps the volume.
 - Disconnecting stops the host, deletes its token copy and keeps the AgentHost and its
@@ -301,6 +302,7 @@ because a pending or running workflow can be lost to suspension.
 | `HostNamespaceChanged` | The controller's `--agent-host-namespace` changed after the host was created. Delete and recreate it. |
 | `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent: linking again restarts the host. Or its provider no longer serves agent hosts: an operator restores the provider's `agentHost`, then the person links again. |
 | `GitHubIdentityChanged` | The Connection now links a different GitHub account than the one the host's volume belongs to. Link the original account, or delete the AgentHost. |
+| `GitHubTokenNeverExpires` | The host's Connection holds a GitHub token that never expires, which code in the host could read and keep using. Turn on user-token expiration in the GitHub App, then link again. |
 
 A host that fails for a missing template or token has its Pod stopped and keeps its
 volume. When the token's Secret or Connection is gone, Orka also deletes its copy.
