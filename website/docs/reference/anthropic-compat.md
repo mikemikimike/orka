@@ -111,6 +111,15 @@ export ANTHROPIC_API_KEY=$(kubectl -n orka-system create token orka-client)
 # Claude Code will now route all API calls through Orka
 ```
 
+This runs in [coordinator mode](openai-compat.md#coordinator-mode): Orka discards Claude
+Code's own tools, such as reading and editing local files and running shell commands, and
+runs its server-side tools instead. To keep Claude Code's tools working on your machine and
+use Orka only for centralized credentials and model routing, also send the disabled header:
+
+```bash
+export ANTHROPIC_CUSTOM_HEADERS="X-Orka-Tools: disabled"
+```
+
 ## Using with curl
 
 ### Non-streaming
