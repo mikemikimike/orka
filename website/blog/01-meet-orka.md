@@ -291,21 +291,60 @@ same work from wherever they already are:
 - **Chat.** Describe what you want in plain language — "run a container that prints the date
   and tell me what it printed" — and an orchestrator (an AI agent whose job is to run other
   Tasks) creates and runs them for you.
-- **The coding tools you already use.** Orka serves
-  [OpenAI-compatible](https://orka-agents.github.io/orka/docs/openai-compat) and
-  [Anthropic-compatible](https://orka-agents.github.io/orka/docs/anthropic-compat) endpoints.
-  Point Claude Code, Codex, OpenCode, Cursor, or Continue at Orka, and nobody on the team
-  needs their own provider key. This door works a little differently from the others: the tool
-  keeps running on your laptop, and Orka serves as its shared model endpoint, so these requests
-  do not necessarily become Tasks. One thing to know: by default Orka swaps your tool's own
-  tools for Orka's server-side ones. To keep your tool working exactly as it does today, with its
-  tools running on your laptop, send the header `X-Orka-Tools: disabled`.
+- **The coding tools you already use.** Claude Code, Codex, OpenCode, and similar tools can
+  talk to Orka instead of to a model vendor, so nobody on the team needs their own provider
+  key. The next section shows how.
 - **Your team chat, your repository, your calendar.** Teams and Telegram messages, GitHub
   labels and pull requests, and cron schedules can all start Tasks. That is Part 3.
 
 Apart from the coding-tool endpoints, whichever door someone uses, they end up with the same
 kind of Task, governed by the same Agents and recorded the same way. A platform team sets things up once; everyone else uses
 what they already know.
+
+## Use Orka from the coding tool you already have
+
+Earlier, Orka ran Codex *inside* the cluster. There is another way to bring the two together:
+keep running Claude Code, Codex, or OpenCode on your laptop, and point it at Orka instead of at
+a model vendor. Orka serves the same kinds of web addresses those tools already expect: an
+[Anthropic-compatible](https://orka-agents.github.io/orka/docs/anthropic-compat) one for Claude
+Code, and an [OpenAI-compatible](https://orka-agents.github.io/orka/docs/openai-compat) one for
+tools that speak OpenAI's format. The model key stays in the cluster; each person signs in with
+their Orka token instead.
+
+Here is Claude Code, using the API connection and token from Step 3:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8080/anthropic
+export ANTHROPIC_API_KEY="${ORKA_TOKEN}"      # your Orka token, not a model key
+export ANTHROPIC_CUSTOM_HEADERS="X-Orka-Tools: disabled"
+claude
+```
+
+The `anthropic` Provider from Step 3 is the only one, so Orka sends Claude Code's requests to
+it. (With several Providers, see how to
+[pick one by name](https://orka-agents.github.io/orka/docs/anthropic-compat#model-name-format).)
+
+That last `export` chooses between two very different modes:
+
+| | With `X-Orka-Tools: disabled` | Without it (the default) |
+| --- | --- | --- |
+| What the tool can do | Exactly what it did before: read and edit files and run commands on your laptop | Orka swaps the tool's own tools for its own: start agents in the cluster, check on them, cancel them, open pull requests, check CI |
+| Orka's job | A shared model endpoint that holds the key | A shared model endpoint *and* a coordinator that does work in the cluster |
+| Pick it when | You want your usual tool, minus the personal API key | You want to type "fix issue 42 and open a pull request" and let the cluster do it |
+
+The first mode is the easy win: everyone keeps their workflow, and the keys move into the
+cluster. These requests are plain model calls; they do not become Tasks.
+
+The second mode turns your terminal into one more front door to everything in this series.
+Whatever it starts in the cluster is an ordinary Task, with the same records and the same
+rules. Just know that in this mode
+the tool cannot touch the files on your laptop; the work happens in the cluster.
+
+Codex, OpenCode, and other tools use the OpenAI-compatible address,
+`http://localhost:8080/openai/v1`. Each tool has its own settings for the address and for extra
+headers, and some need more than a new address, so check the
+[OpenAI-compatible guide](https://orka-agents.github.io/orka/docs/openai-compat) for what is
+supported before you switch.
 
 ## What you have now
 

@@ -65,6 +65,7 @@ The same Task can start from:
 Most of those doors lead to the same Task, with the same record and the same rules. The
 coding-tool door is a little different: there, Orka acts as a shared model endpoint, so your
 team stops handing out provider keys, but the tool itself keeps running where it already runs.
+If you want, Orka can also take over the tool's actions and start Tasks in the cluster for you.
 
 Meeting you where you are goes for infrastructure too. Orka runs on the Kubernetes cluster you
 already have, and when you want stronger sandboxes, it plugs into the sandbox projects you
@@ -96,8 +97,9 @@ Features we cover:
 - **Coding agents that open pull requests**, without the agent ever holding a Git credential
 - **Three jobs, kept apart:** talking to the model, doing the work, and delivering the result
 - **Timeouts and stopping a Task**
-- **Many front doors:** `kubectl`, the `orka` CLI, the dashboard, chat, and the
-  OpenAI- and Anthropic-compatible endpoints for tools like Claude Code
+- **Many front doors:** `kubectl`, the `orka` CLI, the dashboard, and chat
+- **Using Orka from Claude Code and other coding tools** on your laptop, either as a shared
+  model endpoint that keeps the keys, or as a coordinator that starts work in the cluster
 - **The dashboard demo**, which runs in your browser with no install
 
 ### [Part 2 — Trust by design: keys, approvals, and sandboxes](02-trust-by-design.md)
