@@ -171,14 +171,18 @@ func printAgentHost(out io.Writer, host agentHostView) {
 	}
 }
 
-// waitForAgentHost waits until the person's host is ready after linking a
-// provider that serves agent hosts, and says how the Copilot app lists it.
-func waitForAgentHost(ctx context.Context, cmd *cobra.Command, c *client.Client) error {
+// waitForAgentHost waits until the host fed by connection, the link just made
+// to a provider that serves agent hosts, is ready, and says how the Copilot
+// app lists it.
+func waitForAgentHost(ctx context.Context, cmd *cobra.Command, c *client.Client, connection string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Waiting for your agent host...") //nolint:errcheck
 	for {
 		host, err := getOwnAgentHost(ctx, c)
 		switch {
+		// Until the new link's host exists, the API can answer with a host
+		// kept from another link, ready or failed; it is not the one to use.
+		case err == nil && host.Connection != connection:
 		// A host being deleted is not the one to use; its replacement follows.
 		case err == nil && host.Deleting:
 		case err == nil && host.Ready:
