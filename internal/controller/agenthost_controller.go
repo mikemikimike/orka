@@ -73,7 +73,10 @@ const (
 	agentHostReasonHostNamespaceChanged   = "HostNamespaceChanged"
 	agentHostReasonConnectionUnavailable  = "ConnectionUnavailable"
 	agentHostReasonGitHubIdentityChanged  = "GitHubIdentityChanged"
-	agentHostReasonWaitingForIdle         = "WaitingForIdle"
+	// agentHostReasonGitHubTokenNeverExpires refuses a Connection token that
+	// never expires: code in the host can read it.
+	agentHostReasonGitHubTokenNeverExpires = "GitHubTokenNeverExpires"
+	agentHostReasonWaitingForIdle          = "WaitingForIdle"
 
 	agentHostKindSecret           = "Secret"
 	agentHostKindConnectionSecret = "ConnectionSecret"
@@ -431,6 +434,12 @@ func (r *AgentHostReconciler) connectionToken(
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("get the host's token from Connection %s: %w", name, err)
+	}
+	// Code in the host can read its token, so it gets only one that expires:
+	// a leaked copy then stops working on its own.
+	if held.ExpiresAt.IsZero() {
+		return nil, "", agentHostFailed(agentHostReasonGitHubTokenNeverExpires,
+			"Connection %s holds a GitHub token that never expires; turn on user-token expiration in the GitHub App, then link again", name)
 	}
 	token := []byte(held.AccessToken)
 	holds, err := r.tokenCopyHolds(ctx, names, token)
