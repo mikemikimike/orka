@@ -40,10 +40,16 @@ controller's Role in it, the controller flags and the AgentHost admission webhoo
 `orka-host-agent` sidecar comes from the controller image, so pin it by digest, or set
 `controller.agentHosts.agentImage` to another digest-pinned image that carries it. Agent
 hosts need `controller.mode: harness-v2`, and the host namespace must differ from the
-release namespace and `controller.acpRuntime.namespace`. Helm keeps the host namespace,
-with the hosts' volumes and the controller's Role in it, when you disable agent hosts,
-change `controller.agentHosts.namespace`, roll back or uninstall, so hosts left there can
-still be deleted; delete the namespace yourself once no AgentHost needs it.
+release namespace and `controller.acpRuntime.namespace`.
+
+Before you disable agent hosts, uninstall, or roll back to a release without them, delete
+every AgentHost and wait until it is gone. Without agent hosts the controller stops
+reconciling them, so their Pods keep running and their deletion never finishes; an upgrade
+that disables agent hosts is refused while AgentHosts remain. Helm keeps the host
+namespace, with the hosts' volumes and the controller's Role in it, so a controller with
+agent hosts on can still finish cleaning up, including hosts left in an earlier namespace
+after `controller.agentHosts.namespace` changes. Delete the namespace yourself once no
+AgentHost needs it.
 
 With the Kustomize install:
 
@@ -229,7 +235,8 @@ orka host delete --yes   # delete it and its volume; while linked, a fresh one f
   and a managed user's underscore becomes `--`: `alice_acme` gets `gh-alice--acme`.
 - Orka writes the link's access token into the host and refreshes it 15 minutes before it
   expires. copilotd picks up the replaced file without a restart. The refresh token never
-  leaves Orka.
+  leaves Orka. A token that never expires is refused with `GitHubTokenNeverExpires`, since
+  code in the host could keep using a copy of it.
 - The host belongs to the first GitHub account it was given. A later token for another
   account fails it with `GitHubIdentityChanged` and keeps the volume.
 - Disconnecting stops the host, deletes its token copy and keeps the AgentHost and its
@@ -326,6 +333,7 @@ because a pending or running workflow can be lost to suspension.
 | `HostNamespaceChanged` | The controller's `--agent-host-namespace` changed after the host was created. Delete and recreate it. |
 | `ConnectionUnavailable` | The host's Connection is gone, unlinked or needs a new consent: linking again restarts the host. Or its provider no longer serves agent hosts: an operator restores the provider's `agentHost`, then the person links again. |
 | `GitHubIdentityChanged` | The Connection now links a different GitHub account than the one the host's volume belongs to. Link the original account, or delete the AgentHost. |
+| `GitHubTokenNeverExpires` | The host's Connection holds a GitHub token that never expires, which code in the host could read and keep using. Turn on user-token expiration in the GitHub App, then link again. |
 
 A host that fails for a missing template or token has its Pod stopped and keeps its
 volume. When the token's Secret or Connection is gone, Orka also deletes its copy.
