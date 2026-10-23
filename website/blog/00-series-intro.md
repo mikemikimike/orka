@@ -4,17 +4,24 @@ slug: orka-piece-by-piece
 date: 2026-10-21T09:00
 authors: [orka]
 tags: [orka-piece-by-piece]
-description: "Orka runs AI agents on Kubernetes with the keys kept in the cluster. A four-part, beginner-friendly tour of what it is and how its pieces fit together."
+description: "Orka is an open-source workplace for AI agents, built on Kubernetes. A four-part, beginner-friendly tour of what it is and how its pieces fit together."
 ---
 
 AI agents have changed jobs. Not long ago they answered questions in a chat window. Now they
-fix bugs, review pull requests, triage issues, and open pull requests of their own. The hard
-part is no longer *whether* an agent can do the work. It is everything around the work:
+do things. [OpenClaw](https://github.com/openclaw/openclaw) is an open-source personal
+assistant you run yourself and talk to through chat apps like WhatsApp and Telegram; it
+handles email, calendars, and files. OpenAI's Dots keep working in the background between
+chats, each on a computer of its own. Meta's Muse drafts a small business's posts and ad
+campaigns, and checks with the owner before publishing or spending anything. And coding
+agents fix bugs and open pull requests of their own.
+
+The hard part is no longer *whether* an agent can do the work. It is everything around the
+work:
 
 - Where does the agent run, and what can it touch?
-- Whose API key is it using, and who else has a copy?
+- Whose keys and accounts is it using, and who else has a copy?
 - What did it actually do yesterday, and how much did that cost?
-- How does the rest of the team use it without everyone setting it up on their own laptop?
+- How does a whole team use it, without everyone setting it up on their own laptop?
 
 <!-- truncate -->
 
@@ -22,17 +29,18 @@ part is no longer *whether* an agent can do the work. It is everything around th
 
 A few things look likely over the next couple of years.
 
-- **Agents move from the chat window into how teams work.** Not one person asking one agent a
-  question, but agents reviewing every pull request, picking up labeled issues, running the
-  nightly checks, and answering in the team chat.
-- **There will be many kinds of agents, not one.** Well-known coding tools like Codex and
-  Claude Code, agents hosted on cloud platforms, and small agents your own team builds for a
-  single job. The models underneath them will keep changing every few months.
-- **Agents act for people.** They comment on an issue as you, file a ticket for you, and reach
-  the systems you can reach. *Who asked, and on whose behalf* starts to matter as much as which
+- **Agents move from the chat window into how people work.** Not one person asking one agent a
+  question, but agents drafting the week's posts, answering texts at night, triaging the
+  support inbox, and reviewing every pull request.
+- **There will be many kinds of agents, not one.** Personal assistants, business agents for
+  marketing and support, coding tools like Codex and Claude Code, agents hosted on cloud
+  platforms, and small agents your own team builds for a single job. The models underneath
+  them will keep changing every few months.
+- **Agents act for people.** They send an email as you, post for your business, and comment on
+  an issue in your name. *Who asked, and on whose behalf* starts to matter as much as which
   model ran.
-- **Agents wait a lot.** They work in bursts, then wait on a person, on automated checks, or on
-  the next message. Paying for an agent to sit idle makes little sense.
+- **Agents wait a lot.** They work in bursts, then wait on a person, a sign-off, or the next
+  message. Paying for an agent to sit idle makes little sense.
 
 Put together, agents start to look less like a tool you open and more like coworkers. And
 coworkers need a workplace: somewhere to work, a badge that opens the right doors, rules,
@@ -42,6 +50,11 @@ someone to sign off on big decisions, and a record of what got done.
 of work, Orka runs it somewhere isolated in your cluster, keeps a record of what happened, and
 gives you the result. The model keys stay in the cluster; people and automation get a scoped
 token instead.
+
+Some of the agents above are run by a vendor for one person; others run on one person's own
+laptop. Orka is for the next step: running agents like these for a whole team or company, on
+infrastructure you control, with the keys out of the agent's reach, sign-off where it
+matters, and a record of everything.
 
 Orka's bet is simple: the agents and models will keep changing, so the workplace around them
 should stay steady. Whichever agent runs, the work is the same kind of Task, with the same keys
@@ -56,6 +69,20 @@ care about.
 > in this series may change between releases. The
 > [documentation](https://orka-agents.github.io/orka/docs) is always the source of truth.
 
+## Three agents we will follow
+
+To keep things concrete, the series follows three agents:
+
+- **A marketing assistant** for a small team. It drafts the week's posts from a product brief,
+  checks last week's numbers, and asks a person before it publishes anything.
+- **A personal assistant** you text from your phone. It keeps track of the conversation,
+  remembers what you told it to remember, and works with your calendar and notes through tools
+  you connect.
+- **A coding agent** that reviews and changes code.
+
+Coding is the use case Orka has gone deepest on, so it gets its own clearly marked sections.
+Everything else in the series applies to any agent.
+
 ## Two ideas to keep in mind
 
 Two ideas come back in every part of this series.
@@ -69,22 +96,21 @@ will see everywhere:
 | **Agent** | *A job description.* Which model to use, what instructions to follow, which tools it may use. |
 | **Task** | *A work order.* "Do this one thing now." |
 
-Everything bigger — a schedule, a pull request reviewer, a team chat bot, a coordinator that
-delegates to other agents — is built by combining these same three pieces with a few
-optional extras. You start small and add only what you need.
+Everything bigger — a weekly schedule, an assistant you text, a coordinator that delegates to
+other agents, a pull request reviewer — is built by combining these same three pieces with a
+few optional extras. You start small and add only what you need.
 
 **2. Orka meets you where you already work.** You do not have to adopt a new tool to use it.
 The same Task can start from:
 
-- `kubectl apply` with a YAML file, if you live in Kubernetes
-- the `orka` command-line tool, if you like scripts
-- a built-in web dashboard, if you prefer clicking
+- a message in Microsoft Teams, Telegram, or iMessage
 - a plain-language chat, if you just want to say what you need
-- the AI coding tools you already use, such as Claude Code or Codex, pointed at Orka instead
-  of at a model vendor
-- a GitHub label on an issue, or a new pull request arriving
-- a message in Microsoft Teams or Telegram, or a call from another agent
+- a built-in web dashboard, if you prefer clicking
 - a cron schedule that runs while you sleep
+- another agent's request
+- `kubectl apply` with a YAML file, or the `orka` command-line tool
+- for developers, a GitHub label on an issue, a new pull request, or the coding tools they
+  already use, such as Claude Code or Codex, pointed at Orka instead of at a model vendor
 
 Most of those doors lead to the same Task, with the same record and the same rules. The
 coding-tool door is a little different: there, Orka acts as a shared model endpoint, so your
@@ -95,12 +121,11 @@ Meeting you where you are goes for infrastructure too. Orka runs on the Kubernet
 already have, and when you want stronger sandboxes, it plugs into the sandbox projects you
 choose instead of bringing its own.
 
-You will also notice two habits running through every part. Orka **keeps jobs apart**: for a
-coding agent, the part that talks to the model, the part that does the work, and the part that
-delivers the result each hold only what they need, and the real model key and Git credential
-stay out of the agent's reach. And Orka **plans for agents that wait**: much of an agent's work
-is waiting on a person or on automated checks, so Orka can shut down or put to sleep the parts
-that have nothing to do.
+You will also notice two habits running through every part. Orka **keeps credentials away
+from agents**: the keys for the tools and accounts an agent uses stay with Orka, and for
+coding agents even the model key and the Git credential stay out of reach. And Orka **plans for
+agents that wait**: much of an agent's work is waiting on a person or a sign-off, so Orka can
+shut down or put to sleep the parts that have nothing to do.
 
 ## The series
 
@@ -109,88 +134,85 @@ that have nothing to do.
 **The question it answers:** *What is Orka, and what does using it feel like?*
 
 A tour of what Orka is made of: the three building blocks, the three kinds of work a Task can
-do, how a coding agent works on a repository without holding the keys, and the many ways
-people reach that work, including the coding tool already on their laptop.
+do, and the many ways people reach that work. Coding agents get a closer look at how they work
+on a repository without holding the keys.
 
 Features we cover:
 
-- **The three Task types:** `ai` (ask a model, with tools like web search and code execution),
-  `agent` (run Codex, Claude Code, GitHub Copilot CLI, or OpenCode on a git repository), and
-  `container` (run any command, no model needed)
 - **Provider, Agent, Task**, and how one points at the next
-- **Coding agents that open pull requests**, without the agent ever holding a Git credential
-- **Three jobs, kept apart:** talking to the model, doing the work, and delivering the result
-- **Many front doors:** `kubectl`, the `orka` CLI, the dashboard, and chat
-- **Using Orka from Claude Code and other coding tools** on your laptop, either as a shared
-  model endpoint that keeps the keys, or as a coordinator that starts work in the cluster
+- **The three Task types:** `ai` (a model with tools, where most agents live), `agent` (Codex,
+  Claude Code, GitHub Copilot CLI, or OpenCode on a Git repository), and `container` (run any
+  command, no model needed)
+- **Built for agents that wait:** short-lived runs, and warm pools that shut down when idle
+- **Many front doors:** Teams, Telegram, and iMessage, the dashboard, plain-language chat,
+  schedules, the `orka` CLI, and `kubectl`
+- **For coding agents:** three jobs kept apart, so the agent never holds the model key or a Git
+  credential, and using Orka from the coding tool already on a developer's laptop
 - **The dashboard demo**, which runs in your browser with no install
 
 ### [Part 2 — Trust by design: keys, approvals, and sandboxes](02-trust-by-design.md)
 
 **The question it answers:** *Why is it safe to let agents do real work?*
 
-An agent reads untrusted text all day: issues, web pages, code from strangers. Part 2 explains
-how Orka keeps that agent away from the things it should not have, and how you decide how
-much control you want, from "just keep the keys safe" to "a person approves every write."
+An agent reads untrusted text all day: emails and messages from strangers, web pages,
+documents, issues. Part 2 explains how Orka keeps that agent away from the things it should
+not have, and how you decide how much control you want, from "just keep the keys safe" to "a
+person approves every post."
 
 Features we cover:
 
-- **Keys stay in the cluster:** model keys live in Kubernetes Secrets; people, CI, and tools get
+- **Keys stay in the cluster:** model keys live in Kubernetes Secrets; people and tools get
   scoped tokens
-- **"Thinks but cannot push":** coding agents have no Git credentials; a separate publisher
-  checks and pushes their changes
 - **Human approval** for actions that matter, with Orka running exactly the action a person
   approved
-- **Connectors**, so an agent can act as *you* on GitHub, with approval on every write
-- **A walk through an attack:** what a fooled agent finds when it goes looking
 - **Calling your own systems without handing agents the keys**
+- **Connectors**, so an agent can act as *you*, with approval on every write (GitHub first)
+- **Walking through an attack, twice:** what a fooled marketing assistant and a fooled coding
+  agent can and cannot do
+- **For coding agents:** "thinks but cannot push," with a separate publisher that checks and
+  pushes their changes
 - **Stronger walls** around agents, from sandboxed Pods to a sandbox per conversation
 
-### [Part 3 — Agents that keep working: automation, teamwork, and your own tools](03-agents-that-keep-working.md)
+### [Part 3 — Agents that keep working: schedules, conversations, teamwork, and your own tools](03-agents-that-keep-working.md)
 
-**The question it answers:** *How do I go from one Task to agents that are part of how my team works?*
+**The question it answers:** *How do I go from one Task to agents that are part of how people work?*
 
-This is where composability pays off. We take the same building blocks from Part 1 and add
-schedules, repository automation, teams of agents, memory, and custom tools.
+This is where composability pays off. We take the same building blocks from Part 1 and follow
+the three agents as they gain schedules, chat apps, memory, teammates, and tools.
 
 Features we cover:
 
 - **Scheduled Tasks:** any Task on a cron schedule
-- **Repository monitors:** review every pull request as it arrives
-- **Issue to pull request:** label an issue `orka:implement` and Orka plans, implements, reviews,
-  and repairs the PR, and `orka:pause` to hold it back
-- **Security scanning** of a repository with validated findings
+- **Gateways** for Microsoft Teams, Telegram, iMessage, and agent-to-agent (A2A) requests
+- **Sessions and memory:** agents that continue a conversation, and facts they propose and
+  people approve
 - **Multi-agent coordination:** one agent delegates to specialists, inside limits you set
-- **Autonomous Tasks** that plan, act, and re-plan toward a goal
-- **Memory** that agents propose and people approve
-- **Sessions:** agents that continue a conversation, including one you started with Codex on
-  your laptop and imported into Orka
-- **Workspaces:** a sandbox per conversation (Agent Sandbox or Agent Substrate) that can suspend
-  between Tasks and resume later; Agent Substrate can also save checkpoints and restore or fork
-  from them
-- **Three kinds of remembering:** the conversation, the files, and approved facts, each with
-  its own owner
-- **Gateways** for Microsoft Teams, Telegram, and agent-to-agent (A2A) requests
-- **Your team's ways and your own tools:** skills and a persona, connecting your APIs, adding extra programs for coding agents
-  (toolboxes), and packaging an agent you built yourself (AgentKit)
+- **Autonomous Tasks** that work toward a goal, and stop to ask before a step that needs
+  sign-off
+- **Your ways and your tools:** skills and a persona, connecting your apps and APIs, and
+  packaging an agent you built yourself (AgentKit)
+- **For software teams:** reviewing every pull request, turning labeled issues into pull
+  requests, security scanning, continuing a laptop Codex conversation in the cluster, a
+  sandbox per conversation that can suspend and resume (with checkpoints, restore, and fork on
+  Agent Substrate), and extra programs for coding agents (toolboxes)
 
 ### [Part 4 — Running Orka for real: visibility, cost, and how it works inside](04-running-orka-for-real.md)
 
 **The question it answers:** *How do I operate this for a team and trust what it tells me?*
 
 The last part is for the person who will keep Orka running. We look at what Orka records,
-how to measure cost, and how the system is built underneath.
+how to see what agents cost, and how the system is built underneath.
 
 Features we cover:
 
 - **The durable record:** every Task's phase, result, artifacts, and event timeline
 - **Tracing and metrics** in the monitoring tools you already run
-- **Usage and PR outcomes:** tokens per merged pull request, per team
+- **Usage:** tokens per team, and for software teams, tokens per merged pull request
 - **The dashboard** for watching and steering work
 - **Backup model providers** for when one has an outage
-- **One shared address** for every team's coding tools
-- **How it works inside:** the one program that runs everything, warm pools of coding agents
-  that shut down when idle, pinned images, and what happens when things restart
+- **One shared address** for every team's tools
+- **How it works inside:** the one program that runs everything, warm pools that shut down
+  when idle, pinned images, and what happens when things restart
 - **Day-two operations:** install, upgrade, and where to look when something is stuck
 
 ## Try it before reading further

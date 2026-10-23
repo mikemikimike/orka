@@ -19,17 +19,17 @@ AI agents are joining a lot of teams right now, and most of them arrive with non
 
 <!-- truncate -->
 
-Today an agent usually lives on someone's laptop. It runs with that person's API key and Git
-token, it can reach whatever the laptop can reach, and when it finishes, the result gets
-pasted into a chat. That is fine for one person trying things out. It falls apart when a team
-wants agents to review every pull request, pick up issues overnight, or answer questions for
-people who will never install a coding tool. Then the questions start: whose key was that,
-what did the agent touch, and who said it could?
+Today an agent usually lives on one person's laptop or inside one person's account. It runs
+with that person's keys and logins, it can reach whatever they can reach, and when it
+finishes, the result gets pasted into a chat. That is fine for one person trying things out.
+It falls apart when a team wants an agent to draft the week's posts for everyone to review,
+answer customers' questions at night, or pick up issues overnight. Then the questions start:
+whose key was that, what did the agent touch, and who said it could?
 
 **Orka is a workplace for AI agents.** It runs on the Kubernetes cluster you already have.
 Each piece of agent work gets a place to run, only the keys it needs, rules that do not depend on
 the agent behaving, and a record of what happened. People reach that work from wherever they
-already are: a terminal, a dashboard, a chat, a pull request.
+already are: a chat app, a text message, a dashboard, a terminal, a pull request.
 
 This part is the tour: what Orka is made of, what kinds of work it runs, and how people start
 that work. If you would rather try it first, the
@@ -45,7 +45,7 @@ Everything in Orka is built from three building blocks:
 | --- | --- | --- |
 | **Provider** | Which model service to call, and where its key lives | "Anthropic, key in the `anthropic-secret` Secret" |
 | **Agent** | A job description | "Use Claude, be a helpful assistant, you may search the web" |
-| **Task** | A work order | "Answer: what is Kubernetes?" |
+| **Task** | A work order | "Draft three taglines for our spring launch" |
 
 They point at each other. A Task names an Agent, and an Agent names a Provider. Here is the
 middle and the end of that chain (shortened; the getting started guide has the full files):
@@ -69,7 +69,7 @@ spec:
   type: ai
   agentRef:
     name: assistant          # the Agent
-  prompt: "What is Kubernetes?"
+  prompt: "Draft three taglines for our spring launch."
 ```
 
 You write each piece once and reuse it. Ten Tasks can share one Agent; five Agents can share
@@ -87,16 +87,19 @@ A Task can run one of three kinds of work:
 
 | Task type | What runs | Good for |
 | --- | --- | --- |
-| `ai` | Orka's own AI worker, calling the model with built-in tools | Questions, research, summaries, coordinating other agents |
+| `ai` | Orka's own AI worker, calling the model with tools | Assistants, research, drafting, summaries, coordinating other agents |
 | `agent` | Codex, Claude Code, GitHub Copilot CLI, or OpenCode on a Git repository | Code review, bug fixes, pull requests |
-| `container` | Any container image, no model involved | Builds, tests, scripts |
+| `container` | Any container image, no model involved | Reports, data exports, builds, scripts |
 
-The `ai` kind is the one above: a model, a job description, and built-in tools such as web
-search, code execution, and fetching a web page. The model decides when to use them.
+The `ai` kind is the one above, and it is where most agents live. The marketing assistant and
+the personal assistant from the introduction are both `ai` agents: a model, a job description,
+and tools. Orka has built-in tools such as web search, code execution, and fetching a web page,
+and you can add your own, such as your calendar or your social media scheduler (Part 3 shows
+how). The model decides when to use them.
 
-The `agent` kind is where it gets interesting. These are the same coding tools developers run
-in a terminal, now running in your cluster. A coding Task names a repository and says whether
-the agent may only read it or may change it:
+The `agent` kind is for one use case Orka has gone especially deep on: software. These are the
+same coding tools developers run in a terminal, now running in your cluster. A coding Task
+names a repository and says whether the agent may only read it or may change it:
 
 ```yaml
 spec:
@@ -114,14 +117,15 @@ Which coding tool runs is a setting on the Agent, so switching from Codex to Cla
 mostly a one-line change (OpenCode asks for a couple more model settings), and the Tasks stay
 the same. The tool is a piece you can swap.
 
-The `container` kind sounds boring, and that is why it matters. Agents often need a build, a
-test run, or a script, and those are just containers. One platform runs all three kinds of
+The `container` kind sounds boring, and that is why it matters. Agents often need a report
+generated, a data export, a build, or a script, and those are just containers. One platform runs all three kinds of
 work with the same record and the same rules.
 
-## Three jobs, kept apart
+## Coding agents: three jobs, kept apart
 
-When a coding agent works on your repository, Orka splits the work into three jobs and gives
-each one to a different part:
+For every agent, the model key stays in the cluster. Coding agents get a stricter arrangement,
+because they work on your code and can run commands. Orka splits that work into three jobs
+and gives each one to a different part:
 
 | Job | Who does it | What it holds |
 | --- | --- | --- |
@@ -136,16 +140,17 @@ opens the pull request. Part 2 is about why that split matters so much.
 
 ## Built for agents that wait
 
-Coding agents are slow to start from scratch, so Orka keeps a warm *pool* for each one: a
-running Pod (Kubernetes' unit for running containers) that hosts several agents' private
-sessions at once. The first coding Task starts the pool, which takes a few minutes; after
-that, new Tasks start in seconds.
+A lot of agent work comes in bursts: a few minutes of work, then waiting for a person to reply,
+for a sign-off, for automated checks to finish, or for the next message to arrive. Orka is
+built so that waiting does not keep machines busy.
 
-The pool also shuts down after it has been empty for a while (15 minutes by default), and that
-matters more than it sounds. A lot of agent work comes in bursts: a few minutes of work, then
-waiting for a person to reply, for continuous integration (CI, the automated build and test
-checks) to finish, or for the next issue to arrive. When nothing is running in a pool, it is not
-using your cluster. You will see the same idea again in Part 3, where an agent can be put to
+`ai` and `container` Tasks run as short-lived Jobs (Kubernetes' one-off runs of a container)
+that end when their work does. Coding agents are slow to start from scratch, so Orka keeps a
+warm *pool* for each one: a running Pod (Kubernetes' unit for running containers) that hosts
+several agents' private sessions at once. The first coding Task starts the pool, which takes a
+few minutes; after that, new Tasks start in seconds. The pool shuts down after it has been
+empty for a while (15 minutes by default), so when nothing is running in it, it is not using
+your cluster. You will see the same idea again in Part 3, where an agent can be put to
 sleep between messages.
 
 ## Many ways in, one Task underneath
@@ -159,15 +164,16 @@ they already are:
   on sample data.
 - **Chat.** Describe what you want in plain language, and an orchestrator (an AI agent whose
   job is to run other Tasks) creates and runs them for you.
-- **Your team chat, your repository, your calendar.** Teams and Telegram messages, GitHub
-  labels and pull requests, and cron schedules can all start Tasks. That is Part 3.
-- **The coding tool already on your laptop.** More on this one below.
+- **Your chat apps, your schedule, your repository.** Messages in Teams, Telegram, or
+  iMessage, cron schedules, and GitHub labels and pull requests can all start Tasks. That is
+  Part 3.
+- **For developers, the coding tool already on their laptop.** More on this one below.
 
 Whichever of these doors someone uses, they end up with the same kind of Task, governed by the
 same Agents and recorded the same way. A platform team sets things up once; everyone else uses
 what they already know.
 
-### Bringing your own coding tool
+### For developers: bringing your own coding tool
 
 Earlier, Orka ran Codex *inside* the cluster. There is another way to bring the two together:
 keep Claude Code, Codex, or OpenCode on your laptop, and point it at Orka instead of at a model
@@ -182,7 +188,7 @@ header called `X-Orka-Tools`:
 
 | | A shared model endpoint (`X-Orka-Tools: disabled`) | A coordinator (the default) |
 | --- | --- | --- |
-| What your tool can do | Keeps its own tools: it still reads and edits files and runs commands on your laptop (a few model options, such as extended thinking, are not passed through) | The model gets Orka's tools instead of your tool's: start agent Tasks in the cluster, check on them, cancel them, open pull requests, check CI |
+| What your tool can do | Keeps its own tools: it still reads and edits files and runs commands on your laptop (a few model options, such as extended thinking, are not passed through) | The model gets Orka's tools instead of your tool's: start agent Tasks in the cluster, check on them, cancel them, open pull requests, check a pull request's automated tests |
 | What Orka does | Holds the key and passes model calls through | Holds the key *and* does the work in the cluster |
 | Pick it when | You want your usual tool, minus the personal API key | Coding agents and repository access are set up, and you want to type "fix issue 42 and open a pull request" and let the cluster do it |
 
@@ -197,11 +203,12 @@ linked above cover what each one needs.
 
 Step back and here is what Orka gives you:
 
-- a place where agent work runs that is not someone's laptop,
+- a place where agent work runs that is not someone's laptop or someone's personal account,
 - model keys that only the cluster can see,
 - three kinds of work under one roof, built from three small pieces,
-- coding agents that can review or change a real repository without holding a Git credential,
-- many ways in, all leading to the same kind of record.
+- many ways in, from a text message to a terminal, all leading to the same kind of record,
+- and, for software teams, coding agents that can review or change a real repository without
+  holding a Git credential.
 
 ## Next up
 

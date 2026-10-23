@@ -69,22 +69,26 @@ into another system. See
 "We spent 40 million tokens this month" is a hard number to act on. Was that a lot? What did
 we get for it?
 
-Orka's [usage report](https://orka-agents.github.io/orka/docs/usage-and-pr-outcomes) frames
-cost around outcomes. Its main measure is **tokens per merged pull request**, per team (a team
-is a Kubernetes namespace). It follows each issue from planning through implementation, retries,
-delegated helpers, reviews, and repairs, and it **includes failed and cancelled work** — because
-you paid for that too. You can read it from the CLI (`orka usage summary -n orka-system`) or on the
-dashboard's **Usage** page. It is honest about its limits: it
-measures model usage, not developer productivity or hours saved, and it shows you where its
-measurements have gaps.
+For any agent, the starting point is the token counts: with telemetry on, Orka reports how
+many tokens model calls use, and on which models, in the monitoring tools you already have.
+
+Orka's [usage report](https://orka-agents.github.io/orka/docs/usage-and-pr-outcomes) goes a step
+further and ties cost to an outcome, per team (a team is a Kubernetes namespace). For software
+teams, its main measure is **tokens per merged pull request**. It follows each issue from
+planning through implementation, retries, delegated helpers, reviews, and repairs, and it
+**includes failed and cancelled work** — because you paid for that too. Usage that is not tied
+to a pull request is listed separately as other usage. You can read it from the CLI
+(`orka usage summary -n orka-system`) or on the dashboard's **Usage** page. It is honest about
+its limits: it measures model usage, not productivity or hours saved, and it shows you where
+its measurements have gaps.
 
 ## The dashboard
 
 Orka's [web dashboard](https://orka-agents.github.io/orka/docs/ui) is built into Orka itself,
 so there is nothing extra to deploy. It is off by default, and one Helm setting turns it on.
-From there you can watch Tasks run, read results and timelines, approve or decline actions,
-follow repository monitors and security findings, check usage, and chat with the
-orchestrator. If you want to look before installing anything, the
+From there you can watch Tasks run, read results and timelines, approve or decline actions
+(such as the marketing assistant's posts), check usage, chat with the orchestrator, and, for
+software teams, follow repository monitors and security findings. If you want to look before installing anything, the
 [dashboard demo](https://orka-agents.github.io/orka/demo/) runs the real dashboard in your
 browser on sample data.
 
@@ -191,26 +195,27 @@ A short list for whoever takes over an Orka install:
 
 ## Wrapping up the series
 
-Over four parts we went from three small building blocks to agents that review every pull
-request, turn issues into pull requests, work in teams, answer in Teams and Telegram, and
-report their cost per merged PR. Two ideas carried us the whole way:
+Over four parts we went from three small building blocks to a marketing assistant that drafts
+every Monday and waits for sign-off, an assistant you text from your phone, agents that work
+as a team, and coding agents that review every pull request and turn issues into new ones. Two
+ideas carried us the whole way:
 
 **Orka is composable.** Three building blocks — Provider, Agent, Task — and small additions
-on top: a schedule, a monitor, a coordination block, a gateway, a sandbox, a tool. You add the
+on top: a schedule, a gateway, a coordination block, an approval, a tool, a sandbox. You add the
 pieces you need and leave the rest off. Nothing new replaces what you already built. Orka
 does not ask you for new infrastructure either: it runs on the Kubernetes cluster you have,
 and plugs into the sandbox projects you choose.
 
-**Orka meets people where they are.** `kubectl` for the Kubernetes crowd, a CLI for scripters,
-a dashboard for clickers, chat for anyone, Claude Code and Codex for developers, GitHub for
-maintainers, Teams and Telegram for everyone else. Almost every door leads to the same Task,
+**Orka meets people where they are.** Teams, Telegram, and iMessage for everyone, a dashboard
+for clickers, chat for anyone, `kubectl` and a CLI for the Kubernetes crowd, and for developers,
+GitHub and the coding tools they already use. Almost every door leads to the same Task,
 with the same keys kept safe, the same rules, and the same record; the coding-tool endpoints
 share the same keys and model rules without needing a Task.
 
-Underneath both ideas sits one habit from Part 2: keep jobs apart. For a coding agent, the part
-that talks to the model, the part that does the work, and the part that delivers it are separate,
-and the real model key and Git credential stay out of the agent's reach, so an agent that gets
-fooled cannot take them.
+Underneath both ideas sits one habit from Part 2: keep credentials away from agents. The keys
+to the tools and accounts an agent uses stay with Orka, the actions that matter wait for a
+person, and coding agents never hold the model key or a Git credential at all, so an agent that
+gets fooled finds little worth taking.
 
 ## Where this is going
 
