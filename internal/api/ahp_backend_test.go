@@ -1516,6 +1516,76 @@ func TestAHPBackendRunsNoTurnForADisposedSession(t *testing.T) {
 	require.Nil(t, env.backend.activeTurn(alice.UserKey, ahpTestSession))
 }
 
+// ahpSessionReadStore lets a test fail or change the next session read.
+type ahpSessionReadStore struct {
+	store.AHPStore
+	mu   sync.Mutex
+	next func(store.AHPRecord, error) (store.AHPRecord, error)
+}
+
+func (s *ahpSessionReadStore) GetAHPRecord(ctx context.Context, userKey, kind, key string) (store.AHPRecord, error) {
+	record, err := s.AHPStore.GetAHPRecord(ctx, userKey, kind, key)
+	if kind != ahpRecordSession {
+		return record, err
+	}
+	s.mu.Lock()
+	next := s.next
+	s.next = nil
+	s.mu.Unlock()
+	if next != nil {
+		return next(record, err)
+	}
+	return record, err
+}
+
+// A turn runs only with the approval mode the session holds: a session that
+// cannot be read, or whose mode changed after it was read, starts no Task.
+func TestAHPBackendStartsNoTurnWithAStaleApprovalMode(t *testing.T) {
+	for name, next := range map[string]func(store.AHPRecord, error) (store.AHPRecord, error){
+		"unreadable session": func(store.AHPRecord, error) (store.AHPRecord, error) {
+			return store.AHPRecord{}, errors.New("the store refused the read")
+		},
+		"mode changed after the read": func(record store.AHPRecord, err error) (store.AHPRecord, error) {
+			var stale ahpSession
+			if err != nil || json.Unmarshal(record.Value, &stale) != nil {
+				return record, err
+			}
+			stale.ApprovalMode = ahpApprovalAllowAll
+			record.Value, err = json.Marshal(stale)
+			return record, err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newAHPTestEnv(t)
+			c := env.connect("alice")
+			ctx := ahpCtx(t)
+			env.setUpSession(c, "manual")
+			reads := &ahpSessionReadStore{AHPStore: env.backend.store}
+			env.backend.store = reads
+			alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+				UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+			var record ahpSession
+			require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+			require.Equal(t, ahpApprovalManual, record.ApprovalMode)
+
+			reads.mu.Lock()
+			reads.next = next
+			reads.mu.Unlock()
+			require.True(t, env.backend.reserveTurn(alice.UserKey, ahpTestSession))
+			env.backend.startTurn(ctx, alice, record, &ahptypes.ChatTurnStartedAction{
+				Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Message: ahptypes.Message{Text: "run", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+					Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+			}, env.backend.emitterFor(alice))
+			var tasks corev1alpha1.TaskList
+			require.NoError(t, env.kube.List(ctx, &tasks))
+			require.Empty(t, tasks.Items, "no Task runs under a stale approval mode")
+			require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+			require.Empty(t, record.ActiveTurn)
+		})
+	}
+}
+
 // A message whose start waited past its reservation, while another message's
 // turn was recorded, runs no second Task beside that turn.
 func TestAHPBackendStartsNoTurnBesideAnActiveOne(t *testing.T) {

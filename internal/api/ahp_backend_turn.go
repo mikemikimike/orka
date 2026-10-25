@@ -142,13 +142,18 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	}
 	// Start from the session as stored now: a change accepted since the
 	// message was admitted, such as the approval mode, applies to this turn.
+	// A session that cannot be read runs nothing: the older copy could carry
+	// an approval mode the person has since changed.
 	var current ahpSession
 	if err := b.getRecord(ctx, principal.UserKey, ahpRecordSession, record.Session, &current); errors.Is(err, store.ErrNotFound) {
 		// The session was disposed of while the message waited: run nothing.
 		return
-	} else if err == nil {
-		record = current
+	} else if err != nil {
+		log.Error(err, "read AHP session", "session", record.Session)
+		fail("the session could not be read")
+		return
 	}
+	record = current
 	choice, switching, err := b.resolveModel(ctx, principal, record, action.Message.Model)
 	if err != nil {
 		if rejection, ok := errors.AsType[*ahphost.Rejection](err); ok {
@@ -201,13 +206,19 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	// creation means disposal either finds and cancels the created Task, or
 	// has already deleted the session, and then nothing is created.
 	unlock := b.lockUser(principal.UserKey)
-	busy := false
+	busy, modeChanged := false, false
 	err = b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
 		// A message whose start waited past its reservation can meet a turn
 		// another message started meanwhile; the first one recorded runs.
 		// updateSession holds b.mu, which guards b.turns.
 		if s.ActiveTurn != "" || b.turns[ahpTurnKey(principal.UserKey, record.Session)] != nil {
 			busy = true
+			return
+		}
+		// The Task was built for the approval mode read above; one changed
+		// since must not run under the old mode.
+		if s.ApprovalMode != record.ApprovalMode {
+			modeChanged = true
 			return
 		}
 		s.Agent, s.Model, s.Turns = choice.Agent, choice.Model, number
@@ -226,11 +237,15 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 		}
 		return
 	}
-	if busy {
+	if busy || modeChanged {
 		unlock()
 		sub.Close()
 		cancel()
-		fail("another turn is already running in this session")
+		if busy {
+			fail("another turn is already running in this session")
+		} else {
+			fail("the session's approval mode changed while the message waited; send it again")
+		}
 		return
 	}
 	turnKey := ahpTurnKey(principal.UserKey, record.Session)
