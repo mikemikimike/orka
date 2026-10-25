@@ -1629,6 +1629,58 @@ func TestAHPBackendStartsNoTurnWithAStaleApprovalMode(t *testing.T) {
 	}
 }
 
+// A turn whose live updates fell behind after some text streamed ends with its
+// stored result as the answer, so the reply a model switch carries is whole.
+func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
+	env := newAHPTestEnv(t)
+	// A one-event buffer lets the test make the turn's subscription fall behind.
+	env.live = liveevents.NewBroker(1)
+	env.backend.live = env.live
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "explain", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+			Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+	}})
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+	var turn *ahpTurn
+	require.Eventually(t, func() bool { turn = env.backend.activeTurn(userKey, ahpTestSession); return turn != nil },
+		5*time.Second, 20*time.Millisecond)
+	chunk := func(text string) *harnessv2.UpdateEvent {
+		return &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: text}}
+	}
+	env.publish(taskName, chunk("The first part"))
+	waitForActionType(t, chatSub, "chat/delta")
+
+	// While the turn cannot read, its one-event buffer overflows.
+	turn.mu.Lock()
+	for range 3 {
+		env.publish(taskName, chunk(" lost"))
+	}
+	turn.mu.Unlock()
+	require.Eventually(t, func() bool { turn.mu.Lock(); defer turn.mu.Unlock(); return turn.lagged }, 5*time.Second, 20*time.Millisecond)
+
+	answer := "The first part, and the rest of the answer."
+	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte(answer)))
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	task.Status.ResultRef = &corev1alpha1.ResultReference{Available: true}
+	require.NoError(t, env.kube.Status().Update(ctx, task))
+	waitForActionType(t, chatSub, "chat/turnComplete")
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	require.NotEmpty(t, record.History)
+	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
+}
+
 // A message whose start waited past its reservation, while another message's
 // turn was recorded, runs no second Task beside that turn.
 func TestAHPBackendStartsNoTurnBesideAnActiveOne(t *testing.T) {

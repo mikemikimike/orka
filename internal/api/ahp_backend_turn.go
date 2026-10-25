@@ -74,6 +74,9 @@ type ahpTurn struct {
 	textPart        string
 	thoughtPart     string
 	streamedText    bool
+	// lagged reports that live updates stopped before the turn ended, so the
+	// text streamed so far may be only part of its answer.
+	lagged bool
 	// lastText is the end of the newest markdown part, kept for failures.
 	lastText string
 	// reply is the end of the turn's text, kept as the conversation's history.
@@ -397,6 +400,9 @@ func (t *ahpTurn) run(sub *liveevents.Subscription) {
 				// The subscription fell behind: the turn ends from the Task's
 				// stored result instead of live updates.
 				events = nil
+				t.mu.Lock()
+				t.lagged = true
+				t.mu.Unlock()
 				continue
 			}
 			t.handle(event)
@@ -927,10 +933,15 @@ func ahpLines(text string) []string {
 func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.streamedText && task.Status.ResultRef != nil && task.Status.ResultRef.Available && t.b.h.resultStore != nil {
+	if (!t.streamedText || t.lagged) && task.Status.ResultRef != nil && task.Status.ResultRef.Available && t.b.h.resultStore != nil {
 		// The stored result is whole, like a live final answer, and gets the
-		// same pattern redaction before anyone sees it.
+		// same pattern redaction before anyone sees it. After live updates
+		// fell behind it is the turn's answer, in a part of its own beside
+		// the text that streamed, and the reply the conversation keeps.
 		if data, err := t.b.h.resultStore.GetResult(t.ctx, task.Namespace, task.Name); err == nil {
+			if t.lagged {
+				t.textPart, t.reply = "", ""
+			}
 			t.text(executionevents.RedactExecutionEventText(string(data)))
 		}
 	}
