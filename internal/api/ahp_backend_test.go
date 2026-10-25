@@ -746,7 +746,7 @@ func TestAHPBackendResolvesTheDefaultBranchOnGitHubOnly(t *testing.T) {
 
 	// Another host is never contacted, so its credential stays home.
 	cloned.Project = nil
-	require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": "https://git.example.com/octo/widgets"}, &cloned))
+	require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": "https://git.example.com/octo/gadgets"}, &cloned))
 	require.Nil(t, cloned.Project["defaultBranch"])
 	env.mu.Lock()
 	require.Len(t, env.gitRequests, 1)
