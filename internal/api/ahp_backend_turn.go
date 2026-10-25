@@ -1030,6 +1030,10 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 	b.mu.Unlock()
 	records, err := b.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordSession)
 	if err != nil {
+		// Nothing was recovered, so a later call scans again.
+		b.mu.Lock()
+		delete(b.recovered, principal.UserKey)
+		b.mu.Unlock()
 		return
 	}
 	for _, raw := range records {

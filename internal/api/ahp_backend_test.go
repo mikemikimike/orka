@@ -1047,6 +1047,43 @@ func (s *ahpFailingStore) PutAHPRecord(ctx context.Context, record store.AHPReco
 	return s.AHPStore.PutAHPRecord(ctx, record)
 }
 
+// ahpFailingScanStore refuses to list sessions while armed, and counts the
+// session scans it is asked for.
+type ahpFailingScanStore struct {
+	store.AHPStore
+	armed atomic.Bool
+	scans atomic.Int32
+}
+
+func (s *ahpFailingScanStore) ListAHPRecords(ctx context.Context, userKey, kind string) ([]store.AHPRecord, error) {
+	if kind == ahpRecordSession {
+		s.scans.Add(1)
+		if s.armed.Load() {
+			return nil, errors.New("the store refused the read")
+		}
+	}
+	return s.AHPStore.ListAHPRecords(ctx, userKey, kind)
+}
+
+// Recovery after a restart runs again when its session scan failed, so a
+// transient store error cannot leave a running turn unrecovered.
+func TestAHPBackendRetriesAFailedRecoveryScan(t *testing.T) {
+	env := newAHPTestEnv(t)
+	failing := &ahpFailingScanStore{AHPStore: env.backend.store}
+	failing.armed.Store(true)
+	env.backend.store = failing
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+
+	env.backend.recoverTurns(ahpCtx(t), alice)
+	require.Equal(t, int32(1), failing.scans.Load())
+	failing.armed.Store(false)
+	env.backend.recoverTurns(ahpCtx(t), alice)
+	require.Equal(t, int32(2), failing.scans.Load(), "the failed scan is retried")
+	env.backend.recoverTurns(ahpCtx(t), alice)
+	require.Equal(t, int32(2), failing.scans.Load(), "a scan that worked is not repeated")
+}
+
 func ahpUserTurn(id, text string) ahptypes.StateAction {
 	return ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
 		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: id, StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
