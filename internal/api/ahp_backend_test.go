@@ -630,6 +630,25 @@ func TestAHPBackendRemovesAProjectNoSessionUses(t *testing.T) {
 	}, nil), "a removed project takes no new sessions")
 }
 
+// A project's checkout path leaves out the host, so the same owner and name on
+// another host is refused rather than opening the first one's checkout.
+func TestAHPBackendRefusesAProjectOnAnotherProjectsPath(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": ahpTestRepo}, nil))
+	require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": ahpTestRepo + ".git"}, nil),
+		"adding the same repository again returns it")
+	err := c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": "https://git.example.com/octo/widgets"}, nil)
+	require.ErrorContains(t, err, "already uses /workspace/src/octo/widgets")
+	var listed struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	require.NoError(t, c.Request(ctx, ahpExtensionListProjects, map[string]any{}, &listed))
+	require.Len(t, listed.Projects, 1)
+	require.Equal(t, ahpTestRepo, listed.Projects[0]["remoteUrl"])
+}
+
 func TestAHPBackendSetsASessionsApproveAll(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")

@@ -676,6 +676,15 @@ func (b *ahpBackend) addProject(ctx context.Context, principal ahphost.Principal
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return ahpProject{}, err
 	}
+	project := ahpProject{
+		ID: id, Name: name, Owner: owner, URL: repo, Path: path.Join(ahpProjectRoot, owner, name), CreatedAt: b.now().UTC(),
+		DefaultBranch: b.defaultBranch(ctx, principal.Namespace, repo),
+	}
+	// Sessions, worktrees and checkouts find a project by its path, which
+	// leaves out the host: a second repository on that path is refused, under
+	// the lock projects are removed and sessions created with.
+	unlock := b.lockUser(principal.UserKey)
+	defer unlock()
 	projects, err := b.projects(ctx, principal.UserKey)
 	if err != nil {
 		return ahpProject{}, err
@@ -683,9 +692,13 @@ func (b *ahpBackend) addProject(ctx context.Context, principal ahphost.Principal
 	if len(projects) >= ahpMaxProjects {
 		return ahpProject{}, &ahphost.Rejection{Reason: fmt.Sprintf("at most %d projects are allowed", ahpMaxProjects)}
 	}
-	project := ahpProject{
-		ID: id, Name: name, Owner: owner, URL: repo, Path: path.Join(ahpProjectRoot, owner, name), CreatedAt: b.now().UTC(),
-		DefaultBranch: b.defaultBranch(ctx, principal.Namespace, repo),
+	for _, other := range projects {
+		if other.ID == id {
+			return other, nil
+		}
+		if other.Path == project.Path {
+			return ahpProject{}, &ahphost.Rejection{Reason: fmt.Sprintf("the project %s already uses %s", other.URL, project.Path)}
+		}
 	}
 	return project, b.putRecord(ctx, principal.UserKey, ahpRecordProject, id, project)
 }
