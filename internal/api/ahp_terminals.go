@@ -269,10 +269,26 @@ func (b *ahpBackend) stopShell(ctx context.Context, principal ahphost.Principal,
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c",
-		`[ -f "$1" ] || exit 0; sid=$(cat "$1"); case "$sid" in ''|*[!0-9]*) exit 0;; esac; pkill -KILL -s "$sid"; rm -f "$1"`,
-		"sh", term.pidFile)
+	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", term.pidFile)
 }
+
+// ahpStopSessionScript kills every process in the session whose ID the file
+// $1 records, then removes the file. The loop reuses the positional
+// parameters, so the file is kept in a variable first. It reads /proc with shell builtins, so a
+// workspace image needs no more than sh: pkill is not one of its requirements.
+const ahpStopSessionScript = `file=$1
+[ -f "$file" ] || exit 0
+sid=$(cat "$file")
+case "$sid" in ''|*[!0-9]*) exit 0;; esac
+for stat in /proc/[0-9]*/stat; do
+  read -r line < "$stat" 2>/dev/null || continue
+  # Fields after the parenthesized command: state, ppid, pgrp, session.
+  set -- ${line##*) }
+  [ "$4" = "$sid" ] || continue
+  pid=${stat#/proc/}
+  kill -KILL "${pid%/stat}" 2>/dev/null || :
+done
+rm -f "$file"`
 
 // Terminals lists the user's running shells.
 func (b *ahpBackend) Terminals(_ context.Context, principal ahphost.Principal) ([]ahptypes.TerminalInfo, error) {
