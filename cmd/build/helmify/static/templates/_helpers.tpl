@@ -763,8 +763,17 @@ namespace the controller never shares with its watch or ACP runtime namespaces.
 {{- if and (include "orka.ahpEnabled" .) (include "orka.ahpWorkspaceImage" .) -}}true{{- end -}}
 {{- end }}
 
+{{/*
+Values reused from a release before AHP have no workspace namespace; they get
+values.yaml's default. An explicitly empty one stays empty and is refused.
+*/}}
 {{- define "orka.ahpWorkspaceNamespace" -}}
-{{- trim (toString (dig "ahp" "workspaceNamespace" "" .Values.controller)) -}}
+{{- $ahp := dig "ahp" (dict) .Values.controller -}}
+{{- if hasKey $ahp "workspaceNamespace" -}}
+{{- trim (toString $ahp.workspaceNamespace) -}}
+{{- else -}}
+orka-ahp-workspaces
+{{- end -}}
 {{- end }}
 
 {{- define "orka.validateAHP" -}}

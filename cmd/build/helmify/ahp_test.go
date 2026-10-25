@@ -135,6 +135,15 @@ func TestStaticChartAHPWorkspaceIdleTimeoutFromReusedValues(t *testing.T) {
 	}
 }
 
+// Workspaces turned on during an upgrade that reuses values from a release
+// before AHP have no namespace value, and get the default namespace.
+func TestStaticChartAHPWorkspaceNamespaceFromReusedValues(t *testing.T) {
+	args := ahpControllerArgs(t, ahpWorkspacesEnabled("--set", "controller.ahp.workspaceNamespace=null")...)
+	if want := "--ahp-workspace-namespace=" + ahpTestWorkspaceNamespace; !containsString(args, want) {
+		t.Fatalf("controller args are missing %s:\n%s", want, strings.Join(args, "\n"))
+	}
+}
+
 // ahpWorkspaceObjects decodes the workspace template into its objects by kind.
 func ahpWorkspaceObjects(t *testing.T, rendered string) map[string][]byte {
 	t.Helper()
