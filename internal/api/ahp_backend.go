@@ -1170,7 +1170,14 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 		// turn starts, not also as input to the running turn.
 		steering := a.Kind == ahptypes.PendingMessageKindSteering
 		var order []string
-		if err := b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
+		full := false
+		err := b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
+			// The bound is checked again where the queue is written: messages
+			// from two connections can both be admitted below it.
+			if !slices.ContainsFunc(s.Pending, func(p ahpPending) bool { return p.ID == a.Id }) && len(s.Pending) >= ahpPendingMax {
+				full = true
+				return
+			}
 			s.Pending = slices.DeleteFunc(s.Pending, func(p ahpPending) bool { return p.ID == a.Id })
 			entry := ahpPending{ID: a.Id, Kind: string(ahptypes.PendingMessageKindQueued), Message: a.Message, Version: version}
 			if steering {
@@ -1182,7 +1189,8 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 			for _, p := range s.Pending {
 				order = append(order, p.ID)
 			}
-		}); err != nil {
+		})
+		if err != nil || full {
 			// The message was not queued: take it out of the client's queue.
 			logSessionUpdate(err, record.Session, "queue a message")
 			b.mu.Lock()

@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1679,6 +1680,31 @@ func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
 	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
 	require.NotEmpty(t, record.History)
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
+}
+
+// The bound on waiting messages holds where the queue is written, so messages
+// two connections had both admitted below it cannot grow the queue past it.
+func TestAHPBackendKeepsTheWaitingMessageBound(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		for i := range ahpPendingMax {
+			s.Pending = append(s.Pending, ahpPending{ID: fmt.Sprintf("waiting-%d", i), Kind: string(ahptypes.PendingMessageKindQueued),
+				Message: ahptypes.Message{Text: "wait", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}}})
+		}
+	}))
+	env.backend.HandleClientAction(ctx, alice, chat, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageSetAction{
+		Type: ahptypes.ActionTypeChatPendingMessageSet, Kind: ahptypes.PendingMessageKindQueued, Id: "one-too-many",
+		Message: ahptypes.Message{Text: "over", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}}, env.backend.emitterFor(alice))
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Len(t, record.Pending, ahpPendingMax)
+	require.False(t, slices.ContainsFunc(record.Pending, func(p ahpPending) bool { return p.ID == "one-too-many" }))
 }
 
 // A message whose start waited past its reservation, while another message's
