@@ -124,24 +124,26 @@ func (c *conn) createResourceWatch(ctx context.Context, raw json.RawMessage) (an
 	if !ok {
 		return nil, rpcErr(ahptypes.ErrorCodeMethodNotFound, "method %q is not supported", "createResourceWatch")
 	}
+	channel := resourceWatchScheme + randomID()
+	watchCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	// The watch is live before its channel is stored, so a sweep never takes
+	// a stored channel for one an earlier process left behind.
 	c.mu.Lock()
 	if len(c.watches) >= maxWatchesPerConnection {
 		c.mu.Unlock()
+		stop()
 		return nil, rpcErr(ahptypes.ErrorCodeInvalidRequest, "too many resource watches")
 	}
+	c.watches[channel] = stop
 	c.mu.Unlock()
-	channel := resourceWatchScheme + randomID()
 	recursive := params.Recursive != nil && *params.Recursive
 	state := ahptypes.ResourceWatchState{Root: params.Uri, Recursive: recursive, Includes: params.Includes, Excludes: params.Excludes}
 	if err := c.host.storeChannels(ctx, c.principal.UserKey, map[string]storedChannel{
 		channel: {Backend: backend.Name(), State: ahptypes.SnapshotState{ResourceWatch: &state}},
 	}); err != nil {
+		c.releaseWatch(channel)
 		return nil, err
 	}
-	watchCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	c.mu.Lock()
-	c.watches[channel] = stop
-	c.mu.Unlock()
 	started := make(chan error, 1)
 	go func() {
 		err := watcher.WatchResources(watchCtx, c.principal, params, func(changes []ahptypes.ResourceChange) {
@@ -210,7 +212,8 @@ func randomID() string {
 
 // sweepOnce drops, once per user in this process, the channels an earlier
 // process left behind: resource watches, which never outlive their
-// connection, and terminals whose shells are gone.
+// connection, and terminals whose shells are gone. A sweep that fails is tried
+// again by the user's next initialize or reconnect.
 func (h *Host) sweepOnce(ctx context.Context, principal Principal) {
 	h.mu.Lock()
 	if h.swept == nil {
@@ -222,30 +225,59 @@ func (h *Host) sweepOnce(ctx context.Context, principal Principal) {
 	}
 	h.swept[principal.UserKey] = true
 	h.mu.Unlock()
-	stale, err := h.cfg.Store.ListAHPChannels(ctx, principal.UserKey, resourceWatchScheme)
-	if err != nil {
-		return
+	if err := h.sweep(ctx, principal); err != nil {
+		h.mu.Lock()
+		delete(h.swept, principal.UserKey)
+		h.mu.Unlock()
 	}
-	// List the stored terminals before the live ones: a terminal's shell
-	// starts before its channel is stored, so a newer channel is never swept.
+}
+
+func (h *Host) sweep(ctx context.Context, principal Principal) error {
+	// List the stored channels before the live ones: a watch is live and a
+	// terminal's shell starts before its channel is stored, so a channel in
+	// use is never swept, also when a retried sweep runs after this process
+	// created some.
+	watches, err := h.cfg.Store.ListAHPChannels(ctx, principal.UserKey, resourceWatchScheme)
+	if err != nil {
+		return err
+	}
 	terminals, err := h.cfg.Store.ListAHPChannels(ctx, principal.UserKey, terminalScheme)
 	if err != nil {
-		return
+		return err
 	}
 	live, err := h.cfg.Backends.terminals(ctx, principal)
 	if err != nil {
-		return
+		return err
 	}
-	running := map[string]bool{}
+	inUse := h.liveWatches(principal.UserKey)
 	for _, terminal := range live {
-		running[terminal.Resource] = true
+		inUse[terminal.Resource] = true
 	}
-	for _, channel := range terminals {
-		if !running[channel] {
+	var stale []string
+	for _, channel := range append(watches, terminals...) {
+		if !inUse[channel] {
 			stale = append(stale, channel)
 		}
 	}
-	if len(stale) > 0 {
-		_ = h.cfg.Store.DeleteAHPChannelStates(ctx, principal.UserKey, stale)
+	if len(stale) == 0 {
+		return nil
 	}
+	return h.cfg.Store.DeleteAHPChannelStates(ctx, principal.UserKey, stale)
+}
+
+// liveWatches returns the channels of the user's resource watches open in
+// this process.
+func (h *Host) liveWatches(userKey string) map[string]bool {
+	hub := h.hub(userKey)
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	live := map[string]bool{}
+	for c := range hub.conns {
+		c.mu.Lock()
+		for channel := range c.watches {
+			live[channel] = true
+		}
+		c.mu.Unlock()
+	}
+	return live
 }

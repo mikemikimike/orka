@@ -9,6 +9,8 @@ package ahphost
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -140,6 +142,60 @@ func TestLeftoverChannelsAreSweptOnce(t *testing.T) {
 		_, err := env.store.GetAHPChannelState(ctx, userKey, channel)
 		require.ErrorIs(t, err, store.ErrNotFound, channel)
 	}
+}
+
+// failingChannelListStore refuses to list channels while armed.
+type failingChannelListStore struct {
+	store.AHPStore
+	armed atomic.Bool
+}
+
+func (s *failingChannelListStore) ListAHPChannels(ctx context.Context, userKey, prefix string) ([]string, error) {
+	if s.armed.Load() {
+		return nil, errors.New("the store refused the read")
+	}
+	return s.AHPStore.ListAHPChannels(ctx, userKey, prefix)
+}
+
+// A sweep that fails runs again on the user's next initialize, and spares the
+// resource watches this process opened meanwhile.
+func TestAFailedSweepRunsAgainAndSparesLiveWatches(t *testing.T) {
+	env, extended := newExtendedEnv(t)
+	backend := &resourceBackend{extendedBackend: extended, released: make(chan struct{})}
+	env.host.cfg.Backends.mu.Lock()
+	env.host.cfg.Backends.backends = []SessionBackend{backend}
+	env.host.cfg.Backends.mu.Unlock()
+	failing := &failingChannelListStore{AHPStore: env.host.cfg.Store}
+	env.host.cfg.Store = failing
+	minted := env.mint("alice")
+	userKey := ahpUserKey(t, env, minted.Token)
+	ctx := ctx5(t)
+	state := ahptypes.TerminalState{Content: []ahptypes.TerminalContentPart{}}
+	watch := ahptypes.ResourceWatchState{Root: "file:///work"}
+	require.NoError(t, env.host.storeChannels(ctx, userKey, map[string]storedChannel{
+		"ahp-terminal:/gone":             {Backend: "fake", State: ahptypes.SnapshotState{Terminal: &state}},
+		resourceWatchScheme + "leftover": {Backend: "fake", State: ahptypes.SnapshotState{ResourceWatch: &watch}},
+	}))
+
+	failing.armed.Store(true)
+	first := env.connect(minted.Token)
+	_, err := first.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	_, err = env.store.GetAHPChannelState(ctx, userKey, "ahp-terminal:/gone")
+	require.NoError(t, err, "the failed sweep removed nothing")
+
+	failing.armed.Store(false)
+	var opened ahptypes.CreateResourceWatchResult
+	require.NoError(t, first.Request(ctx, "createResourceWatch", ahptypes.CreateResourceWatchParams{Channel: rootChannel, Uri: "file:///work"}, &opened))
+	second := env.connect(minted.Token)
+	_, err = second.Initialize(ctx, "client-b", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	for _, channel := range []string{"ahp-terminal:/gone", resourceWatchScheme + "leftover"} {
+		_, err := env.store.GetAHPChannelState(ctx, userKey, channel)
+		require.ErrorIs(t, err, store.ErrNotFound, channel)
+	}
+	_, err = env.store.GetAHPChannelState(ctx, userKey, opened.Channel)
+	require.NoError(t, err, "a watch open in this process is not swept")
 }
 
 func TestIdleConnectionsArePinged(t *testing.T) {
