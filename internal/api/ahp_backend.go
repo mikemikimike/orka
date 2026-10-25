@@ -28,6 +28,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
@@ -166,6 +168,8 @@ type ahpBackend struct {
 	emitterFor func(ahphost.Principal) ahphost.Emitter
 	// updateTerminals republishes the user's terminal list after a shell exits.
 	updateTerminals func(context.Context, ahphost.Principal) error
+	// cancelBackoff paces the retries of a client's turn cancel.
+	cancelBackoff wait.Backoff
 	// readWorkspace reads a root file URI in the user's running workspace;
 	// running is false when no workspace runs or the URI is not in one.
 	readWorkspace func(ctx context.Context, principal ahphost.Principal, uri string) (result ahptypes.ResourceReadResult, running bool, err error)
@@ -236,6 +240,7 @@ func newAHPBackend(h *Handlers, s store.AHPStore, live *liveevents.Broker, cfg A
 		turns: map[string]*ahpTurn{}, shells: map[string]*ahpTerminal{}, reserved: map[string]time.Time{}, recovered: map[string]bool{},
 	}
 	b.readWorkspace = b.readWorkspaceFile
+	b.cancelBackoff = wait.Backoff{Duration: time.Second, Factor: 2, Steps: 7, Cap: 30 * time.Second}
 	return b
 }
 
@@ -1137,9 +1142,16 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 			turn.markCancelledByClient()
 		}
 		if record.ActiveTask != "" {
-			if err := b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask); err != nil {
-				log.Error(err, "cancel AHP turn Task", "session", record.Session, "task", record.ActiveTask)
-			}
+			// The client already shows the turn cancelled: keep asking the
+			// Task to stop through a passing failure, off this action queue.
+			go func() {
+				err := retry.OnError(b.cancelBackoff, func(error) bool { return true }, func() error {
+					return b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask)
+				})
+				if err != nil {
+					log.Error(err, "cancel AHP turn Task", "session", record.Session, "task", record.ActiveTask)
+				}
+			}()
 		}
 	case *ahptypes.ChatToolCallConfirmedAction:
 		if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil {

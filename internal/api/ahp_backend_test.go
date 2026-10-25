@@ -33,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -493,6 +494,48 @@ func TestAHPBackendCancelsATurn(t *testing.T) {
 	turns := snapshot.Snapshot.State.Chat.Turns
 	require.Len(t, turns, 1)
 	require.Equal(t, ahptypes.TurnStateCancelled, turns[0].State)
+}
+
+// A client's turn cancel that fails is tried again, so the Task does not run
+// on while the client shows the turn cancelled.
+func TestAHPBackendRetriesAFailedTurnCancel(t *testing.T) {
+	env := newAHPTestEnv(t)
+	env.backend.cancelBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 1, Steps: 500}
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, err := c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "sleep", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}})
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, ahphost.UserKey("https://issuer.example", "alice"), ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+	require.Eventually(t, func() bool {
+		return env.backend.activeTurn(ahphost.UserKey("https://issuer.example", "alice"), ahpTestSession) != nil
+	}, 5*time.Second, 20*time.Millisecond)
+
+	// Only the Task's requester may cancel it, so the first attempts fail.
+	task.Spec.RequestedBy.Subject = "bob"
+	require.NoError(t, env.kube.Update(ctx, task))
+	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnCancelledAction{
+		Type: ahptypes.ActionTypeChatTurnCancelled, TurnId: "turn-1", Duration: 10,
+	}})
+	require.NoError(t, err)
+	cancelRequested := func() bool {
+		current := &corev1alpha1.Task{}
+		_ = env.kube.Get(context.Background(), types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, current)
+		_, ok := current.Annotations[labels.AnnotationCancelRequested]
+		return ok
+	}
+	require.Never(t, cancelRequested, 200*time.Millisecond, 20*time.Millisecond)
+
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	task.Spec.RequestedBy.Subject = "alice"
+	require.NoError(t, env.kube.Update(ctx, task))
+	require.Eventually(t, cancelRequested, 5*time.Second, 20*time.Millisecond, "the cancellation is retried until it lands")
 }
 
 func TestAHPBackendKeepsUsersApart(t *testing.T) {
