@@ -463,7 +463,7 @@ func (h *Host) apply(
 		envelopes[i] = ahptypes.ActionEnvelope{
 			Channel: channel, Action: action, ServerSeq: hub.seq + int64(i) + 1, Origin: origin,
 		}
-		raw, err := json.Marshal(envelopes[i])
+		raw, err := json.Marshal(journalEnvelope(envelopes[i]))
 		if err != nil {
 			return err
 		}
@@ -491,6 +491,19 @@ func (h *Host) apply(
 		return h.syncSessionSummaryLocked(ctx, hub, principal, channel, stored.State.Session)
 	}
 	return nil
+}
+
+// journalEnvelope is what the durable journal keeps of an envelope. Terminal
+// input is what a person typed, a password at a prompt that does not echo it
+// as well as anything else, and changes no state: the journal keeps that it
+// came, without its data, and only live subscribers see the data.
+func journalEnvelope(envelope ahptypes.ActionEnvelope) ahptypes.ActionEnvelope {
+	if input, ok := envelope.Action.Value.(*ahptypes.TerminalInputAction); ok {
+		kept := *input
+		kept.Data = ""
+		envelope.Action = ahptypes.StateAction{Value: &kept}
+	}
+	return envelope
 }
 
 // syncSessionSummaryLocked keeps a session's catalog summary in step with its

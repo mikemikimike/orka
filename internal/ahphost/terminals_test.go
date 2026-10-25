@@ -165,6 +165,29 @@ func TestTerminalsRouteToTheirBackendInOrder(t *testing.T) {
 	require.Equal(t, want.String(), strings.Join(backend.inputs, ""), "input reaches the backend in order")
 	backend.mu.Unlock()
 
+	// What a person types, such as a password at a prompt that does not echo
+	// it, reaches the shell but is never kept in the durable journal.
+	secret := "not-a-real-password"
+	_, err = client.Dispatch(ctx, "ahp-terminal:/one", ahptypes.StateAction{Value: &ahptypes.TerminalInputAction{
+		Type: ahptypes.ActionTypeTerminalInput, Data: secret + "\n"}})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		backend.mu.Lock()
+		defer backend.mu.Unlock()
+		return len(backend.inputs) == 51 && backend.inputs[50] == secret+"\n"
+	}, 5*time.Second, 10*time.Millisecond)
+	journal, _, err := s.ReadAHPJournal(ctx, UserKey("https://issuer.example", "alice"), 0)
+	require.NoError(t, err)
+	inputs := 0
+	for _, entry := range journal {
+		require.NotContains(t, string(entry.Envelope), secret, "the journal keeps no terminal input")
+		require.NotContains(t, string(entry.Envelope), "49;", "the journal keeps no terminal input")
+		if strings.Contains(string(entry.Envelope), `"terminal/input"`) {
+			inputs++
+		}
+	}
+	require.Equal(t, 51, inputs, "each input keeps its place in the journal")
+
 	// Another user cannot use the terminal.
 	other := env.connect(env.mint("bob").Token)
 	_, err = other.Initialize(ctx, "client-b", ahptypes.SupportedProtocolVersions(), nil)
