@@ -824,17 +824,9 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	var stored []string
 	cataloged, committed := false, false
 	defer func() {
-		if err == nil || committed {
-			return
+		if err != nil && !committed {
+			c.takeBackSession(context.WithoutCancel(ctx), backend, session, cataloged, stored)
 		}
-		cleanup := context.WithoutCancel(ctx)
-		if cataloged {
-			_ = c.host.cfg.Store.DeleteAHPSession(cleanup, c.principal.UserKey, session)
-		}
-		if len(stored) > 0 {
-			_ = c.host.cfg.Store.DeleteAHPChannelStates(cleanup, c.principal.UserKey, stored)
-		}
-		_ = backend.DisposeSession(cleanup, c.principal, session)
 	}()
 	state := created.State
 	state.Provider = provider
@@ -899,6 +891,18 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	committed = true
 	c.host.notifyRoot(c.principal.UserKey, methodSessionAdded, ahptypes.SessionAddedParams{Channel: rootChannel, Summary: summary})
 	return c.host.updateActiveSessions(ctx, c.principal)
+}
+
+// takeBackSession removes what a failed createSession made: the catalog
+// record when it was written, the stored channels and the backend's session.
+func (c *conn) takeBackSession(ctx context.Context, backend SessionBackend, session string, cataloged bool, stored []string) {
+	if cataloged {
+		_ = c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session)
+	}
+	if len(stored) > 0 {
+		_ = c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, stored)
+	}
+	_ = backend.DisposeSession(ctx, c.principal, session)
 }
 
 func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {

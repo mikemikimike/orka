@@ -27,7 +27,7 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/ahphost"
-	"github.com/orka-agents/orka/internal/events"
+	executionevents "github.com/orka-agents/orka/internal/events"
 	harnessv2 "github.com/orka-agents/orka/internal/harness/v2"
 	"github.com/orka-agents/orka/internal/liveevents"
 	"github.com/orka-agents/orka/internal/store"
@@ -901,7 +901,7 @@ func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 		// The stored result is whole, like a live final answer, and gets the
 		// same pattern redaction before anyone sees it.
 		if data, err := t.b.h.resultStore.GetResult(t.ctx, task.Namespace, task.Name); err == nil {
-			t.text(events.RedactExecutionEventText(string(data)))
+			t.text(executionevents.RedactExecutionEventText(string(data)))
 		}
 	}
 	t.finishPlan()
