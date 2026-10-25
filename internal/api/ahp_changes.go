@@ -83,6 +83,12 @@ func (c *ahpChanges) setFile(full string, before, after *string, keepBefore bool
 		}
 		file.After = nonce
 	}
+	// A file edited back to how it began, or created and deleted again, no
+	// longer differs: nothing else would take it off the changeset.
+	if file.Before == file.After {
+		c.removeFile(full)
+		return
+	}
 	if c.b.putRecord(c.ctx, c.principal.UserKey, ahpRecordFile, key, file) != nil {
 		return
 	}

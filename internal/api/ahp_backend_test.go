@@ -1304,6 +1304,37 @@ func TestAHPReorderPending(t *testing.T) {
 	require.Equal(t, []string{"s", "c", "a", "b"}, ids)
 }
 
+// A file edited back to how it began, or created and deleted again, leaves the
+// changeset: nothing else would take it off without a workspace.
+func TestAHPChangesDropAFileThatNoLongerDiffers(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	principal := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice"), Namespace: ahpTestNamespace}
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, principal.UserKey, ahpRecordSession, ahpTestSession, &record))
+	changes := &ahpChanges{b: env.backend, ctx: ctx, principal: principal, session: record, emit: env.backend.emitterFor(principal)}
+	dir := ahpTestDir[len("file://"):]
+
+	original, edited := "package a\n", "package a\n// edited\n"
+	changes.setFile(dir+"/a.go", &original, &edited, true)
+	changes.setFile(dir+"/a.go", &edited, &original, true)
+	created := "new\n"
+	changes.setFile(dir+"/new.go", nil, &created, true)
+	changes.setFile(dir+"/new.go", &created, nil, true)
+	kept := "package c\n// kept\n"
+	changes.setFile(dir+"/c.go", &original, &kept, true)
+	changes.emitCounts()
+
+	require.Len(t, changes.files(), 1)
+	snapshot, _, err := c.Subscribe(ctx, record.Changeset)
+	require.NoError(t, err)
+	files := snapshot.Snapshot.State.Changeset.Files
+	require.Len(t, files, 1, "only the file that still differs is listed")
+	require.Equal(t, ahpTestDir+"/c.go", files[0].Edit.After.Uri)
+}
+
 func TestAHPChangesFollowTheBranch(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")
