@@ -1079,7 +1079,16 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 	}
 	for _, raw := range records {
 		var record ahpSession
-		if json.Unmarshal(raw.Value, &record) != nil || record.ActiveTurn == "" || b.activeTurn(principal.UserKey, record.Session) != nil {
+		if json.Unmarshal(raw.Value, &record) != nil || b.activeTurn(principal.UserKey, record.Session) != nil {
+			continue
+		}
+		if record.ActiveTurn == "" {
+			// A message queued while the session was idle can be left behind
+			// when the previous leader stopped before running it. Run what
+			// waits: a message whose sender is gone is reported and dropped.
+			if len(record.Pending) > 0 {
+				go b.runPending(context.WithoutCancel(ctx), principal.UserKey, record.Session, b.emitterFor(principal))
+			}
 			continue
 		}
 		started, _ := time.Parse(time.RFC3339Nano, record.ActiveStartedAt)

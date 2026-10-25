@@ -1184,6 +1184,35 @@ func (s *ahpFailingScanStore) ListAHPRecords(ctx context.Context, userKey, kind 
 	return s.AHPStore.ListAHPRecords(ctx, userKey, kind)
 }
 
+// Recovery runs the messages an idle session still has waiting, left behind
+// by a restart before they ran: one whose sender is gone is reported and
+// leaves the queue instead of waiting for good.
+func TestAHPBackendRecoversMessagesAnIdleSessionLeftWaiting(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		s.Pending = []ahpPending{{ID: "left-behind", Kind: string(ahptypes.PendingMessageKindQueued), Version: "v1",
+			Message: ahptypes.Message{Text: "run me", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}}}}
+	}))
+	// A restarted process has recovered nothing for this user yet.
+	env.backend.mu.Lock()
+	delete(env.backend.recovered, alice.UserKey)
+	env.backend.mu.Unlock()
+
+	env.backend.recoverTurns(ctx, alice)
+	require.Eventually(t, func() bool {
+		var record ahpSession
+		return env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record) == nil && len(record.Pending) == 0
+	}, 5*time.Second, 20*time.Millisecond, "the waiting message left the queue")
+	var tasks corev1alpha1.TaskList
+	require.NoError(t, env.kube.List(ctx, &tasks))
+	require.Empty(t, tasks.Items, "a message whose sender is gone does not run")
+}
+
 // Recovery after a restart runs again when its session scan failed, so a
 // transient store error cannot leave a running turn unrecovered.
 func TestAHPBackendRetriesAFailedRecoveryScan(t *testing.T) {
