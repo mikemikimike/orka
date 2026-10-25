@@ -106,8 +106,14 @@ func (c *conn) createTerminal(ctx context.Context, raw json.RawMessage) error {
 		_ = provider.DisposeTerminal(ctx, c.principal, params.Channel)
 		return err
 	}
-	// The shell may already have exited, or written output.
+	// The shell may already have exited, or written output. What it reported
+	// that cannot be stored takes the terminal back, rather than leave a
+	// channel that shows a shell no longer running.
 	if err := c.host.finishCreation(ctx, c.principal, params.Channel); err != nil {
+		c.unsubscribeFrom(params.Channel)
+		cleanup := context.WithoutCancel(ctx)
+		_ = provider.DisposeTerminal(cleanup, c.principal, params.Channel)
+		_ = c.host.cfg.Store.DeleteAHPChannelStates(cleanup, c.principal.UserKey, []string{params.Channel})
 		return err
 	}
 	return c.host.updateTerminals(ctx, c.principal)

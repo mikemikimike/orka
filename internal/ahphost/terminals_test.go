@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-host-protocol/clients/go/ahptypes"
 	"github.com/stretchr/testify/require"
 
+	"github.com/orka-agents/orka/internal/store"
 	"github.com/orka-agents/orka/internal/store/sqlite"
 )
 
@@ -113,6 +114,38 @@ func TestATerminalWhoseShellExitsAtOnceIsStoredAsExited(t *testing.T) {
 	result, _, err := client.Subscribe(ctx, rootChannel)
 	require.NoError(t, err)
 	require.Empty(t, result.Snapshot.State.Root.Terminals, "an exited shell is not listed as running")
+}
+
+// A terminal whose early output or exit cannot be stored is taken back: its
+// shell is disposed of and no channel is left showing it running.
+func TestATerminalThatCannotBeFinishedIsTakenBack(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingSessionStore{AHPStore: s}
+	tokens := &TokenService{Store: s}
+	code := int64(0)
+	backend := &terminalBackend{fakeBackend: &fakeBackend{}, running: map[string]bool{}, exitAtOnce: &code}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend.fakeBackend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+
+	// The shell's exit is journaled after the channel is stored; that fails.
+	failing.failActions.Store(true)
+	claim := ahptypes.TerminalClaim{Value: &ahptypes.TerminalClientClaim{Kind: ahptypes.TerminalClaimKindClient, ClientId: "client-a"}}
+	require.Error(t, client.Request(ctx, "createTerminal", ahptypes.CreateTerminalParams{Channel: "ahp-terminal:/one", Claim: claim}, nil))
+	_, err = s.GetAHPChannelState(ctx, UserKey("https://issuer.example", "alice"), "ahp-terminal:/one")
+	require.ErrorIs(t, err, store.ErrNotFound, "no channel is left behind")
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	require.Equal(t, []string{"ahp-terminal:/one"}, backend.disposed, "the shell is disposed of")
 }
 
 func TestTerminalsRouteToTheirBackendInOrder(t *testing.T) {
