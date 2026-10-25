@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/microsoft/agent-host-protocol/clients/go/ahptypes"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -908,11 +909,15 @@ func (b *ahpBackend) DisposeSession(ctx context.Context, principal ahphost.Princ
 		}
 		return err
 	}
+	// A Task that may still run keeps its session: disposal fails and can be
+	// retried, rather than leave a Task nothing can cancel or follow.
+	if record.ActiveTask != "" {
+		if err := b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask); err != nil {
+			return fmt.Errorf("cancel the session's running Task: %w", err)
+		}
+	}
 	if turn := b.activeTurn(principal.UserKey, session); turn != nil {
 		turn.stop()
-	}
-	if record.ActiveTask != "" {
-		b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask)
 	}
 	if b.workspaces.enabled() {
 		// Remove the worktree while the session still holds its branch, so a
@@ -943,12 +948,25 @@ func (b *ahpBackend) DisposeSession(ctx context.Context, principal ahphost.Princ
 	return b.store.DeleteAHPRecord(ctx, principal.UserKey, ahpRecordSession, session)
 }
 
-func (b *ahpBackend) cancelTask(ctx context.Context, principal ahphost.Principal, namespace, name string) {
+// cancelTask asks a Task to stop. A Task that is gone, being deleted or
+// already finished needs nothing; any other failure is returned, because the
+// Task may still be running.
+func (b *ahpBackend) cancelTask(ctx context.Context, principal ahphost.Principal, namespace, name string) error {
 	task := &corev1alpha1.Task{}
 	if err := b.h.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, task); err != nil {
-		return
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
 	}
-	_, _ = b.h.requestTaskCancellation(ctx, ahpPrincipalUserInfo(principal), task)
+	_, err := b.h.requestTaskCancellation(ctx, ahpPrincipalUserInfo(principal), task)
+	if fiberErr, ok := errors.AsType[*fiber.Error](err); ok {
+		switch fiberErr.Code {
+		case fiber.StatusNotFound, fiber.StatusGone, fiber.StatusConflict:
+			return nil
+		}
+	}
+	return err
 }
 
 func (b *ahpBackend) sessionForChannel(ctx context.Context, userKey, channel string) (ahpSession, error) {
@@ -1114,7 +1132,9 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 			turn.markCancelledByClient()
 		}
 		if record.ActiveTask != "" {
-			b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask)
+			if err := b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask); err != nil {
+				log.Error(err, "cancel AHP turn Task", "session", record.Session, "task", record.ActiveTask)
+			}
 		}
 	case *ahptypes.ChatToolCallConfirmedAction:
 		if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil {

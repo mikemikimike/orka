@@ -591,6 +591,41 @@ func TestAHPBackendDisposeKeepsOtherSessions(t *testing.T) {
 	require.Error(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &gone))
 }
 
+// A session whose running Task cannot be cancelled is kept, so disposal can be
+// retried instead of leaving a Task nothing can cancel or follow.
+func TestAHPBackendKeepsASessionWhoseTaskItCannotCancel(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, err := c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "run", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+			Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+	}})
+	require.NoError(t, err)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+
+	// Only the Task's requester may cancel it, so this cancellation fails.
+	task.Spec.RequestedBy.Subject = "bob"
+	require.NoError(t, env.kube.Update(ctx, task))
+	require.Error(t, c.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: ahpTestSession}, nil))
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record), "the session is kept")
+	require.NotNil(t, env.backend.activeTurn(userKey, ahpTestSession), "the turn still follows its Task")
+
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	task.Spec.RequestedBy.Subject = "alice"
+	require.NoError(t, env.kube.Update(ctx, task))
+	require.NoError(t, c.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: ahpTestSession}, nil))
+	require.Error(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record), "the retried disposal ends the session")
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	require.Contains(t, task.Annotations, labels.AnnotationCancelRequested, "the Task was asked to stop")
+}
+
 func TestAHPBackendRemovesAProjectNoSessionUses(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")

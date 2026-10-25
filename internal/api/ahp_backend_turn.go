@@ -239,7 +239,7 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	b.mu.Unlock()
 	if err := b.h.client.Create(ctx, task); err != nil {
 		// The Task may exist even so; stop it, then take the turn back.
-		b.cancelTask(context.WithoutCancel(ctx), principal, task.Namespace, name)
+		_ = b.cancelTask(context.WithoutCancel(ctx), principal, task.Namespace, name)
 		logSessionUpdate(b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
 			if s.ActiveTurn != action.TurnId {
 				return
