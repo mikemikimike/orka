@@ -82,9 +82,13 @@ func (h *Handlers) StreamTaskEvents(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.taskAccess().ensureReadable(c, "streamTaskEvents", namespace, taskName); err != nil {
+	task, err := h.taskAccess().loadReadable(c, "streamTaskEvents", namespace, taskName)
+	if err != nil {
 		return err
 	}
+	// Live events are published by name; only the Task authorized here is
+	// streamed, never one created again under its name meanwhile.
+	taskUID := string(task.UID)
 	if h.executionEventStore == nil {
 		return fiber.NewError(fiber.StatusNotImplemented, "execution event storage not enabled")
 	}
@@ -248,6 +252,9 @@ func (h *Handlers) StreamTaskEvents(c fiber.Ctx) error {
 			case <-ctx.Done():
 				return
 			case event, ok := <-liveC:
+				if ok && event.TaskUID != taskUID {
+					continue
+				}
 				if !writeLiveExecutionEventSSEFrame(w, event, ok) {
 					metrics.RecordExecutionEventStreamError("task", "write")
 					return

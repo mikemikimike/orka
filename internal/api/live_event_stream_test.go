@@ -12,12 +12,15 @@ import (
 	harnessv2 "github.com/orka-agents/orka/internal/harness/v2"
 	"github.com/orka-agents/orka/internal/liveevents"
 	"github.com/orka-agents/orka/internal/store/storetest"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestStreamTaskEventsSendsLiveFramesOnlyWhenAsked(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		eventStore := storetest.NewFakeExecutionEventStore()
-		h, app := setupTaskEventHandlers(t, eventStore, testTask("default", "task-live"))
+		task := testTask("default", "task-live")
+		task.UID = "task-uid"
+		h, app := setupTaskEventHandlers(t, eventStore, task)
 		configureShortTaskEventStream(h)
 		h.liveEvents = liveevents.NewBroker(0)
 		useCancelingContext(app, 80*time.Millisecond)
@@ -39,6 +42,38 @@ func TestStreamTaskEventsSendsLiveFramesOnlyWhenAsked(t *testing.T) {
 		if got := strings.Contains(body, "event: live\n") && strings.Contains(body, "streamed delta"); got != live {
 			t.Fatalf("live=%v: live frame present=%v in %q", live, got, body)
 		}
+	}
+}
+
+// Live events are published by name, so a Task created again under the name
+// while the stream is open never reaches it: only the authorized Task's do.
+func TestStreamTaskEventsSendsOnlyTheAuthorizedTasksLiveEvents(t *testing.T) {
+	task := testTask("default", "task-live")
+	task.UID = "task-uid"
+	h, app := setupTaskEventHandlers(t, storetest.NewFakeExecutionEventStore(), task)
+	configureShortTaskEventStream(h)
+	h.liveEvents = liveevents.NewBroker(0)
+	useCancelingContext(app, 80*time.Millisecond)
+	app.Get("/api/v1/tasks/:id/stream", h.StreamTaskEvents)
+	delta := func(uid types.UID, text string) liveevents.Event {
+		return liveevents.Event{
+			Namespace: "default", Task: "task-live", TaskUID: string(uid),
+			Runtime: &harnessv2.Event{Protocol: harnessv2.ProtocolVersion, Type: harnessv2.EventUpdate, Update: &harnessv2.UpdateEvent{
+				Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: text},
+			}},
+		}
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		h.liveEvents.Publish(delta("replacement-uid", "replacement delta"))
+		h.liveEvents.Publish(delta(task.UID, "authorized delta"))
+	}()
+	body := doStreamRequest(t, app, "/api/v1/tasks/task-live/stream?namespace=default&live=true")
+	if !strings.Contains(body, "authorized delta") {
+		t.Fatalf("the authorized Task's live event is missing from %q", body)
+	}
+	if strings.Contains(body, "replacement delta") {
+		t.Fatalf("a replacement Task's live event was streamed: %q", body)
 	}
 }
 
