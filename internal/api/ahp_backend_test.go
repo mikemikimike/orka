@@ -1354,6 +1354,37 @@ func TestAHPBackendRunsNoTurnForADisposedSession(t *testing.T) {
 	require.Nil(t, env.backend.activeTurn(alice.UserKey, ahpTestSession))
 }
 
+// A URI created again after it was disposed of gets its own Orka Session, so
+// the Session and Tasks its earlier use kept never stand in its first turn's way.
+func TestAHPBackendGivesARecreatedSessionItsOwnOrkaSession(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	send := func(text string) string {
+		var record ahpSession
+		require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+		_, err := c.Dispatch(ctx, record.Chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+			Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message: ahptypes.Message{Text: text, Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+				Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+		}})
+		require.NoError(t, err)
+		require.Equal(t, text, env.waitForTask(record.OrkaSession+"-t1").Spec.Prompt)
+		return record.OrkaSession
+	}
+	env.setUpSession(c, "allow-all")
+	first := send("first")
+	require.NoError(t, c.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: ahpTestSession}, nil))
+
+	provider := "copilot"
+	require.NoError(t, c.Request(ctx, "createSession", ahptypes.CreateSessionParams{
+		Channel: ahpTestSession, Provider: &provider, WorkingDirectories: []string{ahpTestDir},
+		Config: map[string]json.RawMessage{"approvalMode": json.RawMessage(`"allow-all"`), "baseBranch": json.RawMessage(`"main"`)},
+	}, nil))
+	require.NotEqual(t, first, send("second"))
+}
+
 // The namespace's repository credential goes to github.com projects only; a
 // project on another host, which the user names freely, is cloned anonymously.
 func TestAHPBackendSendsTheGitCredentialToGitHubOnly(t *testing.T) {

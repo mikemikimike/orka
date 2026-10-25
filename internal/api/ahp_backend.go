@@ -350,6 +350,17 @@ func ahpHash(parts ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ahpOrkaSessionName names the Orka Session a session uses for a generation.
+// The chat is new with every creation, so a URI created again after it was
+// disposed of never reaches the Orka Session and Tasks its earlier use kept.
+func ahpOrkaSessionName(userKey string, record ahpSession, generation int) string {
+	name := "ahp-" + ahpHash(userKey, record.Session, record.Chat)[:24]
+	if generation > 0 {
+		name += fmt.Sprintf("-g%d", generation)
+	}
+	return name
+}
+
 func ahpRandomHex(n int) string {
 	buf := make([]byte, n)
 	_, _ = rand.Read(buf)
@@ -826,9 +837,10 @@ func (b *ahpBackend) CreateSession(ctx context.Context, principal ahphost.Princi
 	changeset := "ahp-changeset:/" + chatID + "/session"
 	record := ahpSession{
 		Session: req.Session, Chat: chat, Changeset: changeset, Namespace: principal.Namespace,
-		OrkaSession: "ahp-" + ahpHash(principal.UserKey, req.Session)[:24], ProjectID: project.ID, RepoURL: project.URL,
+		ProjectID: project.ID, RepoURL: project.URL,
 		BaseBranch: baseBranch, Runtime: req.Provider, ApprovalMode: mode, Branch: branch, WorkDir: workDir,
 	}
+	record.OrkaSession = ahpOrkaSessionName(principal.UserKey, record, 0)
 	if err := b.putRecord(ctx, principal.UserKey, ahpRecordSession, req.Session, record); err != nil {
 		return nil, err
 	}

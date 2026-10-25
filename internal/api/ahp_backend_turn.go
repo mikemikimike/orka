@@ -1090,7 +1090,7 @@ func (b *ahpBackend) nextGeneration(ctx context.Context, principal ahphost.Princ
 	next := record
 	err := b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
 		s.Generation = generation
-		s.OrkaSession = fmt.Sprintf("ahp-%s-g%d", ahpHash(principal.UserKey, record.Session)[:24], generation)
+		s.OrkaSession = ahpOrkaSessionName(principal.UserKey, *s, generation)
 		s.Agent, s.Model, s.SessionTurns = "", "", 0
 		if record.Published {
 			s.SourceBranch, s.Branch, s.Published, s.WorkDir = record.Branch, branch, false, workDir
