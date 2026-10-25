@@ -2039,6 +2039,10 @@ spec:
             - message: execution.workspace is only supported for agent Tasks
               rule: '!has(self.execution) || !has(self.execution.workspace) || self.type
                 == ''agent'''
+            - message: agentRuntime.permissionDecisions Requester is only supported
+                for agent Tasks
+              rule: self.type == 'agent' || !has(self.agentRuntime) || !has(self.agentRuntime.permissionDecisions)
+                || self.agentRuntime.permissionDecisions != 'Requester'
           status:
             description: |-
               TaskStatus defines the observed state of Task
