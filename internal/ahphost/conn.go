@@ -1014,6 +1014,9 @@ func (c *conn) dispatchAction(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 	if err := c.host.apply(ctx, c.principal, params.Channel, []ahptypes.StateAction{action}, origin); err != nil {
+		if releaser, ok := backend.(ActionReleaser); ok {
+			releaser.ReleaseClientAction(context.WithoutCancel(ctx), c.principal, params.Channel, action)
+		}
 		reject("the action could not be applied")
 		return
 	}

@@ -34,6 +34,7 @@ import (
 type fakeBackend struct {
 	mu       sync.Mutex
 	disposed []string
+	released []string
 	reject   string
 	seen     []Principal
 	// onAgents runs once, while the root snapshot is taken under the hub lock.
@@ -85,6 +86,12 @@ func (f *fakeBackend) AuthorizeClientAction(context.Context, Principal, string, 
 		return &Rejection{Reason: f.reject}
 	}
 	return nil
+}
+
+func (f *fakeBackend) ReleaseClientAction(_ context.Context, _ Principal, channel string, _ ahptypes.StateAction) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, channel)
 }
 
 // HandleClientAction answers a title change with one chat action every
@@ -189,6 +196,41 @@ func TestASessionThatCannotBeCataloguedIsTakenBack(t *testing.T) {
 			createSession(t, client, "ahp-session:/one")
 		})
 	}
+}
+
+// An authorized action the host cannot journal is rejected, and the backend
+// is told, so it can let go of what it held for the action.
+func TestAnActionThatCannotBeAppliedIsReleased(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingSessionStore{AHPStore: s}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	createSession(t, client, "ahp-session:/one")
+	_, session, err := client.Subscribe(ctx, "ahp-session:/one")
+	require.NoError(t, err)
+
+	failing.failActions.Store(true)
+	_, err = client.Dispatch(ctx, "ahp-session:/one", ahptypes.StateAction{Value: &ahptypes.SessionTitleChangedAction{
+		Type: ahptypes.ActionTypeSessionTitleChanged, Title: "renamed"}})
+	require.NoError(t, err)
+	rejected := nextAction(t, session)
+	require.NotNil(t, rejected.RejectionReason)
+	require.Contains(t, *rejected.RejectionReason, "could not be applied")
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	require.Equal(t, []string{"ahp-session:/one"}, backend.released)
 }
 
 func (e *testEnv) mint(subject string) MintedToken {

@@ -78,6 +78,14 @@ type ExtensionHandler interface {
 	HandleExtension(ctx context.Context, principal Principal, method string, params json.RawMessage, emit Emitter) (any, error)
 }
 
+// ActionReleaser is a backend that holds something for an action while
+// authorizing it, such as room in a queue. When the host cannot apply an
+// authorized action, HandleClientAction never runs for it, and the host calls
+// ReleaseClientAction instead so the backend can let go of what it held.
+type ActionReleaser interface {
+	ReleaseClientAction(ctx context.Context, principal Principal, channel string, action ahptypes.StateAction)
+}
+
 // ResourceReader serves resourceRead for the channels of a backend's sessions.
 // It returns ErrResourceNotFound for anything it does not serve. A read on the
 // root channel arrives with an empty session: the backend resolves which of

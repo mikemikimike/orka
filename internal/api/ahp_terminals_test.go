@@ -268,6 +268,27 @@ func TestAHPTerminalRefusesInputItCannotQueue(t *testing.T) {
 	require.Len(t, term.input, ahpTerminalInputQueue)
 }
 
+// Input the host admitted but could not apply gives its room back, so a
+// storage outage cannot leave the terminal refusing all input.
+func TestAHPTerminalReleasesInputTheHostCouldNotApply(t *testing.T) {
+	env := newAHPTestEnv(t)
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	term := &ahpTerminal{ctx: ctx, channel: "ahp-terminal:/a", input: make(chan []byte, ahpTerminalInputQueue), cancel: cancel}
+	env.backend.mu.Lock()
+	env.backend.shells[ahpTerminalKey(alice.UserKey, term.channel)] = term
+	env.backend.mu.Unlock()
+	var releaser ahphost.ActionReleaser = env.backend
+	input := ahptypes.StateAction{Value: &ahptypes.TerminalInputAction{Type: ahptypes.ActionTypeTerminalInput, Data: "x"}}
+	for range ahpTerminalInputQueue + 1 {
+		require.NoError(t, env.backend.AuthorizeClientAction(context.Background(), alice, term.channel, input))
+		releaser.ReleaseClientAction(context.Background(), alice, term.channel, input)
+	}
+	require.Zero(t, term.pending.Load())
+	require.Empty(t, term.input)
+}
+
 func TestAHPTerminalURIsAreNotReused(t *testing.T) {
 	env := newAHPTestEnv(t)
 	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}

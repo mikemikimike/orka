@@ -325,6 +325,18 @@ func (b *ahpBackend) authorizeTerminalAction(principal ahphost.Principal, channe
 	}
 }
 
+// ReleaseClientAction gives back the input room an admitted terminal input
+// reserved when the host could not apply it, so a storage outage cannot fill
+// the queue with input that will never be written.
+func (b *ahpBackend) ReleaseClientAction(_ context.Context, principal ahphost.Principal, channel string, action ahptypes.StateAction) {
+	if _, ok := action.Value.(*ahptypes.TerminalInputAction); !ok {
+		return
+	}
+	if term := b.terminal(principal.UserKey, channel); term != nil {
+		term.pending.Add(-1)
+	}
+}
+
 // handleTerminalAction delivers input and resizes in the order they came.
 func (b *ahpBackend) handleTerminalAction(principal ahphost.Principal, channel string, action ahptypes.StateAction) {
 	term := b.terminal(principal.UserKey, channel)
