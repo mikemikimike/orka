@@ -62,6 +62,19 @@ func TestMintRejectsBadRequests(t *testing.T) {
 	}
 }
 
+// A maximum below the default lifetime still lets a token be minted without
+// one, for that maximum; asking for more is still refused.
+func TestMintDefaultsToAMaximumBelowTheDefault(t *testing.T) {
+	tokens := newTokenService(t)
+	tokens.MaxTTL = 24 * time.Hour
+	ctx := context.Background()
+	minted, err := tokens.Mint(ctx, MintRequest{Issuer: "https://issuer.example", Subject: "alice", Namespace: "team"})
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now().Add(24*time.Hour), minted.ExpiresAt, time.Minute)
+	_, err = tokens.Mint(ctx, MintRequest{Issuer: "https://issuer.example", Subject: "alice", Namespace: "team", TTL: 48 * time.Hour})
+	require.ErrorIs(t, err, ErrInvalidMintRequest)
+}
+
 func TestMintTrimsTheDescription(t *testing.T) {
 	tokens := newTokenService(t)
 	ctx := context.Background()

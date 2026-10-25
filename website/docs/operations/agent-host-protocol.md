@@ -39,7 +39,7 @@ Optional values:
 
 | Value | Default | Purpose |
 | --- | --- | --- |
-| `controller.ahp.tokenMaxTTL` | `2160h` | Longest lifetime a connection token may be minted with. Tokens default to `720h`. |
+| `controller.ahp.tokenMaxTTL` | `2160h` | Longest lifetime a connection token may be minted with. Tokens default to `720h`, or to this maximum when it is lower. |
 | `controller.ahp.turnTimeout` | `2h` | Timeout of each turn's Task. |
 | `controller.ahp.gitCredentialSecret` | `""` | Secret in the user's namespace whose `token` key clones and publishes their github.com repositories. See [Repositories and credentials](#repositories-and-credentials). |
 | `controller.ahp.workspaceClass` | `""` | ExecutionWorkspaceClass for session-scoped workspaces. Needs an installed workspace provider. |
@@ -168,8 +168,8 @@ orka ahp connect --server http://localhost:8080   # ws://localhost:8080/ahp?tkn=
 
 AHP connection tokens are made for URLs that stay pasted in an app:
 
-- **Lifetime.** A token lasts `720h` (30 days) unless `--ttl` asks for another lifetime,
-  up to `controller.ahp.tokenMaxTTL` (`2160h`, 90 days, by default). When a token expires the client is
+- **Lifetime.** A token lasts `720h` (30 days), or `controller.ahp.tokenMaxTTL` when that is lower,
+  unless `--ttl` asks for another lifetime up to `controller.ahp.tokenMaxTTL` (`2160h`, 90 days, by default). When a token expires the client is
   disconnected; run `orka ahp connect` again and paste the new URL.
 - **One per device.** Mint a token for each device, named after it, so a lost or retired
   device can be cut off alone.

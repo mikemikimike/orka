@@ -73,7 +73,8 @@ type MintRequest struct {
 	Subject   string
 	Username  string
 	Namespace string
-	// TTL is the requested lifetime; zero means DefaultTokenTTL.
+	// TTL is the requested lifetime; zero means DefaultTokenTTL, or the
+	// maximum when that is lower.
 	TTL time.Duration
 	// Description names the token for its owner, for example the device it
 	// was pasted into.
@@ -139,7 +140,8 @@ func (s *TokenService) Mint(ctx context.Context, req MintRequest) (MintedToken, 
 	}
 	ttl := req.TTL
 	if ttl == 0 {
-		ttl = DefaultTokenTTL
+		// An omitted lifetime fits under a maximum set below the default.
+		ttl = min(DefaultTokenTTL, s.maxTTL())
 	}
 	if ttl < time.Minute || ttl > s.maxTTL() {
 		return MintedToken{}, fmt.Errorf("%w: ttl must be between 1m and %s", ErrInvalidMintRequest, s.maxTTL())
