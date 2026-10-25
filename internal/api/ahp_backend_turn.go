@@ -201,7 +201,15 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	// creation means disposal either finds and cancels the created Task, or
 	// has already deleted the session, and then nothing is created.
 	unlock := b.lockUser(principal.UserKey)
+	busy := false
 	err = b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
+		// A message whose start waited past its reservation can meet a turn
+		// another message started meanwhile; the first one recorded runs.
+		// updateSession holds b.mu, which guards b.turns.
+		if s.ActiveTurn != "" || b.turns[ahpTurnKey(principal.UserKey, record.Session)] != nil {
+			busy = true
+			return
+		}
 		s.Agent, s.Model, s.Turns = choice.Agent, choice.Model, number
 		s.SessionTurns++
 		s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = action.TurnId, name, started.Format(time.RFC3339Nano)
@@ -216,6 +224,13 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 			log.Error(err, "record AHP turn", "session", record.Session, "task", name)
 			fail("the turn could not be recorded")
 		}
+		return
+	}
+	if busy {
+		unlock()
+		sub.Close()
+		cancel()
+		fail("another turn is already running in this session")
 		return
 	}
 	turnKey := ahpTurnKey(principal.UserKey, record.Session)

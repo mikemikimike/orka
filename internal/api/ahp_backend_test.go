@@ -1410,6 +1410,36 @@ func TestAHPBackendRunsNoTurnForADisposedSession(t *testing.T) {
 	require.Nil(t, env.backend.activeTurn(alice.UserKey, ahpTestSession))
 }
 
+// A message whose start waited past its reservation, while another message's
+// turn was recorded, runs no second Task beside that turn.
+func TestAHPBackendStartsNoTurnBesideAnActiveOne(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		s.ActiveTurn, s.ActiveTask, s.Turns = "turn-first", record.OrkaSession+"-t1", 1
+	}))
+
+	require.True(t, env.backend.reserveTurn(alice.UserKey, ahpTestSession))
+	env.backend.startTurn(ctx, alice, record, &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-late", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "late", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+			Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+	}, env.backend.emitterFor(alice))
+	var tasks corev1alpha1.TaskList
+	require.NoError(t, env.kube.List(ctx, &tasks))
+	require.Empty(t, tasks.Items, "no second Task runs beside the active turn")
+	require.Nil(t, env.backend.activeTurn(alice.UserKey, ahpTestSession))
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Equal(t, "turn-first", record.ActiveTurn, "the active turn stays the session's")
+	require.Equal(t, 1, record.Turns)
+}
+
 // A turn that streamed no text shows its stored result, with the same pattern
 // redaction a live final answer gets.
 func TestAHPBackendRedactsAStoredResult(t *testing.T) {
