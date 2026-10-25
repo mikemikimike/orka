@@ -125,10 +125,13 @@ func newTestEnv(t *testing.T, limits store.AHPJournalLimits) *testEnv {
 	return &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
 }
 
-// failingSessionStore refuses session catalog writes while fail is set.
+// failingSessionStore refuses session catalog writes while fail is set, and
+// journal appends that carry actions, such as a new session's ready action,
+// while failActions is set.
 type failingSessionStore struct {
 	store.AHPStore
-	fail atomic.Bool
+	fail        atomic.Bool
+	failActions atomic.Bool
 }
 
 func (s *failingSessionStore) PutAHPSession(ctx context.Context, session store.AHPSession) error {
@@ -138,35 +141,54 @@ func (s *failingSessionStore) PutAHPSession(ctx context.Context, session store.A
 	return s.AHPStore.PutAHPSession(ctx, session)
 }
 
-// A session whose catalog record cannot be written is taken back, channels and
-// backend session both, so the URI can be created again once the store works.
+func (s *failingSessionStore) AppendAHPJournal(ctx context.Context, userKey string, previousSeq int64,
+	entries []store.AHPJournalEntry, states []store.AHPChannelState, limits store.AHPJournalLimits) error {
+	if len(entries) > 0 && s.failActions.Load() {
+		return errors.New("the store refused the write")
+	}
+	return s.AHPStore.AppendAHPJournal(ctx, userKey, previousSeq, entries, states, limits)
+}
+
+// A session that cannot be catalogued, or then marked ready, is taken back:
+// catalog record, channels and backend session, so the URI can be created
+// again once the store works.
 func TestASessionThatCannotBeCataloguedIsTakenBack(t *testing.T) {
-	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
-	require.NoError(t, err)
-	failing := &failingSessionStore{AHPStore: s}
-	tokens := &TokenService{Store: s}
-	backend := &fakeBackend{}
-	registry, err := NewRegistry(backend)
-	require.NoError(t, err)
-	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
-	require.NoError(t, err)
-	server := httptest.NewServer(host)
-	t.Cleanup(server.Close)
-	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
-	client := env.connect(env.mint("alice").Token)
-	_, err = client.Initialize(ctx5(t), "client-a", ahptypes.SupportedProtocolVersions(), nil)
-	require.NoError(t, err)
+	for name, flag := range map[string]func(*failingSessionStore) *atomic.Bool{
+		"catalog write": func(s *failingSessionStore) *atomic.Bool { return &s.fail },
+		"ready action":  func(s *failingSessionStore) *atomic.Bool { return &s.failActions },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+			require.NoError(t, err)
+			failing := &failingSessionStore{AHPStore: s}
+			tokens := &TokenService{Store: s}
+			backend := &fakeBackend{}
+			registry, err := NewRegistry(backend)
+			require.NoError(t, err)
+			host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+			require.NoError(t, err)
+			server := httptest.NewServer(host)
+			t.Cleanup(server.Close)
+			env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+			client := env.connect(env.mint("alice").Token)
+			_, err = client.Initialize(ctx5(t), "client-a", ahptypes.SupportedProtocolVersions(), nil)
+			require.NoError(t, err)
 
-	failing.fail.Store(true)
-	provider := "fake"
-	err = client.Request(ctx5(t), "createSession", ahptypes.CreateSessionParams{Channel: "ahp-session:/one", Provider: &provider}, nil)
-	require.Error(t, err)
-	backend.mu.Lock()
-	require.Equal(t, []string{"ahp-session:/one"}, backend.disposed, "the backend's session is disposed of")
-	backend.mu.Unlock()
+			flag(failing).Store(true)
+			provider := "fake"
+			err = client.Request(ctx5(t), "createSession", ahptypes.CreateSessionParams{Channel: "ahp-session:/one", Provider: &provider}, nil)
+			require.Error(t, err)
+			backend.mu.Lock()
+			require.Equal(t, []string{"ahp-session:/one"}, backend.disposed, "the backend's session is disposed of")
+			backend.mu.Unlock()
+			sessions, err := s.ListAHPSessions(ctx5(t), UserKey("https://issuer.example", "alice"))
+			require.NoError(t, err)
+			require.Empty(t, sessions, "no catalog record is left behind")
 
-	failing.fail.Store(false)
-	createSession(t, client, "ahp-session:/one")
+			flag(failing).Store(false)
+			createSession(t, client, "ahp-session:/one")
+		})
+	}
 }
 
 func (e *testEnv) mint(subject string) MintedToken {

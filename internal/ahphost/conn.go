@@ -818,16 +818,19 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 		}
 		return err
 	}
-	// Until the session's catalog record is written, a failure takes back
-	// what was created, so the URI can be created or disposed of again: the
-	// stored channels and the backend's session.
+	// Until the session is ready, a failure takes back what was created, so
+	// the URI can be created again: the catalog record, the stored channels
+	// and the backend's session.
 	var stored []string
-	committed := false
+	cataloged, committed := false, false
 	defer func() {
 		if err == nil || committed {
 			return
 		}
 		cleanup := context.WithoutCancel(ctx)
+		if cataloged {
+			_ = c.host.cfg.Store.DeleteAHPSession(cleanup, c.principal.UserKey, session)
+		}
 		if len(stored) > 0 {
 			_ = c.host.cfg.Store.DeleteAHPChannelStates(cleanup, c.principal.UserKey, stored)
 		}
@@ -888,11 +891,12 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	}); err != nil {
 		return err
 	}
-	committed = true
+	cataloged = true
 	ready := ahptypes.StateAction{Value: &ahptypes.SessionReadyAction{Type: ahptypes.ActionTypeSessionReady}}
 	if err := c.host.apply(ctx, c.principal, session, []ahptypes.StateAction{ready}, nil); err != nil {
 		return err
 	}
+	committed = true
 	c.host.notifyRoot(c.principal.UserKey, methodSessionAdded, ahptypes.SessionAddedParams{Channel: rootChannel, Summary: summary})
 	return c.host.updateActiveSessions(ctx, c.principal)
 }
