@@ -246,6 +246,11 @@ func TestStaticChartRejectsInvalidAHPValues(t *testing.T) {
 			want: "controller.ahp.enabled requires controller.oidc.issuer and controller.oidc.audience",
 		},
 		{
+			name: "no subject allowed to sign in",
+			args: ahpEnabled("--set-string", "controller.oidc.allowedSubjects="),
+			want: "controller.ahp.enabled requires controller.oidc.allowedSubjects",
+		},
+		{
 			name: "release namespace",
 			args: ahpWorkspacesEnabled("--set-string", "controller.ahp.workspaceNamespace="+staticChartTestNamespace),
 			want: "must differ from the Helm release namespace",

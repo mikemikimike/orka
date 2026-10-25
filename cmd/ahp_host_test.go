@@ -15,14 +15,17 @@ import (
 func TestValidateAHPSignInRequiresOIDC(t *testing.T) {
 	for name, oidc := range map[string]api.OIDCConfig{
 		"none":        {},
-		"no audience": {Issuer: "https://issuer.example"},
-		"no issuer":   {Audience: "orka"},
+		"no audience": {Issuer: "https://issuer.example", AllowedSubjects: []string{"*"}},
+		"no issuer":   {Audience: "orka", AllowedSubjects: []string{"*"}},
+		// Every sign-in is refused without a subject allowlist.
+		"no allowed subjects":    {Issuer: "https://issuer.example", Audience: "orka"},
+		"blank allowed subjects": {Issuer: "https://issuer.example", Audience: "orka", AllowedSubjects: []string{" "}},
 	} {
 		if validateAHPSignIn(oidc) == nil {
-			t.Errorf("%s: an AHP endpoint without OIDC started", name)
+			t.Errorf("%s: an AHP endpoint no one could sign in to started", name)
 		}
 	}
-	if err := validateAHPSignIn(api.OIDCConfig{Issuer: "https://issuer.example", Audience: "orka"}); err != nil {
+	if err := validateAHPSignIn(api.OIDCConfig{Issuer: "https://issuer.example", Audience: "orka", AllowedSubjects: []string{"*"}}); err != nil {
 		t.Fatalf("OIDC sign-in refused: %v", err)
 	}
 }

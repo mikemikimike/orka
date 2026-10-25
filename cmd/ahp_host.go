@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,10 +55,14 @@ func ahpBackendFor(host *ahphost.Host, cfg api.AHPBackendConfig) *api.AHPBackend
 }
 
 // validateAHPSignIn refuses an AHP endpoint no one could use: tokens are
-// minted for, and admitted only while, the owner's OIDC sign-in holds.
+// minted for, and admitted only while, the owner's OIDC sign-in holds, and an
+// OIDC sign-in is refused without a subject allowlist.
 func validateAHPSignIn(oidc api.OIDCConfig) error {
 	if !oidc.Enabled() {
 		return errors.New("--enable-ahp-api requires --oidc-issuer and --oidc-audience: AHP tokens belong to OIDC sign-ins")
+	}
+	if !slices.ContainsFunc(oidc.AllowedSubjects, func(subject string) bool { return strings.TrimSpace(subject) != "" }) {
+		return errors.New("--enable-ahp-api requires --oidc-allowed-subjects: without it every OIDC sign-in is refused, so no one could mint or use an AHP token")
 	}
 	return nil
 }

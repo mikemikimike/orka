@@ -772,6 +772,9 @@ namespace the controller never shares with its watch or ACP runtime namespaces.
 {{- if not (and (dig "oidc" "issuer" "" .Values.controller) (dig "oidc" "audience" "" .Values.controller)) -}}
 {{- fail "controller.ahp.enabled requires controller.oidc.issuer and controller.oidc.audience: AHP connection tokens are minted only for a person's own OIDC sign-in" -}}
 {{- end -}}
+{{- if not (trim (toString (dig "oidc" "allowedSubjects" "" .Values.controller))) -}}
+{{- fail "controller.ahp.enabled requires controller.oidc.allowedSubjects: without it every OIDC sign-in is refused, so no one could mint or use an AHP token" -}}
+{{- end -}}
 {{- if include "orka.ahpWorkspacesEnabled" . -}}
 {{- if not (regexMatch `^[^@\s]+@sha256:[a-f0-9]{64}$` (include "orka.ahpWorkspaceImage" .)) -}}
 {{- fail "controller.ahp.workspaceImage must be pinned by digest: <repository>@sha256:<digest>" -}}
