@@ -45,9 +45,10 @@ func TestValidateAHPWorkspace(t *testing.T) {
 		}, false},
 		{"watch namespace", api.AHPBackendConfig{WorkspaceImage: digest, WorkspaceNamespace: "orka-system"}, false},
 		{"control namespace", api.AHPBackendConfig{WorkspaceImage: digest, WorkspaceNamespace: "orka-control"}, false},
+		{"ACP runtime namespace", api.AHPBackendConfig{WorkspaceImage: digest, WorkspaceNamespace: "orka-runtimes"}, false},
 		{"empty namespace", api.AHPBackendConfig{WorkspaceImage: digest}, false},
 	} {
-		err := validateAHPWorkspace(test.cfg, "orka-system", "orka-control")
+		err := validateAHPWorkspace(test.cfg, "orka-system", "orka-control", "orka-runtimes")
 		if (err == nil) != test.ok {
 			t.Errorf("%s: err = %v, want ok=%v", test.name, err, test.ok)
 		}

@@ -71,7 +71,9 @@ func validateAHPSignIn(oidc api.OIDCConfig) error {
 var ahpWorkspaceImageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[a-f0-9]{64}$`)
 
 // validateAHPWorkspace checks the workspace settings before anything starts.
-func validateAHPWorkspace(cfg api.AHPBackendConfig, watchNamespace, controlNamespace string) error {
+// The workspace namespace gets the restricted Pod Security profile, which the
+// ACP runtime Pods cannot run under, so it never shares their namespace.
+func validateAHPWorkspace(cfg api.AHPBackendConfig, watchNamespace, controlNamespace, runtimeNamespace string) error {
 	if cfg.WorkspaceImage == "" {
 		return nil
 	}
@@ -79,7 +81,7 @@ func validateAHPWorkspace(cfg api.AHPBackendConfig, watchNamespace, controlNames
 		return fmt.Errorf("--ahp-workspace-image must be pinned by digest")
 	}
 	switch strings.TrimSpace(cfg.WorkspaceNamespace) {
-	case "", watchNamespace, controlNamespace:
+	case "", watchNamespace, controlNamespace, runtimeNamespace:
 		return fmt.Errorf("--ahp-workspace-namespace must name a namespace of its own")
 	}
 	return nil

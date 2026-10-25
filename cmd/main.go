@@ -2110,7 +2110,7 @@ func main() {
 			setupLog.Error(err, "invalid AHP configuration")
 			os.Exit(1)
 		}
-		if err := validateAHPWorkspace(ahpBackendConfig, watchNamespace, controlNamespace); err != nil {
+		if err := validateAHPWorkspace(ahpBackendConfig, watchNamespace, controlNamespace, acpRuntimeNamespace); err != nil {
 			setupLog.Error(err, "invalid AHP workspace configuration")
 			os.Exit(1)
 		}
