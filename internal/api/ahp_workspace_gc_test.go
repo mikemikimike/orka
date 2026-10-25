@@ -66,6 +66,41 @@ func TestAHPWorkspaceCollectorKeepsWorkspacesInUse(t *testing.T) {
 		"a workspace with a shell stays")
 }
 
+// A branch's changes are found from its base, or without one, as for a
+// repository off github.com, from the default branch the clone found.
+func TestAHPBranchForkScript(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "init.defaultBranch=main"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	seed, checkout := t.TempDir(), filepath.Join(t.TempDir(), "checkout")
+	require.NoError(t, os.MkdirAll(remote, 0o755))
+	git(remote, "init", "--bare")
+	git(seed, "init")
+	require.NoError(t, os.WriteFile(filepath.Join(seed, "a"), []byte("a\n"), 0o600))
+	git(seed, "add", "a")
+	git(seed, "commit", "-m", "a")
+	git(seed, "push", remote, "main")
+	git(filepath.Dir(checkout), "clone", "--quiet", remote, checkout)
+	fork := git(checkout, "rev-parse", "HEAD")
+	git(checkout, "checkout", "--quiet", "-b", "session")
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, "b"), []byte("b\n"), 0o600))
+	git(checkout, "add", "b")
+	git(checkout, "commit", "-m", "b")
+	for _, base := range []string{"main", ""} {
+		out, err := exec.Command("/bin/sh", "-c", ahpBranchForkScript, "sh", checkout, base).Output()
+		require.NoError(t, err, "base %q", base)
+		require.Equal(t, fork+"\x00A\x00b\x00", string(out), "base %q", base)
+	}
+}
+
 // The script runs in the workspace; run it here against real repositories.
 func TestAHPHoldsWorkScript(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

@@ -329,12 +329,20 @@ const (
 
 // branchChanges reads every file a worktree's branch changed since it forked
 // from base, with both sides' contents, keyed by full path.
-func (w *ahpWorkspaces) branchChanges(ctx context.Context, pod *corev1.Pod, worktree, base string) (map[string]ahpGitChange, error) {
-	raw, err := w.output(ctx, pod, 1<<20, ahpShell, "-c", `set -e
+// ahpBranchForkScript prints where a worktree's branch left its base, then the
+// files changed since, NUL-separated. With no base, as for a repository off
+// github.com whose default branch was not looked up, it uses the default
+// branch the clone found on the remote.
+const ahpBranchForkScript = `set -e
 cd "$1"
-fork=$(git merge-base HEAD "origin/$2")
+upstream="origin/$2"
+[ -n "$2" ] || upstream=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD)
+fork=$(git merge-base HEAD "$upstream")
 printf '%s\0' "$fork"
-git diff --no-renames --name-status -z "$fork" HEAD`, "sh", worktree, base)
+git diff --no-renames --name-status -z "$fork" HEAD`
+
+func (w *ahpWorkspaces) branchChanges(ctx context.Context, pod *corev1.Pod, worktree, base string) (map[string]ahpGitChange, error) {
+	raw, err := w.output(ctx, pod, 1<<20, ahpShell, "-c", ahpBranchForkScript, "sh", worktree, base)
 	if err != nil {
 		return nil, err
 	}
