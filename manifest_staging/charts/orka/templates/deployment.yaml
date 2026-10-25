@@ -211,7 +211,12 @@ spec:
             {{- if include "orka.ahpWorkspacesEnabled" . }}
             - {{ printf "--ahp-workspace-namespace=%s" (include "orka.ahpWorkspaceNamespace" .) | quote }}
             - {{ printf "--ahp-workspace-image=%s" (include "orka.ahpWorkspaceImage" .) | quote }}
-            - {{ printf "--ahp-workspace-idle-timeout=%s" (toString .Values.controller.ahp.workspaceIdleTimeout) | quote }}
+            {{- /* Values reused from a release before AHP have no idle timeout;
+            the controller then keeps its own default. An explicit 0 is kept. */}}
+            {{- $idleTimeout := toString (dig "ahp" "workspaceIdleTimeout" "" .Values.controller) }}
+            {{- if $idleTimeout }}
+            - {{ printf "--ahp-workspace-idle-timeout=%s" $idleTimeout | quote }}
+            {{- end }}
             {{- if .Values.controller.ahp.workspaceConnectorProvider }}
             - {{ printf "--ahp-workspace-connector-provider=%s" .Values.controller.ahp.workspaceConnectorProvider | quote }}
             {{- end }}
