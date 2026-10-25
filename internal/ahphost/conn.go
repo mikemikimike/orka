@@ -918,13 +918,15 @@ func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if backend, ok := c.host.cfg.Backends.Named(record.Backend); ok {
-		if err := backend.DisposeSession(ctx, c.principal, session); err != nil {
-			return err
-		}
-	}
+	// The session's chats and changesets are found from its state, read before
+	// anything is disposed of: a read that fails leaves the session to be
+	// disposed of again, rather than its channels behind.
 	channels := []string{session}
-	if stored, _, err := c.host.readChannel(ctx, c.principal.UserKey, session); err == nil && stored.State.Session != nil {
+	stored, _, err := c.host.readChannel(ctx, c.principal.UserKey, session)
+	if err != nil && !errors.Is(err, errUnknownChannel) {
+		return err
+	}
+	if err == nil && stored.State.Session != nil {
 		for _, chat := range stored.State.Session.Chats {
 			channels = append(channels, chat.Resource)
 		}
@@ -932,6 +934,11 @@ func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
 			if !strings.Contains(changeset.UriTemplate, "{") {
 				channels = append(channels, changeset.UriTemplate)
 			}
+		}
+	}
+	if backend, ok := c.host.cfg.Backends.Named(record.Backend); ok {
+		if err := backend.DisposeSession(ctx, c.principal, session); err != nil {
+			return err
 		}
 	}
 	if err := c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session); err != nil {

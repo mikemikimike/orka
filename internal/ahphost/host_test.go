@@ -233,6 +233,56 @@ func TestAnActionThatCannotBeAppliedIsReleased(t *testing.T) {
 	require.Equal(t, []string{"ahp-session:/one"}, backend.released)
 }
 
+// failingChannelReadStore refuses to read a channel's state while armed.
+type failingChannelReadStore struct {
+	store.AHPStore
+	channel string
+	armed   atomic.Bool
+}
+
+func (s *failingChannelReadStore) GetAHPChannelState(ctx context.Context, userKey, channel string) (store.AHPChannelState, error) {
+	if s.armed.Load() && channel == s.channel {
+		return store.AHPChannelState{}, errors.New("the store refused the read")
+	}
+	return s.AHPStore.GetAHPChannelState(ctx, userKey, channel)
+}
+
+// A session whose state cannot be read is not disposed of: removing its
+// catalog record would leave its chat and changeset channels behind for good.
+func TestASessionWhoseStateCannotBeReadIsKeptForAnotherDispose(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingChannelReadStore{AHPStore: s, channel: "ahp-session:/one"}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	createSession(t, client, "ahp-session:/one")
+	userKey := UserKey("https://issuer.example", "alice")
+
+	failing.armed.Store(true)
+	require.Error(t, client.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: "ahp-session:/one"}, nil))
+	_, err = s.GetAHPSession(ctx, userKey, "ahp-session:/one")
+	require.NoError(t, err, "the session is kept")
+	backend.mu.Lock()
+	require.Empty(t, backend.disposed, "nothing was disposed of")
+	backend.mu.Unlock()
+
+	failing.armed.Store(false)
+	require.NoError(t, client.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: "ahp-session:/one"}, nil))
+	_, err = s.GetAHPChannelState(ctx, userKey, chatURI("ahp-session:/one"))
+	require.ErrorIs(t, err, store.ErrNotFound, "the session's chat went with it")
+}
+
 func (e *testEnv) mint(subject string) MintedToken {
 	e.t.Helper()
 	minted, err := e.tokens.Mint(context.Background(), MintRequest{
