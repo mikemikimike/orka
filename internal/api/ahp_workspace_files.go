@@ -165,27 +165,28 @@ func (b *ahpBackend) workspaceFor(ctx context.Context, principal ahphost.Princip
 	return b.workspaces.running(ctx, principal)
 }
 
-// readWorkspaceFile serves a file from the user's workspace.
-func (b *ahpBackend) readWorkspaceFile(ctx context.Context, principal ahphost.Principal, uri string) (ahptypes.ResourceReadResult, error) {
+// readWorkspaceFile serves a file from the user's running workspace. running
+// is false when no workspace runs or the URI names nothing in one.
+func (b *ahpBackend) readWorkspaceFile(ctx context.Context, principal ahphost.Principal, uri string) (ahptypes.ResourceReadResult, bool, error) {
 	file, ok := ahpWorkspacePath(uri)
 	if !ok {
-		return ahptypes.ResourceReadResult{}, ahphost.ErrResourceNotFound
+		return ahptypes.ResourceReadResult{}, false, nil
 	}
 	pod, ok := b.workspaceFor(ctx, principal)
 	if !ok {
-		return ahptypes.ResourceReadResult{}, ahphost.ErrResourceNotFound
+		return ahptypes.ResourceReadResult{}, false, nil
 	}
 	data, err := b.workspaces.readFile(ctx, pod, file)
 	if errors.Is(err, errAHPOutputTooLarge) {
-		return ahptypes.ResourceReadResult{}, &ahphost.Rejection{Reason: fmt.Sprintf("the file is larger than %d bytes", ahpFileReadMax)}
+		return ahptypes.ResourceReadResult{}, true, &ahphost.Rejection{Reason: fmt.Sprintf("the file is larger than %d bytes", ahpFileReadMax)}
 	}
 	if err != nil {
-		return ahptypes.ResourceReadResult{}, ahphost.ErrResourceNotFound
+		return ahptypes.ResourceReadResult{}, true, ahphost.ErrResourceNotFound
 	}
 	if utf8.Valid(data) {
-		return ahptypes.ResourceReadResult{Data: string(data), Encoding: ahptypes.ContentEncodingUtf8}, nil
+		return ahptypes.ResourceReadResult{Data: string(data), Encoding: ahptypes.ContentEncodingUtf8}, true, nil
 	}
-	return ahptypes.ResourceReadResult{Data: base64.StdEncoding.EncodeToString(data), Encoding: ahptypes.ContentEncodingBase64}, nil
+	return ahptypes.ResourceReadResult{Data: base64.StdEncoding.EncodeToString(data), Encoding: ahptypes.ContentEncodingBase64}, true, nil
 }
 
 // ListResource lists a directory in the user's workspace.

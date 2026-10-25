@@ -626,6 +626,46 @@ func TestAHPBackendKeepsASessionWhoseTaskItCannotCancel(t *testing.T) {
 	require.Contains(t, task.Annotations, labels.AnnotationCancelRequested, "the Task was asked to stop")
 }
 
+// A root read of a file an agent changed comes from the user's running
+// workspace, where a terminal may have changed or deleted it since; the
+// reported contents serve only while no workspace runs.
+func TestAHPBackendReadsRootFilesFromTheRunningWorkspace(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	before, after := "package widgets\n", "// Reported by the agent.\npackage widgets\n"
+	changes := &ahpChanges{b: env.backend, ctx: ctx, principal: alice, session: record, emit: env.backend.emitterFor(alice)}
+	changes.setFile("/workspace/src/octo/widgets/widgets.go", &before, &after, false)
+	uri := ahpTestDir + "/widgets.go"
+	read := func() (ahptypes.ResourceReadResult, error) {
+		var result ahptypes.ResourceReadResult
+		err := c.Request(ctx, "resourceRead", ahptypes.ResourceReadParams{Channel: ahptypes.RootResourceURI, Uri: uri}, &result)
+		return result, err
+	}
+
+	result, err := read()
+	require.NoError(t, err)
+	require.Equal(t, after, result.Data, "without a workspace, the reported contents serve")
+
+	env.backend.readWorkspace = func(context.Context, ahphost.Principal, string) (ahptypes.ResourceReadResult, bool, error) {
+		return ahptypes.ResourceReadResult{Data: "// Edited in a terminal.\n", Encoding: ahptypes.ContentEncodingUtf8}, true, nil
+	}
+	result, err = read()
+	require.NoError(t, err)
+	require.Equal(t, "// Edited in a terminal.\n", result.Data, "the running workspace's file serves")
+
+	env.backend.readWorkspace = func(context.Context, ahphost.Principal, string) (ahptypes.ResourceReadResult, bool, error) {
+		return ahptypes.ResourceReadResult{}, true, ahphost.ErrResourceNotFound
+	}
+	_, err = read()
+	require.Error(t, err, "a file deleted in the running workspace is gone")
+}
+
 func TestAHPBackendRemovesAProjectNoSessionUses(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")

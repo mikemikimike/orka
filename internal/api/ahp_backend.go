@@ -166,7 +166,10 @@ type ahpBackend struct {
 	emitterFor func(ahphost.Principal) ahphost.Emitter
 	// updateTerminals republishes the user's terminal list after a shell exits.
 	updateTerminals func(context.Context, ahphost.Principal) error
-	workspaces      *ahpWorkspaces
+	// readWorkspace reads a root file URI in the user's running workspace;
+	// running is false when no workspace runs or the URI is not in one.
+	readWorkspace func(ctx context.Context, principal ahphost.Principal, uri string) (result ahptypes.ResourceReadResult, running bool, err error)
+	workspaces    *ahpWorkspaces
 
 	mu     sync.Mutex
 	turns  map[string]*ahpTurn
@@ -227,11 +230,13 @@ func newAHPBackend(h *Handlers, s store.AHPStore, live *liveevents.Broker, cfg A
 	if cfg.TurnTimeout <= 0 {
 		cfg.TurnTimeout = ahpDefaultTurnTimeout
 	}
-	return &ahpBackend{
+	b := &ahpBackend{
 		h: h, store: s, live: live, cfg: cfg, now: time.Now, gitHTTP: ahpGitHTTPClient,
 		applyApprovalMode: ahpApplyApprovalMode, decideApproval: h.DecideTaskApprovalAs,
 		turns: map[string]*ahpTurn{}, shells: map[string]*ahpTerminal{}, reserved: map[string]time.Time{}, recovered: map[string]bool{},
 	}
+	b.readWorkspace = b.readWorkspaceFile
+	return b
 }
 
 // ahpApplyApprovalMode makes a manual-approval turn hold every permission
@@ -1262,11 +1267,18 @@ type ahpFileContent struct {
 const ahpContentScheme = "ahp-content:/"
 
 // ReadResource serves the before and after contents of the files in a
-// session's changeset, as the agent reported them. Nothing is read from a
-// workspace or from this server's disk. On the root channel the session is
-// found from the resource: a content URI names it, and a file is served from
-// the user's session that last changed it.
+// session's changeset, as the agent reported them. On the root channel a file
+// of the user's running workspace is read there, so what a terminal or a
+// followed branch changed since shows and a deleted file is gone. Otherwise
+// the session is found from the resource: a content URI names it, and a file
+// is served from the user's session that last changed it. Nothing is read
+// from this server's disk.
 func (b *ahpBackend) ReadResource(ctx context.Context, principal ahphost.Principal, session, channel, uri string) (ahptypes.ResourceReadResult, error) {
+	if session == "" {
+		if result, running, err := b.readWorkspace(ctx, principal, uri); running {
+			return result, err
+		}
+	}
 	var sessions []string
 	if session == "" {
 		records, err := b.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordSession)
@@ -1322,10 +1334,6 @@ func (b *ahpBackend) ReadResource(ctx context.Context, principal ahphost.Princip
 		}
 	}
 	if !ok {
-		if session == "" {
-			// Anything else on the root channel is a file in the user's workspace.
-			return b.readWorkspaceFile(ctx, principal, uri)
-		}
 		return ahptypes.ResourceReadResult{}, ahphost.ErrResourceNotFound
 	}
 	return ahptypes.ResourceReadResult{Data: string(found.Value), Encoding: ahptypes.ContentEncodingUtf8}, nil
