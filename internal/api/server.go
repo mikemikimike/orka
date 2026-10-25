@@ -549,6 +549,9 @@ func (s *Server) setupRoutes() {
 	api.Delete("/connections/:name", s.handlers.DeleteConnection)
 	api.Post("/connections/:name/authorize", s.handlers.AuthorizeConnection)
 	api.Post("/connections/:name/complete", s.handlers.CompleteConnection)
+	api.Get("/agent-hosts/me", s.handlers.GetOwnAgentHost)
+	api.Post("/agent-hosts/me/wake", s.handlers.WakeOwnAgentHost)
+	api.Delete("/agent-hosts/me", s.handlers.DeleteOwnAgentHost)
 
 	// AHP connection tokens. Every handler re-checks that the caller is a
 	// verified human identity and owns the token.

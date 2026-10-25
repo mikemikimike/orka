@@ -33,6 +33,7 @@ tags; development charts use the rolling `0.0.0-dev` tag. See
 | `controller.logLevel` | `info` | Log level (debug/info/warn/error) |
 | `controller.dashboard.enabled` | `false` | Serve the [web dashboard](../guides/ui.md) on the API port. |
 | `controller.connectors.enabled` / `controller.connectors.callbackBaseUrl` | `false` / `""` | Enable per-person [connectors](../guides/connectors.md), and the public https origin the OAuth provider redirects back to. |
+| `controller.agentHosts.enabled` / `.namespace` / `.agentImage` | `false` / `orka-agent-hosts` / `""` | Run [agent hosts](../operations/agent-hosts.md) in a chart-created namespace with the restricted Pod Security profile. An empty `agentImage` uses the controller image, which then must set `controller.image.digest`. |
 | `controller.ahp.enabled` | `false` | Serve the [Agent Host Protocol](../operations/agent-host-protocol.md) at `/ahp` for desktop AHP clients. Requires `controller.oidc.issuer`. Expose it through a TLS-terminating Ingress or Gateway; see [Expose /ahp over TLS](../operations/agent-host-protocol.md#expose-ahp-over-tls). |
 | `controller.ahp.tokenMaxTTL` / `.turnTimeout` | `2160h` / `2h` | Longest AHP connection token lifetime (tokens default to `720h`), and the timeout of each AHP turn's Task. |
 | `controller.ahp.gitCredentialSecret` / `.workspaceClass` | `""` / `""` | Secret in each AHP user's namespace whose `token` key clones and publishes their github.com repositories, and the ExecutionWorkspaceClass for session-scoped workspaces. |
@@ -471,6 +472,18 @@ See [charts/orka/values.yaml](https://github.com/orka-agents/orka/blob/main/char
 | `--metrics-secure` | `true` | Serve metrics via HTTPS |
 | `--enable-http2` | `false` | Enable HTTP/2 for metrics and webhook servers |
 | `--enable-telemetry` / `--enable-tracing` | `false` | Enable OpenTelemetry traces and metrics (requires worker-reachable OTLP endpoint for worker telemetry) |
+
+### Agent hosts {#agent-hosts}
+
+Long-lived, single-user agent hosts on Orka-owned Pods. Off by default. See
+[Agent hosts](../operations/agent-hosts.md).
+
+| Flag | Environment variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `--enable-agent-hosts` | `ORKA_ENABLE_AGENT_HOSTS` | `false` | Serves `AgentHostTemplate` and `AgentHost`. Helm: `controller.agentHosts.enabled`. |
+| `--agent-host-namespace` | `ORKA_AGENT_HOST_NAMESPACE` | `orka-agent-hosts` | Namespace for host Pods, volumes, NetworkPolicies and Secrets. Must differ from `--watch-namespace`. Helm: `controller.agentHosts.namespace`. |
+| `--agent-host-agent-image` | `ORKA_AGENT_HOST_AGENT_IMAGE` | — | Digest-pinned image with the `orka-host-agent` sidecar, normally the controller image. Required with `--enable-agent-hosts`. Helm: `controller.agentHosts.agentImage`. |
+| `--agent-host-controller-pod-labels` | `ORKA_AGENT_HOST_CONTROLLER_POD_LABELS` | `orka.ai/network-role=controller` | Labels of the controller Pods that may read host status through each host's NetworkPolicy. The default matches the shipped controller Pods. |
 
 ### Workspace providers (`workspace.orka.ai/v1alpha1`) {#workspace-providers}
 
