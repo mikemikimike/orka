@@ -62,7 +62,8 @@ func validateAHPSignIn(oidc api.OIDCConfig) error {
 		return errors.New("--enable-ahp-api requires --oidc-issuer and --oidc-audience: AHP tokens belong to OIDC sign-ins")
 	}
 	if !slices.ContainsFunc(oidc.AllowedSubjects, func(subject string) bool { return strings.TrimSpace(subject) != "" }) {
-		return errors.New("--enable-ahp-api requires --oidc-allowed-subjects: without it every OIDC sign-in is refused, so no one could mint or use an AHP token")
+		return errors.New("--enable-ahp-api requires --oidc-allowed-subjects: without it every OIDC sign-in is refused, " +
+			"so no one could mint or use an AHP token")
 	}
 	return nil
 }

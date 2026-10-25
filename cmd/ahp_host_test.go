@@ -25,7 +25,8 @@ func TestValidateAHPSignInRequiresOIDC(t *testing.T) {
 			t.Errorf("%s: an AHP endpoint no one could sign in to started", name)
 		}
 	}
-	if err := validateAHPSignIn(api.OIDCConfig{Issuer: "https://issuer.example", Audience: "orka", AllowedSubjects: []string{"*"}}); err != nil {
+	signIn := api.OIDCConfig{Issuer: "https://issuer.example", Audience: "orka", AllowedSubjects: []string{"*"}}
+	if err := validateAHPSignIn(signIn); err != nil {
 		t.Fatalf("OIDC sign-in refused: %v", err)
 	}
 }
