@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
@@ -183,6 +184,32 @@ func TestAHPHoldsWorkScript(t *testing.T) {
 		require.NoError(t, os.Remove(stray))
 	}
 	require.Equal(t, "done", holds())
+}
+
+// A restore that could not clone every project leaves the Pod unmarked, so a
+// later use restores it again; one that finished marks it.
+func TestAHPWorkspaceRestoreIsMarkedOnlyWhenComplete(t *testing.T) {
+	env := newAHPTestEnv(t)
+	ctx := ahpCtx(t)
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	// Exec reaches no API server here, so every clone fails.
+	unreachable := &rest.Config{Host: "http://127.0.0.1:1"}
+	clientset, err := kubernetes.NewForConfig(unreachable)
+	require.NoError(t, err)
+	w := &ahpWorkspaces{b: env.backend, clientset: clientset, rest: unreachable, namespace: "orka-ahp-workspaces",
+		image: "example.com/git@sha256:" + ahpHash("x")}
+	restored := func(name string) bool {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: w.namespace}}
+		require.NoError(t, env.kube.Create(ctx, pod))
+		w.restore(ctx, alice, pod)
+		require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: w.namespace, Name: name}, pod))
+		return pod.Annotations[ahpWorkspaceRestoredAnnotation] != ""
+	}
+	require.True(t, restored("nothing-to-restore"), "a restore with nothing to do is complete")
+	_, err = env.backend.addProject(ctx, alice, ahpTestRepo)
+	require.NoError(t, err)
+	require.False(t, restored("clone-fails"), "a restore whose clone failed is tried again")
 }
 
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {

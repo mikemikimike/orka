@@ -295,28 +295,37 @@ func (w *ahpWorkspaces) restoreInBackground(principal ahphost.Principal, pod *co
 }
 
 // restore clones the user's projects and adds their sessions' worktrees in a
-// new workspace Pod, then marks it restored.
+// new workspace Pod, then marks it restored. A restore that did not finish
+// leaves the Pod unmarked, so a later use restores it again; what is already
+// in place stays.
 func (w *ahpWorkspaces) restore(ctx context.Context, principal ahphost.Principal, pod *corev1.Pod) {
 	projects, err := w.b.projects(ctx, principal.UserKey)
 	if err != nil {
 		return
 	}
+	complete := true
 	for _, project := range projects {
-		_ = w.ensureProject(ctx, principal, pod, project)
+		if w.ensureProject(ctx, principal, pod, project) != nil {
+			complete = false
+		}
 	}
 	sessions, err := w.b.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordSession)
-	if err == nil {
-		for _, raw := range sessions {
-			var record ahpSession
-			if json.Unmarshal(raw.Value, &record) != nil || record.Branch == "" {
-				continue
-			}
-			for _, project := range projects {
-				if project.ID == record.ProjectID {
-					_ = w.ensureWorktree(ctx, principal, pod, project, record)
-				}
+	if err != nil {
+		return
+	}
+	for _, raw := range sessions {
+		var record ahpSession
+		if json.Unmarshal(raw.Value, &record) != nil || record.Branch == "" {
+			continue
+		}
+		for _, project := range projects {
+			if project.ID == record.ProjectID && w.ensureWorktree(ctx, principal, pod, project, record) != nil {
+				complete = false
 			}
 		}
+	}
+	if !complete {
+		return
 	}
 	patch := client.MergeFrom(pod.DeepCopy())
 	if pod.Annotations == nil {
