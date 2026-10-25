@@ -1354,6 +1354,57 @@ func TestAHPBackendRunsNoTurnForADisposedSession(t *testing.T) {
 	require.Nil(t, env.backend.activeTurn(alice.UserKey, ahpTestSession))
 }
 
+// A turn that streamed no text shows its stored result, with the same pattern
+// redaction a live final answer gets.
+func TestAHPBackendRedactsAStoredResult(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "Find the token", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser},
+			Model: &ahptypes.ModelSelection{Id: "claude-haiku-5.5"}},
+	}})
+	require.NoError(t, err)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+
+	secret := "github" + "_pat_" + "1234567890abcdefghijklmnopqrstuvwxyz"
+	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte("found "+secret)))
+	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	task.Status.ResultRef = &corev1alpha1.ResultReference{Available: true}
+	require.NoError(t, env.kube.Status().Update(ctx, task))
+
+	var shown strings.Builder
+	timeout := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case event := <-chatSub.Events():
+			if action, ok := event.(ahp.SubscriptionEventAction); ok {
+				switch value := action.Envelope.Action.Value.(type) {
+				case *ahptypes.ChatDeltaAction:
+					shown.WriteString(value.Content)
+				case *ahptypes.ChatTurnCompleteAction:
+					done = true
+				}
+			}
+		case <-timeout:
+			t.Fatal("the turn never completed")
+		}
+	}
+	require.Contains(t, shown.String(), "found ")
+	require.NotContains(t, shown.String(), secret, "the stored result is shown redacted")
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	require.NotEmpty(t, record.History)
+	require.NotContains(t, record.History[len(record.History)-1].Reply, secret, "the reply a model switch carries over is redacted")
+}
+
 // A URI created again after it was disposed of gets its own Orka Session, so
 // the Session and Tasks its earlier use kept never stand in its first turn's way.
 func TestAHPBackendGivesARecreatedSessionItsOwnOrkaSession(t *testing.T) {
