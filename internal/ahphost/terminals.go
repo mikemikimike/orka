@@ -34,6 +34,13 @@ type TerminalProvider interface {
 	Terminals(ctx context.Context, principal Principal) ([]ahptypes.TerminalInfo, error)
 }
 
+// TerminalReaper is a TerminalProvider that can stop what terminals an earlier
+// process left behind still run, once their shells are no longer its own. The
+// host calls it before dropping their channels.
+type TerminalReaper interface {
+	ReapTerminals(ctx context.Context, principal Principal, channels []string)
+}
+
 // terminalProvider returns the first backend that offers terminals.
 func (r *Registry) terminalProvider() (SessionBackend, TerminalProvider, bool) {
 	if r == nil {

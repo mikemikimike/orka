@@ -72,3 +72,21 @@ func TestAHPStopSessionScript(t *testing.T) {
 	require.NoFileExists(t, pidFile)
 	require.NoError(t, outside.Process.Signal(syscall.Signal(0)), "a process outside the session is left alone")
 }
+
+// A leftover terminal whose recorded session ID a running terminal now holds
+// was reused: its file goes, and the running terminal's session is left alone.
+func TestAHPStopSessionScriptSparesAReusedSession(t *testing.T) {
+	dir := t.TempDir()
+	livePID, stalePID := filepath.Join(dir, "live.pid"), filepath.Join(dir, "stale.pid")
+	shell := exec.Command("/bin/sh", "-c", `echo $$ > "$1"; sleep 60`, "sh", livePID)
+	shell.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	require.NoError(t, shell.Start())
+	t.Cleanup(func() { _ = syscall.Kill(-shell.Process.Pid, syscall.SIGKILL); _ = shell.Wait() })
+	require.Eventually(t, func() bool { return len(ahpSessionMembers(t, shell.Process.Pid)) >= 2 }, 5*time.Second, 20*time.Millisecond)
+	require.NoError(t, os.WriteFile(stalePID, []byte(strconv.Itoa(shell.Process.Pid)+"\n"), 0o600))
+
+	out, err := exec.Command("/bin/sh", "-c", ahpStopSessionScript, "sh", stalePID, livePID).CombinedOutput()
+	require.NoError(t, err, string(out))
+	require.NoFileExists(t, stalePID)
+	require.GreaterOrEqual(t, len(ahpSessionMembers(t, shell.Process.Pid)), 2, "the running terminal's session is left alone")
+}

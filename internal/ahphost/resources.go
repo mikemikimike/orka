@@ -253,12 +253,28 @@ func (h *Host) sweep(ctx context.Context, principal Principal) error {
 	for _, terminal := range live {
 		inUse[terminal.Resource] = true
 	}
-	var stale []string
-	for _, channel := range append(watches, terminals...) {
+	var stale, staleTerminals []string
+	for _, channel := range watches {
 		if !inUse[channel] {
 			stale = append(stale, channel)
 		}
 	}
+	for _, channel := range terminals {
+		if !inUse[channel] {
+			staleTerminals = append(staleTerminals, channel)
+		}
+	}
+	// A terminal an earlier process left can still run its shell in the
+	// user's workspace, which outlives the process: stop it before its
+	// channel, the last trace of it, goes.
+	if len(staleTerminals) > 0 {
+		if _, provider, ok := h.cfg.Backends.terminalProvider(); ok {
+			if reaper, ok := provider.(TerminalReaper); ok {
+				reaper.ReapTerminals(ctx, principal, staleTerminals)
+			}
+		}
+	}
+	stale = append(stale, staleTerminals...)
 	if len(stale) == 0 {
 		return nil
 	}

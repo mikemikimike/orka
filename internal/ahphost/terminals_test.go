@@ -31,6 +31,7 @@ type terminalBackend struct {
 	inputs   []string
 	running  map[string]bool
 	disposed []string
+	reaped   []string
 	// exitAtOnce makes a terminal's shell exit with this code before
 	// CreateTerminal returns.
 	exitAtOnce *int64
@@ -49,6 +50,12 @@ func (b *terminalBackend) CreateTerminal(ctx context.Context, _ Principal, param
 	}
 	return ahptypes.TerminalState{Title: "shell", Claim: params.Claim,
 		Lifecycle: ahptypes.TerminalLifecycleState{Value: &ahptypes.TerminalRunningLifecycleState{Status: ahptypes.TerminalLifecycleStatusRunning}}}, nil
+}
+
+func (b *terminalBackend) ReapTerminals(_ context.Context, _ Principal, channels []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reaped = append(b.reaped, channels...)
 }
 
 func (b *terminalBackend) DisposeTerminal(_ context.Context, _ Principal, channel string) error {
@@ -146,6 +153,40 @@ func TestATerminalThatCannotBeFinishedIsTakenBack(t *testing.T) {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	require.Equal(t, []string{"ahp-terminal:/one"}, backend.disposed, "the shell is disposed of")
+}
+
+// A terminal an earlier process left behind has what it still runs stopped
+// before its channel is swept; a running terminal is left alone.
+func TestALeftoverTerminalIsReapedBeforeItsChannelGoes(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	tokens := &TokenService{Store: s}
+	backend := &terminalBackend{fakeBackend: &fakeBackend{}, running: map[string]bool{"ahp-terminal:/live": true}}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: s, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend.fakeBackend, server: server}
+	minted := env.mint("alice")
+	userKey := UserKey("https://issuer.example", "alice")
+	ctx := ctx5(t)
+	state := ahptypes.TerminalState{Content: []ahptypes.TerminalContentPart{}}
+	require.NoError(t, host.storeChannels(ctx, userKey, map[string]storedChannel{
+		"ahp-terminal:/gone": {Backend: "fake", State: ahptypes.SnapshotState{Terminal: &state}},
+		"ahp-terminal:/live": {Backend: "fake", State: ahptypes.SnapshotState{Terminal: &state}},
+	}))
+	client := env.connect(minted.Token)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	backend.mu.Lock()
+	require.Equal(t, []string{"ahp-terminal:/gone"}, backend.reaped)
+	backend.mu.Unlock()
+	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-terminal:/gone")
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-terminal:/live")
+	require.NoError(t, err)
 }
 
 func TestTerminalsRouteToTheirBackendInOrder(t *testing.T) {

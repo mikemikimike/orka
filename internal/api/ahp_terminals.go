@@ -109,7 +109,7 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 	term := &ahpTerminal{
 		ctx: termCtx, channel: params.Channel, title: title, claim: params.Claim, cancel: cancel,
 		input: make(chan []byte, ahpTerminalInputQueue), sizes: make(chan remotecommand.TerminalSize, 4),
-		pidFile: "/tmp/orka-terminal-" + ahpHash(principal.UserKey, params.Channel)[:16] + ".pid",
+		pidFile: ahpTerminalPIDFile(principal.UserKey, params.Channel),
 	}
 	if params.Cols != nil && params.Rows != nil && *params.Cols > 0 && *params.Rows > 0 {
 		term.sizes <- remotecommand.TerminalSize{Width: uint16(min(*params.Cols, 1000)), Height: uint16(min(*params.Rows, 1000))} //nolint:gosec // bounded above
@@ -284,14 +284,54 @@ func (b *ahpBackend) stopShell(ctx context.Context, principal ahphost.Principal,
 	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", term.pidFile)
 }
 
+// ahpTerminalPIDFile is where a terminal's shell records its session in the
+// workspace, so the terminal can be stopped, also by a later process.
+func ahpTerminalPIDFile(userKey, channel string) string {
+	return "/tmp/orka-terminal-" + ahpHash(userKey, channel)[:16] + ".pid"
+}
+
+// The host stops the shells of terminals an earlier process left behind
+// through this backend.
+var _ ahphost.TerminalReaper = (*ahpBackend)(nil)
+
+// ReapTerminals stops the shells of terminals an earlier process left running
+// in the user's workspace, which outlives the process. A session ID one of
+// this process's terminals now holds was reused, and is left alone.
+func (b *ahpBackend) ReapTerminals(ctx context.Context, principal ahphost.Principal, channels []string) {
+	pod, ok := b.workspaces.running(ctx, principal)
+	if !ok {
+		return
+	}
+	b.mu.Lock()
+	var live []string
+	for key, term := range b.shells {
+		if strings.HasPrefix(key, principal.UserKey+"\x00") {
+			live = append(live, term.pidFile)
+		}
+	}
+	b.mu.Unlock()
+	for _, channel := range channels {
+		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		argv := append([]string{ahpShell, "-c", ahpStopSessionScript, "sh", ahpTerminalPIDFile(principal.UserKey, channel)}, live...)
+		_ = b.workspaces.run(killCtx, pod, argv...)
+		cancel()
+	}
+}
+
 // ahpStopSessionScript kills every process in the session whose ID the file
-// $1 records, then removes the file. The loop reuses the positional
-// parameters, so the file is kept in a variable first. It reads /proc with shell builtins, so a
-// workspace image needs no more than sh: pkill is not one of its requirements.
+// $1 records, then removes the file. A session ID recorded in any further
+// file, of a terminal still running, is not killed: it was reused. The loop
+// reuses the positional parameters, so the file is kept in a variable first.
+// It reads /proc with shell builtins, so a workspace image needs no more
+// than sh: pkill is not one of its requirements.
 const ahpStopSessionScript = `file=$1
+shift
 [ -f "$file" ] || exit 0
 sid=$(cat "$file")
 case "$sid" in ''|*[!0-9]*) exit 0;; esac
+for live do
+  if [ "$(cat "$live" 2>/dev/null)" = "$sid" ]; then rm -f "$file"; exit 0; fi
+done
 for stat in /proc/[0-9]*/stat; do
   read -r line < "$stat" 2>/dev/null || continue
   # Fields after the parenthesized command: state, ppid, pgrp, session.
