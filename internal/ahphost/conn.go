@@ -785,8 +785,7 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	if !validURI(session) {
 		return rpcErr(ahptypes.ErrorCodeInvalidParams, "a valid session URI is required")
 	}
-	// The host routes these schemes to terminals and resource watches.
-	if strings.HasPrefix(session, terminalScheme) || strings.HasPrefix(session, resourceWatchScheme) {
+	if hostChannelScheme(session) {
 		return rpcErr(ahptypes.ErrorCodeInvalidParams, "the URI scheme is reserved for another kind of channel")
 	}
 	release, claimed := c.host.claimChannelURI(c.principal.UserKey, session, false)
@@ -907,6 +906,12 @@ func (c *conn) takeBackSession(ctx context.Context, backend SessionBackend, sess
 		_ = c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, stored)
 	}
 	_ = backend.DisposeSession(ctx, c.principal, session)
+}
+
+// hostChannelScheme reports a URI on a scheme the host routes to terminals or
+// resource watches, which therefore cannot name a session.
+func hostChannelScheme(uri string) bool {
+	return strings.HasPrefix(uri, terminalScheme) || strings.HasPrefix(uri, resourceWatchScheme)
 }
 
 func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
