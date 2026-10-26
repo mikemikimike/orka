@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -236,10 +237,16 @@ func TestAHPTerminalTitleChangesReachTheTerminalList(t *testing.T) {
 }
 
 func TestAHPValidBranch(t *testing.T) {
-	for _, good := range []string{"main", "octocat-quiet-meadow", "orka/session-1a2b", "feature/x.y_z"} {
+	_, gitErr := exec.LookPath("git")
+	for _, good := range []string{"main", "octocat-quiet-meadow", "orka/session-1a2b", "feature/x.y_z", "a./b"} {
 		require.True(t, ahpValidBranch(good), good)
+		if gitErr == nil {
+			// Every name accepted is one git can create.
+			require.NoError(t, exec.Command("git", "check-ref-format", "--branch", good).Run(), good)
+		}
 	}
-	for _, bad := range []string{"", "-x", "a..b", "a/../b", ".hidden", "a/.b", "x.lock", "a b", "a;b", "a$(b)", "/abs", "a//b"} {
+	for _, bad := range []string{"", "-x", "a..b", "a/../b", ".hidden", "a/.b", "x.lock", "a b", "a;b", "a$(b)", "/abs", "a//b",
+		"release.", "a/b."} {
 		require.False(t, ahpValidBranch(bad), bad)
 	}
 }

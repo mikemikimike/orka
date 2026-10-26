@@ -62,9 +62,12 @@ const (
 
 var ahpGitRefName = regexp.MustCompile(`^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
 
-// ahpValidBranch accepts branch names that are safe as git refs and paths.
+// ahpValidBranch accepts branch names that are safe as git refs and paths,
+// and that git can create: git check-ref-format refuses, among others, a name
+// that ends with a dot.
 func ahpValidBranch(branch string) bool {
-	if branch == "" || len(branch) > 200 || !ahpGitRefName.MatchString(branch) || strings.HasPrefix(branch, "-") {
+	if branch == "" || len(branch) > 200 || !ahpGitRefName.MatchString(branch) || strings.HasPrefix(branch, "-") ||
+		strings.HasSuffix(branch, ".") {
 		return false
 	}
 	for segment := range strings.SplitSeq(branch, "/") {
