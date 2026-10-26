@@ -487,8 +487,13 @@ func (h *Host) apply(
 			c.deliverAction(envelope)
 		}
 	}
+	// The actions are committed and delivered. A catalog summary that cannot
+	// be brought in step is not a failure to apply them: their side effects
+	// must still run, and the next action on the session syncs it again.
 	if stored.State.Session != nil && stored.Session == channel {
-		return h.syncSessionSummaryLocked(ctx, hub, principal, channel, stored.State.Session)
+		if err := h.syncSessionSummaryLocked(ctx, hub, principal, channel, stored.State.Session); err != nil {
+			h.cfg.Logger.Error(err, "sync AHP session summary", "session", channel)
+		}
 	}
 	return nil
 }

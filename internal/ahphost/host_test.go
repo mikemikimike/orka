@@ -283,6 +283,43 @@ func TestASessionWhoseStateCannotBeReadIsKeptForAnotherDispose(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrNotFound, "the session's chat went with it")
 }
 
+// An action stays applied once it is journaled: a catalog summary that cannot
+// be written then neither rejects it nor keeps its side effects from running.
+func TestAnActionIsAppliedThoughItsSummaryCannotBeWritten(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingSessionStore{AHPStore: s}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	createSession(t, client, "ahp-session:/one")
+	_, session, err := client.Subscribe(ctx, "ahp-session:/one")
+	require.NoError(t, err)
+	_, chat, err := client.Subscribe(ctx, chatURI("ahp-session:/one"))
+	require.NoError(t, err)
+
+	failing.fail.Store(true)
+	_, err = client.Dispatch(ctx, "ahp-session:/one", ahptypes.StateAction{Value: &ahptypes.SessionTitleChangedAction{
+		Type: ahptypes.ActionTypeSessionTitleChanged, Title: "renamed"}})
+	require.NoError(t, err)
+	accepted := nextAction(t, session)
+	require.Nil(t, accepted.RejectionReason, "the journaled action is not rejected")
+	nextAction(t, chat) // the backend's handler ran and answered on the chat
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	require.Empty(t, backend.released, "nothing is released as unapplied")
+}
+
 func (e *testEnv) mint(subject string) MintedToken {
 	e.t.Helper()
 	minted, err := e.tokens.Mint(context.Background(), MintRequest{
