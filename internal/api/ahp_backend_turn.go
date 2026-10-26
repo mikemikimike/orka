@@ -90,8 +90,10 @@ type ahpTurn struct {
 type ahpToolCall struct {
 	started, ready, completed bool
 	title                     string
-	// approval is the held permission request waiting for the person.
-	approval string
+	// approval is the held permission request waiting for the person, and
+	// ended the last one that ended, resolved, expired or cancelled, also
+	// while the person's decision on it was on its way.
+	approval, ended string
 	// output is the running call's text output so far, bounded.
 	output string
 }
@@ -808,7 +810,12 @@ func (t *ahpTurn) onApproval(approval *liveevents.Approval) {
 		t.askForConfirmation(id, title)
 	default:
 		call := t.tools[id]
-		if call == nil || call.approval == "" {
+		if call == nil {
+			return
+		}
+		call.ended = approval.ID
+		if call.approval != approval.ID {
+			// The person's decision is on its way, or another request waits.
 			return
 		}
 		call.approval = ""
@@ -873,7 +880,9 @@ func (t *ahpTurn) confirm(ctx context.Context, principal ahphost.Principal, tool
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if call.completed || call.approval != "" {
+	// A request that ended meanwhile, such as one that expired first, can no
+	// longer be approved: asking again would show a confirmation that fails.
+	if call.completed || call.approval != "" || call.ended == approval {
 		return
 	}
 	call.approval = approval

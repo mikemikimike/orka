@@ -857,6 +857,65 @@ func TestAHPBackendReopensARefusedApproval(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
+// A request that expired before the person's decision landed is not asked
+// again: it can no longer be approved.
+func TestAHPBackendDoesNotReopenAnExpiredApproval(t *testing.T) {
+	env := newAHPTestEnv(t)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	var taskName string
+	decided := make(chan struct{})
+	env.backend.decideApproval = func(context.Context, *UserInfo, string, string, string, bool) error {
+		defer close(decided)
+		// The expiry wins the race and reaches the turn before the refusal.
+		env.live.Publish(liveevents.Event{Namespace: ahpTestNamespace, Task: taskName, Approval: &liveevents.Approval{
+			ID: "approval-1", State: liveevents.ApprovalExpired, ToolCallID: "tool-1",
+		}})
+		time.Sleep(200 * time.Millisecond)
+		return fiber.NewError(fiber.StatusConflict, "the request expired")
+	}
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "manual")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "run it", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}})
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName = record.OrkaSession + "-t1"
+	env.waitForTask(taskName)
+	env.live.Publish(liveevents.Event{Namespace: ahpTestNamespace, Task: taskName, Approval: &liveevents.Approval{
+		ID: "approval-1", State: liveevents.ApprovalPending, ToolCallID: "tool-1", ToolName: "bash", Title: "Run",
+	}})
+	waitForActionType(t, chatSub, "chat/toolCallReady")
+	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatToolCallConfirmedAction{
+		Type: ahptypes.ActionTypeChatToolCallConfirmed, TurnId: "turn-1", ToolCallId: "tool-1", Approved: true,
+	}})
+	require.NoError(t, err)
+	select {
+	case <-decided:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the decision was never made")
+	}
+
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case event := <-chatSub.Events():
+			if action, ok := event.(ahp.SubscriptionEventAction); ok {
+				if _, reopened := action.Envelope.Action.Value.(*ahptypes.ChatToolCallReadyAction); reopened {
+					t.Fatal("an expired request was asked again")
+				}
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 func TestAHPBackendResolvesTheDefaultBranchOnGitHubOnly(t *testing.T) {
 	gitSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-token", Namespace: ahpTestNamespace}, Data: map[string][]byte{"token": []byte("not-a-real-token")}}
 	env := newAHPTestEnv(t, gitSecret)
