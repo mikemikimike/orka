@@ -1258,6 +1258,34 @@ func (s *ahpFailingScanStore) ListAHPRecords(ctx context.Context, userKey, kind 
 	return s.AHPStore.ListAHPRecords(ctx, userKey, kind)
 }
 
+// A turn clients were shown started, whose start the previous leader journaled
+// but never ran, is ended by recovery instead of staying active for good.
+func TestAHPBackendRecoveryEndsATurnThatNeverStarted(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	// The turn's start is journaled, as a client's action is, but nothing ran it.
+	require.NoError(t, env.backend.emitterFor(alice).Emit(ctx, chat, ahpUserTurn("turn-lost", "run me")))
+	state, err := ahphost.ChannelState(ctx, env.backend.store, alice.UserKey, chat)
+	require.NoError(t, err)
+	require.NotNil(t, state.Chat.ActiveTurn, "the chat shows the turn started")
+	// A restarted process has recovered nothing for this user yet.
+	env.backend.mu.Lock()
+	delete(env.backend.recovered, alice.UserKey)
+	env.backend.mu.Unlock()
+
+	env.backend.recoverTurns(ctx, alice)
+	state, err = ahphost.ChannelState(ctx, env.backend.store, alice.UserKey, chat)
+	require.NoError(t, err)
+	require.Nil(t, state.Chat.ActiveTurn, "the turn that never started is ended")
+	var tasks corev1alpha1.TaskList
+	require.NoError(t, env.kube.List(ctx, &tasks))
+	require.Empty(t, tasks.Items)
+}
+
 // Recovery runs the messages an idle session still has waiting, left behind
 // by a restart before they ran: one whose sender is gone is reported and
 // leaves the queue instead of waiting for good.

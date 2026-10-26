@@ -411,6 +411,21 @@ func (h *Host) locked(ctx context.Context, userKey string, fn func(seq int64) er
 	return fn(hub.seq)
 }
 
+// ChannelState reads a channel's state as the host stored it, for a backend
+// that reconciles its own records with what clients were shown. A missing
+// channel is store.ErrNotFound.
+func ChannelState(ctx context.Context, s store.AHPStore, userKey, channel string) (ahptypes.SnapshotState, error) {
+	record, err := s.GetAHPChannelState(ctx, userKey, channel)
+	if err != nil {
+		return ahptypes.SnapshotState{}, err
+	}
+	var stored storedChannel
+	if err := json.Unmarshal(record.State, &stored); err != nil {
+		return ahptypes.SnapshotState{}, fmt.Errorf("decode channel state: %w", err)
+	}
+	return stored.State, nil
+}
+
 func (h *Host) readChannel(ctx context.Context, userKey, channel string) (storedChannel, int64, error) {
 	record, err := h.cfg.Store.GetAHPChannelState(ctx, userKey, channel)
 	if errors.Is(err, store.ErrNotFound) {

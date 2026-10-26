@@ -1096,6 +1096,7 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 			continue
 		}
 		if record.ActiveTurn == "" {
+			b.endUnstartedTurn(ctx, principal, record)
 			// A message queued while the session was idle can be left behind
 			// when the previous leader stopped before running it. Run what
 			// waits: a message whose sender is gone is reported and dropped.
@@ -1116,6 +1117,31 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 		b.mu.Unlock()
 		go turn.run(b.live.Subscribe(record.Namespace, record.ActiveTask))
 	}
+}
+
+// endUnstartedTurn ends a turn clients were shown started that the session
+// never recorded: the previous leader stopped after the turn's start was
+// journaled but before it ran. A turn this process holds a slot for is about
+// to be recorded, and is left alone.
+func (b *ahpBackend) endUnstartedTurn(ctx context.Context, principal ahphost.Principal, record ahpSession) {
+	key := ahpTurnKey(principal.UserKey, record.Session)
+	b.mu.Lock()
+	_, reserved := b.reserved[key]
+	b.mu.Unlock()
+	if reserved || b.activeTurn(principal.UserKey, record.Session) != nil {
+		return
+	}
+	state, err := ahphost.ChannelState(ctx, b.store, principal.UserKey, record.Chat)
+	if err != nil || state.Chat == nil || state.Chat.ActiveTurn == nil {
+		return
+	}
+	turn := state.Chat.ActiveTurn
+	started, err := time.Parse(time.RFC3339Nano, turn.StartedAt)
+	if err != nil {
+		started = b.now()
+	}
+	b.emitTurnError(ctx, b.emitterFor(principal), record, turn.Id, started, "TurnNotStarted",
+		"the turn did not start before Orka restarted; send it again")
 }
 
 // nextGeneration moves a session to a new Orka Session for another model. A
