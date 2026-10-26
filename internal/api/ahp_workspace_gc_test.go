@@ -247,6 +247,26 @@ func TestAHPWorkspaceRestoreIsMarkedOnlyWhenComplete(t *testing.T) {
 	require.False(t, restored("clone-fails"), "a restore whose clone failed is tried again")
 }
 
+// A terminal's directory that could not be set up is reported, so the shell
+// never opens somewhere else while the client believes it is in the project.
+func TestAHPWorkspacePrepareReportsAFailedSetup(t *testing.T) {
+	env := newAHPTestEnv(t)
+	ctx := ahpCtx(t)
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	// Exec reaches no API server here, so the clone fails.
+	unreachable := &rest.Config{Host: "http://127.0.0.1:1"}
+	clientset, err := kubernetes.NewForConfig(unreachable)
+	require.NoError(t, err)
+	w := &ahpWorkspaces{b: env.backend, clientset: clientset, rest: unreachable, namespace: "orka-ahp-workspaces",
+		image: "example.com/git@sha256:" + ahpHash("x")}
+	project, err := env.backend.addProject(ctx, alice, ahpTestRepo)
+	require.NoError(t, err)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "workspace", Namespace: w.namespace}}
+	require.Error(t, w.prepare(ctx, alice, pod, project.Path), "a project that could not be cloned")
+	require.NoError(t, w.prepare(ctx, alice, pod, "/workspace"), "a directory that needs no setup")
+}
+
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	env := newAHPTestEnv(t)
 	w := &ahpWorkspaces{b: env.backend}

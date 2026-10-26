@@ -149,7 +149,16 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 		cancel()
 		return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: err.Error()}
 	}
-	b.workspaces.prepare(ctx, principal, pod, cwd)
+	if err := b.workspaces.prepare(ctx, principal, pod, cwd); err != nil {
+		b.mu.Lock()
+		if b.shells[key] == term {
+			delete(b.shells, key)
+		}
+		b.mu.Unlock()
+		cancel()
+		log.Error(err, "prepare an AHP terminal's directory", "directory", cwd)
+		return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: "the terminal's directory could not be set up; try again"}
+	}
 
 	stdin, stdinWriter := io.Pipe()
 	// Ending the terminal unblocks a write the exec stream will never read.

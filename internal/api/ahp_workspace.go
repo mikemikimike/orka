@@ -336,8 +336,9 @@ func (w *ahpWorkspaces) restore(ctx context.Context, principal ahphost.Principal
 }
 
 // prepare sets up the checkout a terminal opens in, a project or a session's
-// worktree, after any restore in flight. It waits a bounded time.
-func (w *ahpWorkspaces) prepare(ctx context.Context, principal ahphost.Principal, pod *corev1.Pod, dir string) {
+// worktree, after any restore in flight. It waits a bounded time, and an
+// error means the shell would not open where it was asked to.
+func (w *ahpWorkspaces) prepare(ctx context.Context, principal ahphost.Principal, pod *corev1.Pod, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, ahpWorkspaceSetupWait)
 	defer cancel()
 	w.mu.Lock()
@@ -347,22 +348,21 @@ func (w *ahpWorkspaces) prepare(ctx context.Context, principal ahphost.Principal
 		select {
 		case <-restoring:
 		case <-ctx.Done():
-			return
+			return fmt.Errorf("the workspace is still being restored: %w", ctx.Err())
 		}
 	}
 	projects, err := w.b.projects(ctx, principal.UserKey)
 	if err != nil {
-		return
+		return err
 	}
 	for _, project := range projects {
 		if dir == project.Path {
-			_ = w.ensureProject(ctx, principal, pod, project)
-			return
+			return w.ensureProject(ctx, principal, pod, project)
 		}
 	}
 	sessions, err := w.b.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordSession)
 	if err != nil {
-		return
+		return err
 	}
 	for _, raw := range sessions {
 		var record ahpSession
@@ -371,11 +371,11 @@ func (w *ahpWorkspaces) prepare(ctx context.Context, principal ahphost.Principal
 		}
 		for _, project := range projects {
 			if project.ID == record.ProjectID {
-				_ = w.ensureWorktree(ctx, principal, pod, project, record)
-				return
+				return w.ensureWorktree(ctx, principal, pod, project, record)
 			}
 		}
 	}
+	return nil
 }
 
 // withGit runs change under the user's git lock. The change runs to the end
