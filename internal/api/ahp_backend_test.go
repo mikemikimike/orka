@@ -1344,6 +1344,11 @@ func TestAHPBackendTakesBackATurnWhoseTaskWasNotCreated(t *testing.T) {
 	_, chatSub, err := c.Subscribe(ctx, chat)
 	require.NoError(t, err)
 	alice := ahphost.UserKey("https://issuer.example", "alice")
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, alice, ahpRecordSession, ahpTestSession, &record))
+	// The server stored the first turn's Task even though its create failed.
+	kept := &corev1alpha1.Task{ObjectMeta: metav1.ObjectMeta{Name: record.OrkaSession + "-t1", Namespace: ahpTestNamespace},
+		Spec: corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeAgent, Prompt: "first"}}
 	var refuse atomic.Bool
 	refuse.Store(true)
 	env.onTaskCreate = func(*corev1alpha1.Task) error {
@@ -1356,16 +1361,18 @@ func TestAHPBackendTakesBackATurnWhoseTaskWasNotCreated(t *testing.T) {
 	require.NoError(t, err)
 	waitForActionType(t, chatSub, "chat/error")
 	require.Eventually(t, func() bool { return env.backend.activeTurn(alice, ahpTestSession) == nil }, 5*time.Second, 20*time.Millisecond)
-	record := ahpSession{}
+	refuse.Store(false)
+	require.NoError(t, env.kube.Create(ctx, kept))
 	require.NoError(t, env.backend.getRecord(ctx, alice, ahpRecordSession, ahpTestSession, &record))
 	require.Empty(t, record.ActiveTurn)
-	require.Zero(t, record.Turns)
+	require.Zero(t, record.SessionTurns)
 	require.Empty(t, record.History)
 
-	refuse.Store(false)
 	_, err = c.Dispatch(ctx, chat, ahpUserTurn("turn-2", "again"))
 	require.NoError(t, err)
-	require.Equal(t, "again", env.waitForTask(record.OrkaSession+"-t1").Spec.Prompt)
+	retried := env.waitForTask(record.OrkaSession + "-t2")
+	require.Equal(t, "again", retried.Spec.Prompt, "the next turn takes a name of its own")
+	require.True(t, retried.Spec.SessionRef.Create, "it is still the Orka Session's first turn")
 }
 
 func TestAHPReorderPending(t *testing.T) {

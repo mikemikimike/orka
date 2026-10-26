@@ -180,7 +180,9 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	}
 	number := record.Turns + 1
 	name := fmt.Sprintf("%s-t%d", record.OrkaSession, number)
-	first := record.Turns == 0 || (record.Generation > 0 && record.SessionTurns == 0)
+	// SessionTurns counts the turns the current Orka Session has run, so its
+	// first one creates it, also after a turn whose Task was not created.
+	first := record.SessionTurns == 0
 	prompt := action.Message.Text
 	if first && len(record.History) > 0 {
 		prompt = ahpCarryOver(record.History) + prompt
@@ -256,14 +258,16 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	b.turns[turnKey] = turn
 	b.mu.Unlock()
 	if err := b.h.client.Create(ctx, task); err != nil {
-		// The Task may exist even so; stop it, then take the turn back.
+		// The Task may exist even so; stop it, then take the turn back. Its
+		// number stays used, so a Task the server kept under the name never
+		// stands in the next turn's way.
 		_ = b.cancelTask(context.WithoutCancel(ctx), principal, task.Namespace, name)
 		logSessionUpdate(b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
 			if s.ActiveTurn != action.TurnId {
 				return
 			}
 			s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
-			s.Agent, s.Model, s.Turns, s.SessionTurns, s.History = record.Agent, record.Model, record.Turns, record.SessionTurns, record.History
+			s.Agent, s.Model, s.SessionTurns, s.History = record.Agent, record.Model, record.SessionTurns, record.History
 		}), record.Session, "take back a turn whose Task was not created")
 		b.mu.Lock()
 		if b.turns[turnKey] == turn {
