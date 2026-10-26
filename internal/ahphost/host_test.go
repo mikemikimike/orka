@@ -320,6 +320,21 @@ func TestAnActionIsAppliedThoughItsSummaryCannotBeWritten(t *testing.T) {
 	require.Empty(t, backend.released, "nothing is released as unapplied")
 }
 
+// A session cannot be named with a scheme the host routes to another kind of
+// channel: actions on it would go to a terminal or resource watch.
+func TestASessionCannotTakeAReservedScheme(t *testing.T) {
+	env := newTestEnv(t, store.AHPJournalLimits{})
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err := client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	provider := "fake"
+	for _, uri := range []string{"ahp-terminal:/one", resourceWatchScheme + "one"} {
+		err := client.Request(ctx, "createSession", ahptypes.CreateSessionParams{Channel: uri, Provider: &provider}, nil)
+		require.Equal(t, ahptypes.ErrorCodeInvalidParams, rpcCode(t, err), uri)
+	}
+}
+
 func (e *testEnv) mint(subject string) MintedToken {
 	e.t.Helper()
 	minted, err := e.tokens.Mint(context.Background(), MintRequest{

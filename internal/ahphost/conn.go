@@ -785,6 +785,10 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	if !validURI(session) {
 		return rpcErr(ahptypes.ErrorCodeInvalidParams, "a valid session URI is required")
 	}
+	// The host routes these schemes to terminals and resource watches.
+	if strings.HasPrefix(session, terminalScheme) || strings.HasPrefix(session, resourceWatchScheme) {
+		return rpcErr(ahptypes.ErrorCodeInvalidParams, "the URI scheme is reserved for another kind of channel")
+	}
 	release, claimed := c.host.claimChannelURI(c.principal.UserKey, session, false)
 	if !claimed {
 		return rpcErr(ahptypes.ErrorCodeSessionAlreadyExists, "the session already exists")

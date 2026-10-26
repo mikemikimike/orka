@@ -815,6 +815,13 @@ func ahpApprovalModeFrom(config map[string]json.RawMessage) (string, error) {
 // CreateSession starts a session in one of the user's projects. Nothing runs
 // until the first message: that turn's Task creates the Orka Session.
 func (b *ahpBackend) CreateSession(ctx context.Context, principal ahphost.Principal, req ahphost.CreateSessionRequest, _ ahphost.Emitter) (*ahphost.CreatedSession, error) {
+	// This backend routes these schemes to a session's chat, changeset and
+	// file contents, so a session cannot be named with one.
+	for _, reserved := range []string{"ahp-chat:", "ahp-changeset:", ahpContentScheme, ahpTerminalScheme} {
+		if strings.HasPrefix(req.Session, reserved) {
+			return nil, &ahphost.Rejection{Reason: "the session URI uses a scheme reserved for another kind of channel"}
+		}
+	}
 	// One branch of a project belongs to one session: its worktree and its
 	// publications are that session's. The project lookup, the claim and the
 	// record are made under the user's lifecycle lock, which project removal

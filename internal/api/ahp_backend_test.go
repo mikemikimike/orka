@@ -710,6 +710,21 @@ func TestAHPBackendReadsRootFilesFromTheRunningWorkspace(t *testing.T) {
 	require.Error(t, err, "a file deleted in the running workspace is gone")
 }
 
+// A session cannot be named with a scheme this backend routes to a chat,
+// changeset or file contents.
+func TestAHPBackendRefusesASessionOnAReservedScheme(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": ahpTestRepo}, nil))
+	provider := "copilot"
+	for _, uri := range []string{"ahp-chat:/one", "ahp-changeset:/one/session", ahpContentScheme + "one"} {
+		require.Error(t, c.Request(ctx, "createSession", ahptypes.CreateSessionParams{
+			Channel: uri, Provider: &provider, WorkingDirectories: []string{ahpTestDir},
+		}, nil), uri)
+	}
+}
+
 func TestAHPBackendRemovesAProjectNoSessionUses(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")
