@@ -189,7 +189,8 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 		// The shell leads its own session; its PID names that session, so
 		// ending the terminal can stop everything started in it.
 		err := b.workspaces.stream(termCtx, pod,
-			[]string{ahpShell, "-c", `echo $$ > "$2"; cd "$1" 2>/dev/null || cd /workspace; exec /bin/sh -i`, "sh", cwd, term.pidFile},
+			[]string{ahpShell, "-c", `dir=$1 pidfile=$2; ` + ahpTerminalRecordSession + `; cd "$dir" 2>/dev/null || cd /workspace; exec /bin/sh -i`,
+				"sh", cwd, term.pidFile},
 			stdin, output, true, term)
 		output.close()
 		var exitCode *int64
@@ -281,7 +282,7 @@ func (b *ahpBackend) stopShell(ctx context.Context, principal ahphost.Principal,
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", term.pidFile)
+	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", term.pidFile, "stop")
 }
 
 // ahpTerminalPIDFile is where a terminal's shell records its session in the
@@ -312,26 +313,46 @@ func (b *ahpBackend) ReapTerminals(ctx context.Context, principal ahphost.Princi
 	b.mu.Unlock()
 	for _, channel := range channels {
 		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		argv := append([]string{ahpShell, "-c", ahpStopSessionScript, "sh", ahpTerminalPIDFile(principal.UserKey, channel)}, live...)
+		argv := append([]string{ahpShell, "-c", ahpStopSessionScript, "sh", ahpTerminalPIDFile(principal.UserKey, channel), "reap"}, live...)
 		_ = b.workspaces.run(killCtx, pod, argv...)
 		cancel()
 	}
 }
 
-// ahpStopSessionScript kills every process in the session whose ID the file
-// $1 records, then removes the file. A session ID recorded in any further
-// file, of a terminal still running, is not killed: it was reused. The loop
-// reuses the positional parameters, so the file is kept in a variable first.
-// It reads /proc with shell builtins, so a workspace image needs no more
-// than sh: pkill is not one of its requirements.
-const ahpStopSessionScript = `file=$1
-shift
+// ahpTerminalRecordSession records, in the file $pidfile names, the shell's
+// PID, which names the session it leads, and the shell's start time, which
+// tells that session from a later one that reuses the ID. It replaces the
+// positional parameters.
+const ahpTerminalRecordSession = `read -r stat < /proc/$$/stat; set -- ${stat##*) }; echo "$$ ${20}" > "$pidfile"`
+
+// ahpStopSessionScript kills every process in the session the file $1
+// records, then removes the file. $2 is stop for a terminal of this process,
+// or reap for one an earlier process left behind; further arguments are the
+// files of terminals still running, whose session IDs are never killed.
+//
+// The leader's start time proves the session is the recorded one. A leftover
+// record whose leader is gone has no owner to prove, so it is not reaped. A
+// running terminal's shell can exit before what it started; those processes
+// still hold the session ID, which Linux then cannot reuse, so stop kills
+// them. It reads /proc with shell builtins, so a workspace image needs no
+// more than sh: pkill is not one of its requirements.
+const ahpStopSessionScript = `file=$1 mode=$2
+shift 2
 [ -f "$file" ] || exit 0
-sid=$(cat "$file")
-case "$sid" in ''|*[!0-9]*) exit 0;; esac
+read -r sid started < "$file" || :
+case "$sid" in ''|*[!0-9]*) rm -f "$file"; exit 0;; esac
 for live do
-  if [ "$(cat "$live" 2>/dev/null)" = "$sid" ]; then rm -f "$file"; exit 0; fi
+  read -r other _ < "$live" 2>/dev/null || continue
+  if [ "$other" = "$sid" ]; then rm -f "$file"; exit 0; fi
 done
+if read -r line < "/proc/$sid/stat" 2>/dev/null; then
+  # Fields after the parenthesized command: the start time is the 20th.
+  set -- ${line##*) }
+  if [ -z "$started" ] || [ "${20}" != "$started" ]; then rm -f "$file"; exit 0; fi
+elif [ "$mode" != stop ]; then
+  rm -f "$file"
+  exit 0
+fi
 for stat in /proc/[0-9]*/stat; do
   read -r line < "$stat" 2>/dev/null || continue
   # Fields after the parenthesized command: state, ppid, pgrp, session.
