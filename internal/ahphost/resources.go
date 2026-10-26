@@ -270,7 +270,11 @@ func (h *Host) sweep(ctx context.Context, principal Principal) error {
 	if len(staleTerminals) > 0 {
 		if _, provider, ok := h.cfg.Backends.terminalProvider(); ok {
 			if reaper, ok := provider.(TerminalReaper); ok {
-				reaper.ReapTerminals(ctx, principal, staleTerminals)
+				// Their channels stay until their shells are known stopped:
+				// a failed sweep runs again.
+				if err := reaper.ReapTerminals(ctx, principal, staleTerminals); err != nil {
+					return err
+				}
 			}
 		}
 	}

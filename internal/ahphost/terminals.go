@@ -36,9 +36,9 @@ type TerminalProvider interface {
 
 // TerminalReaper is a TerminalProvider that can stop what terminals an earlier
 // process left behind still run, once their shells are no longer its own. The
-// host calls it before dropping their channels.
+// host calls it before dropping their channels, and keeps them when it fails.
 type TerminalReaper interface {
-	ReapTerminals(ctx context.Context, principal Principal, channels []string)
+	ReapTerminals(ctx context.Context, principal Principal, channels []string) error
 }
 
 // terminalProvider returns the first backend that offers terminals.

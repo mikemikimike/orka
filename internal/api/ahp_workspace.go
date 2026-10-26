@@ -231,6 +231,27 @@ func (w *ahpWorkspaces) ensure(ctx context.Context, principal ahphost.Principal,
 	}
 }
 
+// runningForCleanup returns the user's running workspace Pod, or none when it
+// is gone, being deleted or not running: then nothing it ran still runs. An
+// error means that could not be told.
+func (w *ahpWorkspaces) runningForCleanup(ctx context.Context, principal ahphost.Principal) (*corev1.Pod, error) {
+	if !w.enabled() {
+		return nil, nil
+	}
+	pod := &corev1.Pod{}
+	if err := w.reader().Get(ctx, types.NamespacedName{Namespace: w.namespace, Name: ahpWorkspacePodName(principal.UserKey)}, pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if pod.Labels[ahpWorkspaceUserLabel] != principal.UserKey[:40] || !pod.DeletionTimestamp.IsZero() ||
+		pod.Status.Phase != corev1.PodRunning || !ahpContainerRunning(pod) {
+		return nil, nil
+	}
+	return pod, nil
+}
+
 func ahpContainerRunning(pod *corev1.Pod) bool {
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Name == ahpWorkspaceContainer && status.State.Running != nil {

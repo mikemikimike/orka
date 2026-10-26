@@ -8,6 +8,7 @@ package ahphost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,6 +33,8 @@ type terminalBackend struct {
 	running  map[string]bool
 	disposed []string
 	reaped   []string
+	// reapFails fails that many reaps first.
+	reapFails int
 	// exitAtOnce makes a terminal's shell exit with this code before
 	// CreateTerminal returns.
 	exitAtOnce *int64
@@ -52,10 +55,15 @@ func (b *terminalBackend) CreateTerminal(ctx context.Context, _ Principal, param
 		Lifecycle: ahptypes.TerminalLifecycleState{Value: &ahptypes.TerminalRunningLifecycleState{Status: ahptypes.TerminalLifecycleStatusRunning}}}, nil
 }
 
-func (b *terminalBackend) ReapTerminals(_ context.Context, _ Principal, channels []string) {
+func (b *terminalBackend) ReapTerminals(_ context.Context, _ Principal, channels []string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.reapFails > 0 {
+		b.reapFails--
+		return errors.New("the workspace could not be reached")
+	}
 	b.reaped = append(b.reaped, channels...)
+	return nil
 }
 
 func (b *terminalBackend) DisposeTerminal(_ context.Context, _ Principal, channel string) error {
@@ -187,6 +195,44 @@ func TestALeftoverTerminalIsReapedBeforeItsChannelGoes(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrNotFound)
 	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-terminal:/live")
 	require.NoError(t, err)
+}
+
+// A leftover terminal whose shell could not be stopped keeps its channel, and
+// the next sweep tries again.
+func TestALeftoverTerminalStaysUntilItIsReaped(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	tokens := &TokenService{Store: s}
+	backend := &terminalBackend{fakeBackend: &fakeBackend{}, running: map[string]bool{}, reapFails: 1}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: s, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend.fakeBackend, server: server}
+	minted := env.mint("alice")
+	userKey := UserKey("https://issuer.example", "alice")
+	ctx := ctx5(t)
+	state := ahptypes.TerminalState{Content: []ahptypes.TerminalContentPart{}}
+	require.NoError(t, host.storeChannels(ctx, userKey, map[string]storedChannel{
+		"ahp-terminal:/gone": {Backend: "fake", State: ahptypes.SnapshotState{Terminal: &state}},
+	}))
+
+	first := env.connect(minted.Token)
+	_, err = first.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-terminal:/gone")
+	require.NoError(t, err, "a terminal whose shell could not be stopped keeps its channel")
+
+	second := env.connect(minted.Token)
+	_, err = second.Initialize(ctx, "client-b", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	backend.mu.Lock()
+	require.Equal(t, []string{"ahp-terminal:/gone"}, backend.reaped)
+	backend.mu.Unlock()
+	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-terminal:/gone")
+	require.ErrorIs(t, err, store.ErrNotFound)
 }
 
 func TestTerminalsRouteToTheirBackendInOrder(t *testing.T) {

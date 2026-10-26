@@ -297,11 +297,12 @@ var _ ahphost.TerminalReaper = (*ahpBackend)(nil)
 
 // ReapTerminals stops the shells of terminals an earlier process left running
 // in the user's workspace, which outlives the process. A session ID one of
-// this process's terminals now holds was reused, and is left alone.
-func (b *ahpBackend) ReapTerminals(ctx context.Context, principal ahphost.Principal, channels []string) {
-	pod, ok := b.workspaces.running(ctx, principal)
-	if !ok {
-		return
+// this process's terminals now holds was reused, and is left alone. A failure
+// is returned, so the host keeps the terminals' channels and tries again.
+func (b *ahpBackend) ReapTerminals(ctx context.Context, principal ahphost.Principal, channels []string) error {
+	pod, err := b.workspaces.runningForCleanup(ctx, principal)
+	if err != nil || pod == nil {
+		return err
 	}
 	b.mu.Lock()
 	var live []string
@@ -311,12 +312,14 @@ func (b *ahpBackend) ReapTerminals(ctx context.Context, principal ahphost.Princi
 		}
 	}
 	b.mu.Unlock()
+	var failed error
 	for _, channel := range channels {
 		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		argv := append([]string{ahpShell, "-c", ahpStopSessionScript, "sh", ahpTerminalPIDFile(principal.UserKey, channel), "reap"}, live...)
-		_ = b.workspaces.run(killCtx, pod, argv...)
+		failed = errors.Join(failed, b.workspaces.run(killCtx, pod, argv...))
 		cancel()
 	}
+	return failed
 }
 
 // ahpTerminalRecordSession records, in the file $pidfile names, the shell's
