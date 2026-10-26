@@ -1247,6 +1247,19 @@ func (b *ahpBackend) runPending(ctx context.Context, userKey, session string, em
 			}},
 			ahptypes.StateAction{Value: action},
 		); err != nil {
+			// Neither action reached the client, so the message is still in
+			// its queue: put it back in the stored one, with its sender,
+			// unless a replacement was queued meanwhile.
+			b.mu.Lock()
+			if known {
+				b.pendingAuth[key] = stored
+			}
+			b.mu.Unlock()
+			logSessionUpdate(b.updateSession(ctx, userKey, session, func(s *ahpSession) {
+				if !slices.ContainsFunc(s.Pending, func(p ahpPending) bool { return p.ID == next.ID }) {
+					s.Pending = slices.Insert(s.Pending, 0, next)
+				}
+			}), session, "put a message back on the queue")
 			b.releaseTurn(userKey, session)
 			return
 		}

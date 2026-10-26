@@ -1711,6 +1711,45 @@ func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
 }
 
+// ahpFailingEmitter refuses every action, as a failed journal write does.
+type ahpFailingEmitter struct{}
+
+func (ahpFailingEmitter) Emit(context.Context, string, ...ahptypes.StateAction) error {
+	return errors.New("the journal refused the write")
+}
+
+// A waiting message whose start cannot be shown stays waiting, with its
+// sender, instead of leaving the queue unseen.
+func TestAHPBackendKeepsAMessageWhoseStartCannotBeShown(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	key := ahpPendingKey(alice.UserKey, ahpTestSession, "waiting")
+	env.backend.mu.Lock()
+	env.backend.pendingAuth = map[string]ahpPendingSender{key: {principal: alice, version: "v1"}}
+	env.backend.mu.Unlock()
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		s.Pending = []ahpPending{{ID: "waiting", Kind: string(ahptypes.PendingMessageKindQueued), Version: "v1",
+			Message: ahptypes.Message{Text: "run me", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}}}}
+	}))
+
+	env.backend.runPending(ctx, alice.UserKey, ahpTestSession, ahpFailingEmitter{})
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Len(t, record.Pending, 1)
+	require.Equal(t, "v1", record.Pending[0].Version, "the same message waits")
+	env.backend.mu.Lock()
+	_, kept := env.backend.pendingAuth[key]
+	env.backend.mu.Unlock()
+	require.True(t, kept, "its sender is kept")
+	var tasks corev1alpha1.TaskList
+	require.NoError(t, env.kube.List(ctx, &tasks))
+	require.Empty(t, tasks.Items)
+}
+
 // The bound on waiting messages holds where the queue is written, so messages
 // two connections had both admitted below it cannot grow the queue past it.
 func TestAHPBackendKeepsTheWaitingMessageBound(t *testing.T) {
