@@ -168,8 +168,10 @@ type ahpBackend struct {
 	emitterFor func(ahphost.Principal) ahphost.Emitter
 	// updateTerminals republishes the user's terminal list after a shell exits.
 	updateTerminals func(context.Context, ahphost.Principal) error
-	// cancelBackoff paces the retries of a client's turn cancel.
-	cancelBackoff wait.Backoff
+	// cancelBackoff paces the retries of a client's turn cancel, and
+	// modeBackoff those of storing an approval mode a client chose, which
+	// the connection's next action waits for.
+	cancelBackoff, modeBackoff wait.Backoff
 	// readWorkspace reads a root file URI in the user's running workspace;
 	// running is false when no workspace runs or the URI is not in one.
 	readWorkspace func(ctx context.Context, principal ahphost.Principal, uri string) (result ahptypes.ResourceReadResult, running bool, err error)
@@ -241,6 +243,7 @@ func newAHPBackend(h *Handlers, s store.AHPStore, live *liveevents.Broker, cfg A
 	}
 	b.readWorkspace = b.readWorkspaceFile
 	b.cancelBackoff = wait.Backoff{Duration: time.Second, Factor: 2, Steps: 7, Cap: 30 * time.Second}
+	b.modeBackoff = wait.Backoff{Duration: 50 * time.Millisecond, Factor: 2, Steps: 6, Cap: time.Second}
 	return b
 }
 
@@ -1233,7 +1236,25 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 		if err != nil {
 			return
 		}
-		_ = b.setApprovalMode(ctx, principal.UserKey, record.Session, mode, emit, false)
+		// The client already shows the mode it chose. Store it through a
+		// passing failure; if it still cannot be stored, show the mode the
+		// session's turns run under, so no client shows one they do not.
+		err = retry.OnError(b.modeBackoff, func(error) bool { return true }, func() error {
+			return b.setApprovalMode(ctx, principal.UserKey, record.Session, mode, emit, false)
+		})
+		if err == nil {
+			return
+		}
+		log.Error(err, "store the AHP session's approval mode", "session", record.Session)
+		var current ahpSession
+		if b.getRecord(ctx, principal.UserKey, ahpRecordSession, record.Session, &current) != nil {
+			return
+		}
+		value, _ := json.Marshal(current.ApprovalMode)
+		_ = emit.Emit(ctx, record.Session, ahptypes.StateAction{Value: &ahptypes.SessionConfigChangedAction{
+			Type:   ahptypes.ActionTypeSessionConfigChanged,
+			Config: map[string]json.RawMessage{ahpConfigApprovalMode: value, ahpConfigEffectiveMode: value},
+		}})
 	}
 }
 

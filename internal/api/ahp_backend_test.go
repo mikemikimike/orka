@@ -1718,6 +1718,54 @@ func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
 }
 
+// ahpConfigEmitter records the session config changes the backend shows.
+type ahpConfigEmitter struct {
+	mu      sync.Mutex
+	configs []map[string]json.RawMessage
+}
+
+func (e *ahpConfigEmitter) Emit(_ context.Context, _ string, actions ...ahptypes.StateAction) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, action := range actions {
+		if changed, ok := action.Value.(*ahptypes.SessionConfigChangedAction); ok {
+			e.configs = append(e.configs, changed.Config)
+		}
+	}
+	return nil
+}
+
+// An approval mode a client chose that cannot be stored is shown as the mode
+// the session's turns still run under, so no client shows a mode they do not.
+func TestAHPBackendShowsTheApprovalModeTurnsRunUnder(t *testing.T) {
+	env := newAHPTestEnv(t)
+	env.backend.modeBackoff = wait.Backoff{Duration: time.Millisecond, Factor: 1, Steps: 3}
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	failing := &ahpFailingStore{AHPStore: env.backend.store, fail: func(record store.AHPRecord) bool {
+		return bytes.Contains(record.Value, []byte(`"approvalMode":"manual"`))
+	}}
+	failing.armed.Store(true)
+	env.backend.store = failing
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	shown := &ahpConfigEmitter{}
+	env.backend.HandleClientAction(ctx, alice, ahpTestSession, ahptypes.StateAction{Value: &ahptypes.SessionConfigChangedAction{
+		Type: ahptypes.ActionTypeSessionConfigChanged, Config: map[string]json.RawMessage{ahpConfigApprovalMode: json.RawMessage(`"manual"`)},
+	}}, shown)
+
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Equal(t, ahpApprovalAllowAll, record.ApprovalMode)
+	shown.mu.Lock()
+	defer shown.mu.Unlock()
+	require.NotEmpty(t, shown.configs, "the client is shown the mode turns run under")
+	last := shown.configs[len(shown.configs)-1]
+	require.JSONEq(t, `"allow-all"`, string(last[ahpConfigApprovalMode]))
+	require.JSONEq(t, `"allow-all"`, string(last[ahpConfigEffectiveMode]))
+}
+
 // ahpFailingEmitter refuses every action, as a failed journal write does.
 type ahpFailingEmitter struct{}
 
