@@ -2311,7 +2311,9 @@ func (s *Server) buildTerminalEventLocked(
 	switch result.Outcome {
 	case acp.PromptOutcomeCompleted:
 		text, _ := prompt.terminalResultText()
-		text = prompt.redactor.replace(text)
+		// The whole answer gets the pattern redaction streamed text gets, as
+		// well as the session's exact values: it is stored as the result.
+		text = prompt.redactor.redactText(text)
 		if strings.TrimSpace(text) == "" {
 			text = "Prompt completed without textual output."
 		}
