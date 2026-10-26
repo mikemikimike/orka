@@ -8,6 +8,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -24,17 +26,69 @@ import (
 type ahpRecordingEmitter struct {
 	mu   sync.Mutex
 	data []string
+	// refuse fails every emit while set, as a journal that cannot be written.
+	refuse bool
 }
 
 func (e *ahpRecordingEmitter) Emit(_ context.Context, _ string, actions ...ahptypes.StateAction) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.refuse {
+		return errors.New("the journal refused the write")
+	}
 	for _, action := range actions {
 		if data, ok := action.Value.(*ahptypes.TerminalDataAction); ok {
 			e.data = append(e.data, data.Data)
 		}
 	}
 	return nil
+}
+
+// Output the journal could not take is kept and sent once it can, in order,
+// instead of being dropped after the shell was told it was written.
+func TestAHPTerminalOutputKeepsWhatTheJournalRefused(t *testing.T) {
+	emit := &ahpRecordingEmitter{refuse: true}
+	out := newAHPTerminalOutput(context.Background(), emit, "ahp-terminal:/t", nil)
+	n, err := out.Write([]byte("first "))
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+	time.Sleep(5 * ahpTerminalFlushEvery)
+	_, err = out.Write([]byte("second"))
+	require.NoError(t, err)
+	emit.mu.Lock()
+	require.Empty(t, emit.data)
+	emit.refuse = false
+	emit.mu.Unlock()
+	require.Eventually(t, func() bool {
+		emit.mu.Lock()
+		defer emit.mu.Unlock()
+		return strings.Join(emit.data, "") == "first second"
+	}, time.Second, 5*time.Millisecond, "the refused output arrives once the journal takes it")
+}
+
+// Past the hold bound the shell's output waits for the journal, and the wait
+// ends with the terminal.
+func TestAHPTerminalOutputHoldsOnlySoMuch(t *testing.T) {
+	emit := &ahpRecordingEmitter{refuse: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	out := newAHPTerminalOutput(ctx, emit, "ahp-terminal:/t", nil)
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := out.Write([]byte(strings.Repeat("x", ahpTerminalHoldMax+1)))
+		wrote <- err
+	}()
+	select {
+	case err := <-wrote:
+		t.Fatalf("a write past the hold bound returned while the journal refused it: %v", err)
+	case <-time.After(10 * ahpTerminalFlushEvery):
+	}
+	cancel()
+	select {
+	case err := <-wrote:
+		require.ErrorIs(t, err, io.ErrClosedPipe)
+	case <-time.After(time.Second):
+		t.Fatal("the held write outlived its terminal")
+	}
 }
 
 func TestAHPTerminalOutputNeverSplitsACharacter(t *testing.T) {

@@ -30,8 +30,11 @@ const (
 	ahpTerminalScheme     = "ahp-terminal:"
 	ahpTerminalFlushEvery = 20 * time.Millisecond
 	ahpTerminalChunkMax   = 32 << 10
-	ahpTerminalInputMax   = 64 << 10
-	ahpTerminalsPerUser   = 32
+	// ahpTerminalHoldMax bounds the output kept while the journal cannot
+	// take it; past it the shell's output waits.
+	ahpTerminalHoldMax  = 8 * ahpTerminalChunkMax
+	ahpTerminalInputMax = 64 << 10
+	ahpTerminalsPerUser = 32
 )
 
 // ahpTerminal is one shell in a user's workspace.
@@ -531,15 +534,40 @@ func (o *ahpTerminalOutput) Write(p []byte) (int, error) {
 	o.pending = append(o.pending, p...)
 	if len(o.pending) >= ahpTerminalChunkMax {
 		o.flushLocked()
-	} else if o.timer == nil {
-		o.timer = time.AfterFunc(ahpTerminalFlushEvery, func() {
+	} else {
+		o.scheduleLocked()
+	}
+	// Output the journal could not take yet stays pending. Past the hold
+	// bound the shell waits for it, rather than output being dropped or held
+	// without end.
+	for len(o.pending) > ahpTerminalHoldMax {
+		o.mu.Unlock()
+		select {
+		case <-o.ctx.Done():
 			o.mu.Lock()
-			defer o.mu.Unlock()
-			o.timer = nil
-			o.flushLocked()
-		})
+			return 0, io.ErrClosedPipe
+		case <-time.After(ahpTerminalFlushEvery):
+		}
+		o.mu.Lock()
+		if o.closed {
+			return 0, io.ErrClosedPipe
+		}
+		o.flushLocked()
 	}
 	return len(p), nil
+}
+
+// scheduleLocked flushes the pending output soon, once. o.mu must be held.
+func (o *ahpTerminalOutput) scheduleLocked() {
+	if o.timer != nil || o.closed {
+		return
+	}
+	o.timer = time.AfterFunc(ahpTerminalFlushEvery, func() {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		o.timer = nil
+		o.flushLocked()
+	})
 }
 
 func (o *ahpTerminalOutput) flushLocked() {
@@ -588,10 +616,15 @@ func (o *ahpTerminalOutput) flushLocked() {
 			}
 		}
 		data := strings.ToValidUTF8(string(o.pending[:cut]), "\uFFFD")
+		if o.emit.Emit(o.ctx, o.channel, ahptypes.StateAction{Value: &ahptypes.TerminalDataAction{Type: ahptypes.ActionTypeTerminalData, Data: data}}) != nil {
+			// The journal did not take it: it stays pending, already
+			// redacted, and nothing after it goes first.
+			o.scheduleLocked()
+			return
+		}
 		o.pending = o.pending[cut:]
 		ready -= cut
 		o.keepRecent(data, tokens)
-		_ = o.emit.Emit(o.ctx, o.channel, ahptypes.StateAction{Value: &ahptypes.TerminalDataAction{Type: ahptypes.ActionTypeTerminalData, Data: data}})
 	}
 }
 
