@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -217,6 +218,51 @@ func TestPermissionHoldIsCancelledWhenThePromptEnds(t *testing.T) {
 		}
 		if states := f.liveStates(t); len(states) != 2 || states[1] != liveevents.ApprovalCancelled {
 			t.Fatalf("live states = %v, want Pending then Cancelled", states)
+		}
+	})
+}
+
+// refusingCancelStore fails the first cancellations it is asked to record.
+type refusingCancelStore struct {
+	*storetest.FakeExecutionEventStore
+	mu      sync.Mutex
+	refuse  int
+	refused int
+}
+
+func (s *refusingCancelStore) AppendExecutionEventIfAbsent(
+	ctx context.Context, event *store.ExecutionEvent, dedupeKey string,
+) (*store.ExecutionEvent, bool, error) {
+	s.mu.Lock()
+	if event.Type == events.ExecutionEventTypeApprovalCancelled && s.refused < s.refuse {
+		s.refused++
+		s.mu.Unlock()
+		return nil, false, errors.New("the store refused the write")
+	}
+	s.mu.Unlock()
+	return s.FakeExecutionEventStore.AppendExecutionEventIfAbsent(ctx, event, dedupeKey)
+}
+
+// A cancellation the store refuses at first is recorded once it can be, so
+// the durable request does not stay pending with no hold behind it.
+func TestPermissionHoldRecordsACancellationTheStoreRefusedAtFirst(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newPermissionHoldFixture(t)
+		refusing := &refusingCancelStore{FakeExecutionEventStore: f.events, refuse: 2}
+		f.dispatcher.EventStore = refusing
+		holdCtx, endPrompt := context.WithCancel(context.Background())
+		f.resolve(t, context.Background(), holdCtx)
+		synctest.Wait()
+		endPrompt()
+		f.dispatcher.permissionHoldWG.Wait()
+		refusing.mu.Lock()
+		refused := refusing.refused
+		refusing.mu.Unlock()
+		if refused != 2 {
+			t.Fatalf("refused %d cancellations, want 2", refused)
+		}
+		if approval := f.approval(t); approval.Status != approvals.StatusCancelled {
+			t.Fatalf("approval status = %s, want cancelled", approval.Status)
 		}
 	})
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
@@ -28,6 +30,10 @@ const (
 	// acpPermissionHoldMinimum is the shortest hold worth asking a person for.
 	acpPermissionHoldMinimum = time.Second
 )
+
+// acpPermissionCancelBackoff paces the retries of recording a cancelled
+// permission request, all within acpApprovalSettleTimeout.
+var acpPermissionCancelBackoff = wait.Backoff{Duration: 100 * time.Millisecond, Factor: 2, Steps: 7, Cap: 2 * time.Second}
 
 // acpPermissionHold is a permission request held for the Task's requester.
 type acpPermissionHold struct {
@@ -237,8 +243,15 @@ func (d *ACPDispatcher) answerPermissionHold(ctx context.Context, send acpPermis
 func (d *ACPDispatcher) cancelPermissionHold(ctx context.Context, hold *acpPermissionHold) {
 	settleCtx, cancel := acpApprovalDetachedContext(ctx, acpApprovalSettleTimeout)
 	defer cancel()
-	err := d.appendPermissionApprovalEvent(settleCtx, hold, events.ExecutionEventTypeApprovalCancelled, "cancelled",
-		"Permission request cancelled", hold.terminalPayload("the prompt ended before the request was answered"))
+	// No hold remains after this, so a passing store failure would leave the
+	// durable request pending until it expires: it is retried within the
+	// settle time. A conflict means the request already ended.
+	err := retry.OnError(acpPermissionCancelBackoff, func(err error) bool {
+		return !errors.Is(err, store.ErrConflict) && settleCtx.Err() == nil
+	}, func() error {
+		return d.appendPermissionApprovalEvent(settleCtx, hold, events.ExecutionEventTypeApprovalCancelled, "cancelled",
+			"Permission request cancelled", hold.terminalPayload("the prompt ended before the request was answered"))
+	})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		logf.FromContext(ctx).Error(err, "record cancelled permission request",
 			"namespace", hold.namespace, "task", hold.taskName, "approval", hold.approvalID)
