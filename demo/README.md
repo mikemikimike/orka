@@ -19,6 +19,7 @@ terminal: a pull request, an object that survived deletion, a refusal.
 | 12 | [`12-efficiency`](12-efficiency) | Dana's platform team runs twenty customer replies and one fix twice: on a hosted model, then with Vekil choosing between hosted and local CPU models. Compare checked outcomes, elapsed time, and estimated cost. |
 | 13 | [`13-fibey-hosted-approval`](13-fibey-hosted-approval) | Demo 11's pump alert goes to two Fibeys at once: one hosted by Orka on AKS, one a Microsoft Foundry hosted agent behind Orka's Foundry bridge. One policy holds both work orders for Lee, and each receipt returns to its own Task. |
 | 14 | [`14-fibey-alert-flow`](14-fibey-alert-flow) | A pump alert arrives through Orka's gateway. Orka's coordinator runs a sensor-analysis job on AKS and hands its findings to Fibey in Microsoft Foundry; Mark approves the work order, and the answer, tokens, and estimated cost come back on record. |
+| 15 | [`15-copilot-app-dynamo`](15-copilot-app-dynamo) | The Copilot app with Kubernetes as its backend. A developer joins with `orka connect github` and runs a session on their agent host in the cluster; then Qwen3 Coder on NVIDIA Dynamo becomes the model, and an agent next to it opens the pull request. |
 
 Projects 6 and 7 are hackathon videos with their own instructions and are
 excluded from the narrated standalone series. See [`narrated/`](narrated/) for
