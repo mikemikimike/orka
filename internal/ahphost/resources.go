@@ -37,7 +37,8 @@ type ResourceWatcher interface {
 	// WatchResources reports changes under params.Uri through changed until ctx
 	// ends. Once it is watching it calls changed with no changes, and it
 	// returns ErrResourceNotFound for anything the principal may not see.
-	WatchResources(ctx context.Context, principal Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange)) error
+	// Changes changed could not record are reported again.
+	WatchResources(ctx context.Context, principal Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange) error) error
 }
 
 // SessionConfigResolver resolves the configuration a new session would take.
@@ -146,16 +147,16 @@ func (c *conn) createResourceWatch(ctx context.Context, raw json.RawMessage) (an
 	}
 	started := make(chan error, 1)
 	go func() {
-		err := watcher.WatchResources(watchCtx, c.principal, params, func(changes []ahptypes.ResourceChange) {
+		err := watcher.WatchResources(watchCtx, c.principal, params, func(changes []ahptypes.ResourceChange) error {
 			select {
 			case started <- nil:
 			default:
 			}
 			if len(changes) == 0 {
-				return
+				return nil
 			}
 			batch, _ := json.Marshal(map[string]any{"items": changes})
-			_ = c.host.apply(watchCtx, c.principal, channel, []ahptypes.StateAction{{Value: &ahptypes.ResourceWatchChangedAction{
+			return c.host.apply(watchCtx, c.principal, channel, []ahptypes.StateAction{{Value: &ahptypes.ResourceWatchChangedAction{
 				Type: ahptypes.ActionTypeResourceWatchChanged, Changes: batch,
 			}}}, nil)
 		})

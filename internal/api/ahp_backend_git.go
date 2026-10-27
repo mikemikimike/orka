@@ -17,10 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -87,18 +83,7 @@ func (b *ahpBackend) defaultBranch(ctx context.Context, namespace, repo string) 
 
 // gitToken returns the namespace's repository credential, if configured.
 func (b *ahpBackend) gitToken(ctx context.Context, namespace string) string {
-	if b.gitCredential(ctx, namespace) == nil {
-		return ""
-	}
-	var reader client.Reader = b.h.client
-	if b.h.apiReader != nil {
-		reader = b.h.apiReader
-	}
-	secret := &corev1.Secret{}
-	if err := reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: b.cfg.GitCredentialSecret}, secret); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(secret.Data[ahpGitCredentialSecretKey]))
+	return strings.TrimSpace(string(b.gitSecretToken(ctx, namespace)))
 }
 
 // ahpAdvertisedHead finds the branch HEAD points at in a smart HTTP ref

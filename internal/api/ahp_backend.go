@@ -1430,6 +1430,15 @@ func (b *ahpBackend) ResolveSessionConfig(ctx context.Context, principal ahphost
 
 // gitCredential returns the user's repository credential, if configured.
 func (b *ahpBackend) gitCredential(ctx context.Context, namespace string) *corev1alpha1.WorkspaceCredentialReference {
+	if len(b.gitSecretToken(ctx, namespace)) == 0 {
+		return nil
+	}
+	return &corev1alpha1.WorkspaceCredentialReference{Name: b.cfg.GitCredentialSecret, Key: ahpGitCredentialSecretKey}
+}
+
+// gitSecretToken reads the token of the namespace's repository credential
+// Secret, or nothing when none is configured or it cannot be read.
+func (b *ahpBackend) gitSecretToken(ctx context.Context, namespace string) []byte {
 	if b.cfg.GitCredentialSecret == "" {
 		return nil
 	}
@@ -1446,8 +1455,5 @@ func (b *ahpBackend) gitCredential(ctx context.Context, namespace string) *corev
 		}
 		return nil
 	}
-	if len(secret.Data[ahpGitCredentialSecretKey]) == 0 {
-		return nil
-	}
-	return &corev1alpha1.WorkspaceCredentialReference{Name: b.cfg.GitCredentialSecret, Key: ahpGitCredentialSecretKey}
+	return secret.Data[ahpGitCredentialSecretKey]
 }

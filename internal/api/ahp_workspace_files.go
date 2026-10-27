@@ -208,7 +208,7 @@ func (b *ahpBackend) ListResource(ctx context.Context, principal ahphost.Princip
 
 // WatchResources polls the user's workspace for changes under a file or
 // directory, filtered by the watch's include and exclude patterns.
-func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange)) error {
+func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange) error) error {
 	root, ok := ahpWorkspacePath(params.Uri)
 	if !ok || !b.workspaces.enabled() {
 		return ahphost.ErrResourceNotFound
@@ -239,7 +239,7 @@ func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Princ
 		return stamps
 	}
 	last := poll()
-	changed(nil)
+	_ = changed(nil)
 	ticker := time.NewTicker(ahpWatchInterval)
 	defer ticker.Stop()
 	for {
@@ -268,8 +268,10 @@ func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Princ
 				changes = append(changes, ahptypes.ResourceChange{Uri: ahpDirectoryURI(file), Type: ahptypes.ResourceChangeTypeDeleted})
 			}
 		}
-		last = current
-		changed(changes)
+		// Changes that could not be recorded are compared again next time.
+		if changed(changes) == nil {
+			last = current
+		}
 	}
 }
 

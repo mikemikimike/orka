@@ -101,6 +101,66 @@ func TestAHPBranchForkScript(t *testing.T) {
 	}
 }
 
+// The scripts run in the workspace; run them here against real repositories.
+// A checkout already at a project's path is reused only for its repository,
+// and a session's branch a disposed session left unpublished is reused.
+func TestAHPCloneAndWorktreeScripts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "init.defaultBranch=main"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	script := func(body string, args ...string) (string, error) {
+		out, err := exec.Command("/bin/sh", append([]string{"-c", body, "sh"}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+	root := t.TempDir()
+	seed := t.TempDir()
+	git(seed, "init")
+	require.NoError(t, os.WriteFile(filepath.Join(seed, "a"), []byte("a\n"), 0o600))
+	git(seed, "add", "a")
+	git(seed, "commit", "-m", "a")
+	remotes := map[string]string{}
+	for _, name := range []string{"one", "other"} {
+		remotes[name] = filepath.Join(root, name+".git")
+		require.NoError(t, os.MkdirAll(remotes[name], 0o755))
+		git(remotes[name], "init", "--bare")
+		git(seed, "push", "--quiet", remotes[name], "main")
+	}
+	checkout, clones := filepath.Join(root, "src", "octo", "widgets"), filepath.Join(root, ".clones")
+
+	_, err := script(ahpCloneScript, checkout, remotes["one"], clones)
+	require.NoError(t, err)
+	_, err = script(ahpCloneScript, checkout, remotes["one"], clones)
+	require.NoError(t, err, "the project's own checkout is reused")
+	// A URL rewrite the person set up does not hide the checkout's origin.
+	git(checkout, "config", "url."+remotes["other"]+".insteadOf", remotes["one"])
+	_, err = script(ahpCloneScript, checkout, remotes["one"], clones)
+	require.NoError(t, err, "a rewritten origin is still the project's")
+	git(checkout, "config", "--unset", "url."+remotes["other"]+".insteadOf")
+	out, err := script(ahpCloneScript, checkout, remotes["other"], clones)
+	require.Error(t, err, "another repository's checkout is not reused")
+	require.Contains(t, out, "holds a checkout of another repository")
+
+	worktree := filepath.Join(root, "worktrees", "octo", "widgets", "feature")
+	_, err = script(ahpWorktreeScript, checkout, worktree, "feature", "main")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "b"), []byte("b\n"), 0o600))
+	git(worktree, "add", "b")
+	git(worktree, "commit", "-m", "b")
+	kept := git(worktree, "rev-parse", "HEAD")
+	// Disposing of the session removes its worktree; its branch stays.
+	git(checkout, "worktree", "remove", "--force", worktree)
+	out, err = script(ahpWorktreeScript, checkout, worktree, "feature", "main")
+	require.NoError(t, err, out)
+	require.Equal(t, kept, git(worktree, "rev-parse", "HEAD"), "the unpublished branch is reused as it was")
+}
+
 // The script runs in the workspace; run it here against real repositories.
 func TestAHPHoldsWorkScript(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

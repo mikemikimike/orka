@@ -105,6 +105,8 @@ type ahpWorkspaces struct {
 	providing map[string]chan struct{}
 	// writeToken installs a token in a workspace; nil writes it with exec.
 	writeToken func(ctx context.Context, pod *corev1.Pod, token string) error
+	// removeToken removes a workspace's token; nil removes it with exec.
+	removeToken func(ctx context.Context, pod *corev1.Pod) error
 	// collecting are the workspaces an idle collection is deciding about.
 	collecting map[string]chan struct{}
 	// git serializes each user's clones and worktree changes, which share
@@ -489,15 +491,27 @@ func (w *ahpWorkspaces) ensureProject(ctx context.Context, principal ahphost.Pri
 // clone puts a project's checkout at its path only once it is complete, so
 // an interrupted clone never looks like a checkout. Callers hold the git lock.
 func (w *ahpWorkspaces) clone(ctx context.Context, pod *corev1.Pod, project ahpProject) error {
-	return w.runWithin(ctx, ahpWorkspaceGitTimeout, pod, ahpShell, "-c", `set -e
-[ -d "$1/.git" ] && exit 0
+	return w.runWithin(ctx, ahpWorkspaceGitTimeout, pod, ahpShell, "-c", ahpCloneScript,
+		"sh", project.Path, project.URL, ahpWorkspaceRoot+"/.clones")
+}
+
+// ahpCloneScript clones the repository $2 at the path $1 through a staging
+// directory under $3. A checkout already at the path is used only when it is
+// of that repository: a removed project leaves its checkout, and a repository
+// of the same owner and name on another host has the same path. The origin is
+// compared as stored, before any url.*.insteadOf rewriting.
+const ahpCloneScript = `set -e
+if [ -d "$1/.git" ]; then
+  [ "$(git -C "$1" config --get remote.origin.url)" = "$2" ] && exit 0
+  echo "$1 holds a checkout of another repository; remove it to use $2 there" >&2
+  exit 1
+fi
 if [ -e "$1" ]; then echo "$1 is not a git checkout" >&2; exit 1; fi
 mkdir -p "$(dirname "$1")" "$3"
 staging=$(mktemp -d "$3/clone.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 git clone --quiet --filter=blob:none -- "$2" "$staging/checkout"
-mv "$staging/checkout" "$1"`, "sh", project.Path, project.URL, ahpWorkspaceRoot+"/.clones")
-}
+mv "$staging/checkout" "$1"`
 
 // ahpWorktreePath is a session's worktree: unique per project and branch, and
 // a project's branch belongs to one session.
@@ -506,7 +520,8 @@ func ahpWorktreePath(project ahpProject, branch string) string {
 }
 
 // ensureWorktree adds a session's worktree on its branch: the published
-// branch when it exists, otherwise a new branch from the base.
+// branch when it exists, then a local one an earlier session left, otherwise
+// a new branch from the base.
 func (w *ahpWorkspaces) ensureWorktree(ctx context.Context, principal ahphost.Principal, pod *corev1.Pod, project ahpProject, record ahpSession) error {
 	return w.withGit(ctx, principal, func(ctx context.Context) error { return w.worktree(ctx, pod, project, record) })
 }
@@ -520,7 +535,13 @@ func (w *ahpWorkspaces) worktree(ctx context.Context, pod *corev1.Pod, project a
 	if base == "" {
 		base = project.DefaultBranch
 	}
-	return w.run(ctx, pod, ahpShell, "-c", `set -e
+	return w.run(ctx, pod, ahpShell, "-c", ahpWorktreeScript, "sh", project.Path, ahpWorktreePath(project, record.Branch), record.Branch, base)
+}
+
+// ahpWorktreeScript adds, in the checkout $1, a worktree at $2 on the branch
+// $3: the published branch, a local one a disposed session left unpublished,
+// or a new one from the base branch $4.
+const ahpWorktreeScript = `set -e
 cd "$1"
 [ -e "$2/.git" ] && exit 0
 mkdir -p "$(dirname "$2")"
@@ -528,13 +549,14 @@ if git ls-remote --exit-code --heads origin "$3" >/dev/null 2>&1; then
   git fetch --quiet origin "+refs/heads/$3:refs/remotes/origin/$3"
   git worktree add --quiet -B "$3" "$2" "origin/$3"
   git -C "$2" branch --quiet --set-upstream-to="origin/$3" "$3"
+elif git show-ref --verify --quiet "refs/heads/$3"; then
+  git worktree add --quiet "$2" "$3"
 elif [ -n "$4" ]; then
   git fetch --quiet origin "+refs/heads/$4:refs/remotes/origin/$4"
   git worktree add --quiet -b "$3" "$2" "origin/$4"
 else
   git worktree add --quiet -b "$3" "$2"
-fi`, "sh", project.Path, ahpWorktreePath(project, record.Branch), record.Branch, base)
-}
+fi`
 
 // follow fast-forwards a session's worktree to what the last turn published.
 // A branch with local commits or conflicting local changes is left alone.

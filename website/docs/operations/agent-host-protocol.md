@@ -212,7 +212,9 @@ token. The same operations are available over the API; see the
   Orka looks up a repository's default branch on github.com only, so a project on another
   host needs the session's `baseBranch` set by the client. Removing a project takes it off
   the list and leaves its checkout; a project that sessions still use cannot be removed
-  until they are deleted.
+  until they are deleted. The workspace checks a project out at `/workspace/src/<owner>/<name>`
+  and does not reuse a checkout of another repository there, such as one of the same owner
+  and name on another host: remove it in a terminal first.
 - **Sessions.** A session runs in an Orka Session, which is bound to one runtime profile.
   When the person picks another model, the session moves to a new Orka Session that
   starts with the conversation so far as context. A branch a turn already published

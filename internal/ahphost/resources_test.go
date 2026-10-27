@@ -35,11 +35,11 @@ func (b *resourceBackend) ListResource(_ context.Context, _ Principal, uri strin
 	return []ahptypes.DirectoryEntry{{Name: "a.go", Type: "file"}, {Name: "pkg", Type: "directory"}}, nil
 }
 
-func (b *resourceBackend) WatchResources(ctx context.Context, _ Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange)) error {
+func (b *resourceBackend) WatchResources(ctx context.Context, _ Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange) error) error {
 	if params.Uri != "file:///work" {
 		return ErrResourceNotFound
 	}
-	changed(nil)
+	_ = changed(nil)
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -48,9 +48,67 @@ func (b *resourceBackend) WatchResources(ctx context.Context, _ Principal, param
 			close(b.released)
 			return nil
 		case <-ticker.C:
-			changed([]ahptypes.ResourceChange{{Uri: "file:///work/a.go", Type: ahptypes.ResourceChangeTypeUpdated}})
+			_ = changed([]ahptypes.ResourceChange{{Uri: "file:///work/a.go", Type: ahptypes.ResourceChangeTypeUpdated}})
 		}
 	}
+}
+
+// retryingWatchBackend reports one change once told to, again on every tick
+// until it is recorded, as a poller that keeps its baseline does.
+type retryingWatchBackend struct {
+	*extendedBackend
+	report   chan struct{}
+	failures atomic.Int32
+}
+
+func (b *retryingWatchBackend) WatchResources(ctx context.Context, _ Principal, _ ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange) error) error {
+	_ = changed(nil)
+	select {
+	case <-b.report:
+	case <-ctx.Done():
+		return nil
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for changed([]ahptypes.ResourceChange{{Uri: "file:///work/a.go", Type: ahptypes.ResourceChangeTypeUpdated}}) != nil {
+		b.failures.Add(1)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+	<-ctx.Done()
+	return nil
+}
+
+// A change a watch cannot record is reported as not recorded, so the watcher
+// reports it again instead of losing it.
+func TestAWatchChangeThatCannotBeRecordedIsReportedAgain(t *testing.T) {
+	env, extended := newExtendedEnv(t)
+	backend := &retryingWatchBackend{extendedBackend: extended, report: make(chan struct{})}
+	env.host.cfg.Backends.mu.Lock()
+	env.host.cfg.Backends.backends = []SessionBackend{backend}
+	env.host.cfg.Backends.mu.Unlock()
+	failing := &failingSessionStore{AHPStore: env.host.cfg.Store}
+	env.host.cfg.Store = failing
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err := client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	var watch ahptypes.CreateResourceWatchResult
+	require.NoError(t, client.Request(ctx, "createResourceWatch", ahptypes.CreateResourceWatchParams{Channel: rootChannel, Uri: "file:///work"}, &watch))
+	_, sub, err := client.Subscribe(ctx, watch.Channel)
+	require.NoError(t, err)
+
+	failing.failActions.Store(true)
+	close(backend.report)
+	require.Eventually(t, func() bool { return backend.failures.Load() > 0 }, 5*time.Second, 10*time.Millisecond,
+		"the watcher was never told the change was not recorded")
+	failing.failActions.Store(false)
+	changed, ok := nextAction(t, sub).Action.Value.(*ahptypes.ResourceWatchChangedAction)
+	require.True(t, ok)
+	require.JSONEq(t, `{"items":[{"uri":"file:///work/a.go","type":"updated"}]}`, string(changed.Changes))
 }
 
 func (b *resourceBackend) ResolveSessionConfig(_ context.Context, _ Principal, params ahptypes.ResolveSessionConfigParams) (ahptypes.ResolveSessionConfigResult, error) {

@@ -93,6 +93,34 @@ func TestAHPWorkspaceTokenIsKnownBeforeItIsWritten(t *testing.T) {
 		w.tokensFor(principal.UserKey))
 }
 
+// A token the person no longer holds that cannot be removed from their
+// workspace is tried again on the next request, not counted as removed.
+func TestAHPWorkspaceRetriesATokenItCouldNotRemove(t *testing.T) {
+	b := &ahpBackend{now: time.Now, cfg: AHPBackendConfig{
+		RepositoryCredential: func(context.Context, string, string, string) (string, error) {
+			return "", errors.New("the link is gone")
+		},
+	}}
+	var removals atomic.Int32
+	removeErr := errors.New("exec failed")
+	w := &ahpWorkspaces{
+		b: b, namespace: "orka-ahp-workspaces", image: "example.com/git@sha256:" + ahpHash("x"),
+		rest: &rest.Config{}, clientset: k8sfake.NewClientset(),
+		removeToken: func(context.Context, *corev1.Pod) error { removals.Add(1); return removeErr },
+	}
+	principal := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-1"}}
+
+	w.provideCredential(context.Background(), principal, pod)
+	w.provideCredential(context.Background(), principal, pod)
+	require.Equal(t, int32(2), removals.Load(), "a failed removal is tried again")
+
+	removeErr = nil
+	w.provideCredential(context.Background(), principal, pod)
+	w.provideCredential(context.Background(), principal, pod)
+	require.Equal(t, int32(3), removals.Load(), "a removal that worked counts")
+}
+
 func TestAHPWorkspaceCredentialInstallsOnceWhileRequestsOverlap(t *testing.T) {
 	var fetches atomic.Int32
 	b := &ahpBackend{now: time.Now, cfg: AHPBackendConfig{

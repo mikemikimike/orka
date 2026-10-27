@@ -88,12 +88,19 @@ func (w *ahpWorkspaces) provideCredential(ctx context.Context, principal ahphost
 
 // installCredential fetches the person's token and writes it to their
 // workspace. It reports when the attempt counts as made, and whether to
-// record it: a token that did not arrive is tried again on the next request.
+// record it: a token that did not arrive, or one that could not be removed,
+// is tried again on the next request.
 func (w *ahpWorkspaces) installCredential(ctx context.Context, principal ahphost.Principal, pod *corev1.Pod,
 	fetch func(ctx context.Context, namespace, issuer, subject string) (string, error), now time.Time) (time.Time, bool) {
 	token, err := fetch(ctx, principal.Namespace, principal.Issuer, principal.Subject)
 	if err != nil || strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\n\r") {
-		_ = w.run(ctx, pod, "rm", "-f", ahpGitTokenFile)
+		remove := w.removeToken
+		if remove == nil {
+			remove = func(ctx context.Context, pod *corev1.Pod) error { return w.run(ctx, pod, "rm", "-f", ahpGitTokenFile) }
+		}
+		if remove(ctx, pod) != nil {
+			return time.Time{}, false
+		}
 		if err != nil {
 			// Ask again in half the usual time: the person may link their
 			// account at any moment.
