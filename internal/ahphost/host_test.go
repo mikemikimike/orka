@@ -501,14 +501,30 @@ func TestInitializePingAndVersionNegotiation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0.9.0", result.ProtocolVersion)
 
-	future := env.connect(minted.Token)
-	_, err = future.Initialize(ctx, "client-c", []string{"2.0.0"}, nil)
-	require.Equal(t, ahptypes.ErrorCodeUnsupportedProtocolVersion, rpcCode(t, err))
-	select {
-	case <-future.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the connection must close after an unsupported version")
+	// The host answers, then closes. A client may report either first, so read
+	// the host's frames in the order it sent them.
+	future, err := ahpws.Connect(ctx, env.wsURL(minted.Token))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = future.Close(context.Background()) })
+	request, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": ahptypes.InitializeParams{Channel: rootChannel, ClientId: "client-c", ProtocolVersions: []string{"2.0.0"}}})
+	require.NoError(t, err)
+	require.NoError(t, future.Send(ctx, ahp.NewTextMessage(string(request))))
+	answer, err := future.Recv(ctx)
+	require.NoError(t, err)
+	raw, _, err := answer.Bytes()
+	require.NoError(t, err)
+	var response struct {
+		Error *ahptypes.JsonRpcError `json:"error"`
 	}
+	require.NoError(t, json.Unmarshal(raw, &response))
+	require.NotNil(t, response.Error, string(raw))
+	require.Equal(t, ahptypes.ErrorCodeUnsupportedProtocolVersion, response.Error.Code)
+	// The connection then ends, with or without a close frame: the host does
+	// not wait out the close handshake.
+	_, err = future.Recv(ctx)
+	require.Error(t, err, "the connection must close after an unsupported version")
+	require.NotErrorIs(t, err, context.DeadlineExceeded, "the connection must close after an unsupported version")
 
 	early := env.connect(minted.Token)
 	_, _, err = early.Subscribe(ctx, rootChannel)
