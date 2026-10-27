@@ -475,6 +475,11 @@ type PermissionRequestedEvent struct {
 	Title      string              `json:"title"`
 	Options    []PermissionOption  `json:"options"`
 	ExpiresAt  time.Time           `json:"expiresAt"`
+	// RawInput is the input of the call the request is for, as a JSON value,
+	// redacted. Like a tool call's, it is a live-update field, sent only to a
+	// controller that asked for live updates, so a person deciding sees what
+	// they decide on.
+	RawInput json.RawMessage `json:"rawInput,omitempty"`
 }
 
 func (e PermissionRequestedEvent) Validate(eventTime time.Time) error {
@@ -493,6 +498,14 @@ func (e PermissionRequestedEvent) Validate(eventTime time.Time) error {
 	}
 	if err := validateBoundedString("permission title", e.Title, true, 1024); err != nil {
 		return err
+	}
+	if len(e.RawInput) > 0 {
+		if len(e.RawInput) > MaxToolCallRawInputBytes {
+			return fmt.Errorf("permission raw input exceeds %d bytes", MaxToolCallRawInputBytes)
+		}
+		if !json.Valid(e.RawInput) {
+			return fmt.Errorf("permission raw input must be JSON")
+		}
 	}
 	if len(e.Options) == 0 || len(e.Options) > 16 {
 		return fmt.Errorf("permission option count must be in range 1..16")

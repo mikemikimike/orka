@@ -553,3 +553,45 @@ func TestDigitOnlyCredentialsAreRedactedInNumericJSON(t *testing.T) {
 		t.Fatalf("scrubbed raw input = %s", event.Update.ToolCall.RawInput)
 	}
 }
+
+// A live prompt's permission request carries the call's input, redacted, so
+// the person deciding sees what they decide on; any other prompt's does not.
+func TestLivePermissionRequestsCarryTheRedactedCallInput(t *testing.T) {
+	credential := "sk-live-permission-credential-0123456789abcdef"
+	toolCall := `{"toolCallId":"call_1","title":"Write","kind":"edit","status":"pending",` +
+		`"rawInput":{"file_path":"/workspace/README.md","content":"key ` + credential + `"}}`
+	for _, live := range []bool{true, false} {
+		t.Run(fmt.Sprintf("live=%v", live), func(t *testing.T) {
+			server, state, prompt := newLiveTestPrompt(t, credential)
+			prompt.live = live
+			state.permissions = map[harnessv2.PermissionRequestID]permissionState{}
+			event, err := server.mapRuntimeEvent(state, prompt, acp.PromptEvent{
+				Type: acp.PromptEventPermissionRequested, Timestamp: time.Now().UTC(),
+				Permission: &acp.PermissionRequestEvent{RequestID: "permission-1", Request: acp.RequestPermissionRequest{
+					ToolCall: json.RawMessage(toolCall),
+					Options:  []acp.PermissionOption{{OptionID: "allow_once", Name: "Allow once", Kind: "allow_once"}},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event == nil || event.PermissionRequested == nil {
+				t.Fatalf("event = %#v, want a permission request", event)
+			}
+			raw := event.PermissionRequested.RawInput
+			if !live {
+				if raw != nil {
+					t.Fatalf("raw input = %s, want none without live updates", raw)
+				}
+				return
+			}
+			var input map[string]string
+			if err := json.Unmarshal(raw, &input); err != nil {
+				t.Fatalf("raw input %s: %v", raw, err)
+			}
+			if input["file_path"] != "/workspace/README.md" || strings.Contains(string(raw), credential) || !strings.HasPrefix(input["content"], "key ") {
+				t.Fatalf("raw input = %s, want the call's input with the credential redacted", raw)
+			}
+		})
+	}
+}

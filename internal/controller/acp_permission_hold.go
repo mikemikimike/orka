@@ -47,6 +47,7 @@ type acpPermissionHold struct {
 	toolCallID  string
 	toolName    string
 	title       string
+	rawInput    json.RawMessage
 	options     []harnessv2.PermissionOption
 	allow       harnessv2.PermissionDecision
 	reject      harnessv2.PermissionDecision
@@ -138,8 +139,9 @@ func (d *ACPDispatcher) planPermissionDecision(
 		namespace: task.Namespace, taskName: task.Name, taskUID: string(task.UID), sessionName: taskSessionName(task),
 		agentName: taskAgentName(task), requestID: permission.RequestID, toolCallID: permission.ToolCallID,
 		toolName: permission.ToolName, title: events.RedactExecutionEventText(permission.Title),
-		options: append([]harnessv2.PermissionOption(nil), permission.Options...),
-		allow:   decision, reject: reject, createdAt: now, expiresAt: expiresAt,
+		rawInput: append(json.RawMessage(nil), permission.RawInput...),
+		options:  append([]harnessv2.PermissionOption(nil), permission.Options...),
+		allow:    decision, reject: reject, createdAt: now, expiresAt: expiresAt,
 	}
 	requestDigest, err := acpDomainDigest(acpPermissionApprovalDomain, struct {
 		Namespace string                             `json:"namespace"`
@@ -334,6 +336,7 @@ func (d *ACPDispatcher) publishPermissionApproval(hold *acpPermissionHold, state
 		Namespace: hold.namespace, Task: hold.taskName, TaskUID: hold.taskUID,
 		Approval: &liveevents.Approval{
 			ID: hold.approvalID, State: state, ToolCallID: hold.toolCallID, ToolName: hold.toolName, Title: hold.title,
+			Input:   append(json.RawMessage(nil), hold.rawInput...),
 			Options: append([]harnessv2.PermissionOption(nil), hold.options...), ExpiresAt: hold.expiresAt, OptionID: optionID,
 		},
 	})

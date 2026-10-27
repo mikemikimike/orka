@@ -12,6 +12,7 @@ MIT License - see LICENSE file for details.
 package liveevents
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -61,8 +62,11 @@ type Approval struct {
 	ToolCallID string
 	ToolName   string
 	Title      string
-	Options    []harnessv2.PermissionOption
-	ExpiresAt  time.Time
+	// Input is the input of the call the request is for, as a JSON value,
+	// redacted, when the runtime reported one. It is never stored.
+	Input     json.RawMessage
+	Options   []harnessv2.PermissionOption
+	ExpiresAt time.Time
 	// OptionID is the chosen option of a resolved approval.
 	OptionID string
 }

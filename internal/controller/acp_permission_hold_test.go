@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -159,6 +160,41 @@ func TestPermissionHoldAppliesTheRequestersDecision(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A held request shows the person the call's input live, and never stores it.
+func TestPermissionHoldShowsTheCallInputLiveOnly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newPermissionHoldFixture(t)
+		f.event.PermissionRequested.RawInput = json.RawMessage(`{"command":"go test ./internal/secret-plan"}`)
+		f.resolve(t, context.Background(), context.Background())
+		synctest.Wait()
+		var pending *liveevents.Approval
+		select {
+		case event := <-f.live.C():
+			pending = event.Approval
+		default:
+		}
+		if pending == nil || pending.State != liveevents.ApprovalPending ||
+			string(pending.Input) != `{"command":"go test ./internal/secret-plan"}` {
+			t.Fatalf("live approval = %+v, want the pending request with the call's input", pending)
+		}
+		listed, err := f.events.ListExecutionEvents(context.Background(), store.ExecutionEventFilter{
+			Namespace: f.task.Namespace, StreamType: events.ExecutionEventStreamTypeTask, StreamID: f.task.Name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range listed {
+			if strings.Contains(string(event.Content), "secret-plan") {
+				t.Fatalf("stored %s event carries the call's input: %s", event.Type, event.Content)
+			}
+		}
+		if err := f.decide(t, f.approval(t).ID, events.ExecutionEventTypeApprovalApproved); err != nil {
+			t.Fatal(err)
+		}
+		f.dispatcher.permissionHoldWG.Wait()
+	})
 }
 
 func TestPermissionHoldRefusesAnUnansweredRequestBeforeTheRuntimeTimesOut(t *testing.T) {

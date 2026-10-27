@@ -154,6 +154,11 @@ it into the RuntimeSession identity, so a change recreates the session rather
 than reusing a provider launched the other way. Only the built-in runtimes
 advertise it; Tasks that need it are rejected for external runtimes.
 
+When the controller asks for live updates, a permission request may also carry
+`rawInput`: the input of the call it is for, as a JSON value, redacted and
+bounded like a tool call's. The controller shows it to the person deciding and
+never stores it.
+
 ## Brokered tool approvals
 
 Qualified AgentKit and Foundry adapters advertise

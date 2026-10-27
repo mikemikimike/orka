@@ -2189,6 +2189,9 @@ func (s *Server) mapRuntimeEvents(state *sessionState, prompt *promptState, even
 			return nil, err
 		}
 		prompt.redactor.redactPermission(permission)
+		if prompt.live {
+			permission.RawInput = prompt.redactor.permissionRawInput(event.Permission.Request.ToolCall)
+		}
 		name, known := prompt.toolCallNames[permission.ToolCallID]
 		if known {
 			if permission.ToolName != "" && permission.ToolName != name {

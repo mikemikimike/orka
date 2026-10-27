@@ -96,6 +96,9 @@ type ahpToolCall struct {
 	approval, ended string
 	// output is the running call's text output so far, bounded.
 	output string
+	// input is the call's input as last reported, by its permission request
+	// or its updates; a confirmation shows it.
+	input json.RawMessage
 }
 
 func ahpTurnKey(userKey, session string) string { return userKey + "\x00" + session }
@@ -596,6 +599,11 @@ func (t *ahpTurn) readyTool(id string, call *ahpToolCall, title string, input js
 // tool advances one tool call through start, ready and complete.
 func (t *ahpTurn) tool(update *harnessv2.ToolCallUpdate) {
 	call := t.startTool(update.ToolCallID, ahpToolName(update), ahpRelativeTitle(update.Title))
+	if len(update.RawInput) > 0 {
+		// Kept for a confirmation: a runtime that does not describe the call
+		// in its permission request may have reported it here first.
+		call.input = update.RawInput
+	}
 	// Later updates usually carry no title; keep the one the call started with.
 	title := ahpRelativeTitle(update.Title)
 	if title == "" {
@@ -803,11 +811,14 @@ func (t *ahpTurn) onApproval(approval *liveevents.Approval) {
 			return
 		}
 		call.ready, call.approval = true, approval.ID
+		if len(approval.Input) > 0 {
+			call.input = approval.Input
+		}
 		title := approval.Title
 		if title == "" {
 			title = call.title
 		}
-		t.askForConfirmation(id, title)
+		t.askForConfirmation(id, title, call.input)
 	default:
 		call := t.tools[id]
 		if call == nil {
@@ -827,16 +838,22 @@ func (t *ahpTurn) onApproval(approval *liveevents.Approval) {
 	}
 }
 
-// askForConfirmation shows a tool call as waiting for the person's decision.
-func (t *ahpTurn) askForConfirmation(id, title string) {
-	t.chat(ahptypes.StateAction{Value: &ahptypes.ChatToolCallReadyAction{
+// askForConfirmation shows a tool call as waiting for the person's decision,
+// with the call's input when it is known, so they see what they decide on.
+func (t *ahpTurn) askForConfirmation(id, title string, input json.RawMessage) {
+	ready := &ahptypes.ChatToolCallReadyAction{
 		Type: ahptypes.ActionTypeChatToolCallReady, TurnId: t.id, ToolCallId: id,
 		InvocationMessage: ahptypes.StringOrMarkdown{Plain: &title}, ConfirmationTitle: &ahptypes.StringOrMarkdown{Plain: &title},
 		Options: []ahptypes.ConfirmationOption{
 			{Id: ahpOptionApprove, Label: "Allow", Kind: ahptypes.ConfirmationOptionKindApprove},
 			{Id: ahpOptionDeny, Label: "Deny", Kind: ahptypes.ConfirmationOptionKindDeny},
 		},
-	}})
+	}
+	if len(input) > 0 {
+		inline := string(input)
+		ready.ToolInput = &ahptypes.ToolInput{Inline: &inline}
+	}
+	t.chat(ahptypes.StateAction{Value: ready})
 }
 
 func ahpOptionAllows(approval *liveevents.Approval) bool {
@@ -886,7 +903,7 @@ func (t *ahpTurn) confirm(ctx context.Context, principal ahphost.Principal, tool
 		return
 	}
 	call.approval = approval
-	t.askForConfirmation(toolCallID, call.title)
+	t.askForConfirmation(toolCallID, call.title, call.input)
 }
 
 // recordDiffs keeps the reported file edits and lists them in the session's

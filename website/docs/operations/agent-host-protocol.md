@@ -233,10 +233,11 @@ token. The same operations are available over the API; see the
   changed since it forked from the base branch, including files changed with shell
   commands. Large and binary files show a note instead of their contents.
 - **Approvals.** With `manual` approvals, Orka holds every permission request its policy
-  would allow and asks the person; policy still refuses what it refuses. With
-  `allow-all`, policy decides alone. `assisted` behaves like `manual`. A client's
-  approve-all toggle (`extensions/setSessionApproveAll`) selects `allow-all` or `manual`.
-  A changed mode applies from the session's next turn.
+  would allow and asks the person, showing the call's input, such as the file and content
+  to write or the command to run, with known secrets redacted. Policy still refuses what
+  it refuses. With `allow-all`, policy decides alone. `assisted` behaves like `manual`. A
+  client's approve-all toggle (`extensions/setSessionApproveAll`) selects `allow-all` or
+  `manual`. A changed mode applies from the session's next turn.
 - **New-session form.** `resolveSessionConfig` returns the approval mode and branches a
   new session would take, with the project's default branch filled in.
 

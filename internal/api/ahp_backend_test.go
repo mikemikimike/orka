@@ -231,7 +231,17 @@ func (e *ahpTestEnv) publish(task string, update *harnessv2.UpdateEvent) {
 	e.live.Publish(liveevents.Event{Namespace: ahpTestNamespace, Task: task, Runtime: &harnessv2.Event{Type: harnessv2.EventUpdate, Update: update}})
 }
 
-func waitForActionType(t *testing.T, sub *ahp.Subscription, want string) {
+// ahpReadyInput is the tool input a toolCallReady action shows.
+func ahpReadyInput(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var ready ahptypes.ChatToolCallReadyAction
+	require.NoError(t, json.Unmarshal(raw, &ready))
+	require.NotNil(t, ready.ToolInput, "the confirmation shows the call's input")
+	require.NotNil(t, ready.ToolInput.Inline)
+	return *ready.ToolInput.Inline
+}
+
+func waitForActionType(t *testing.T, sub *ahp.Subscription, want string) json.RawMessage {
 	t.Helper()
 	timeout := time.After(10 * time.Second)
 	for {
@@ -244,7 +254,7 @@ func waitForActionType(t *testing.T, sub *ahp.Subscription, want string) {
 				}
 				_ = json.Unmarshal(raw, &head)
 				if head.Type == want {
-					return
+					return raw
 				}
 			}
 		case <-timeout:
@@ -342,7 +352,9 @@ func TestAHPBackendRunsATurnAsATask(t *testing.T) {
 	env.live.Publish(liveevents.Event{Namespace: ahpTestNamespace, Task: taskName, Approval: &liveevents.Approval{
 		ID: "approval-1", State: liveevents.ApprovalPending, ToolCallID: "tool-1", ToolName: "bash", Title: "Run tests",
 	}})
-	waitForActionType(t, chatSub, "chat/toolCallReady")
+	// The request carries no input; the confirmation shows the one the call
+	// reported while it waited.
+	require.JSONEq(t, `{"command":"go test ./..."}`, ahpReadyInput(t, waitForActionType(t, chatSub, "chat/toolCallReady")))
 	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatToolCallConfirmedAction{
 		Type: ahptypes.ActionTypeChatToolCallConfirmed, TurnId: "turn-1", ToolCallId: "tool-1", Approved: true,
 	}})
@@ -604,8 +616,10 @@ func TestAHPBackendDecidesAsTheConfirmingConnection(t *testing.T) {
 	waitForActionType(t, chatSub, "chat/toolCallReady")
 	env.live.Publish(liveevents.Event{Namespace: ahpTestNamespace, Task: taskName, Approval: &liveevents.Approval{
 		ID: "approval-1", State: liveevents.ApprovalPending, ToolCallID: "tool-1", ToolName: "bash", Title: "Run",
+		Input: json.RawMessage(`{"command":"make release"}`),
 	}})
-	waitForActionType(t, chatSub, "chat/toolCallReady")
+	// The confirmation shows what the request asks to run.
+	require.JSONEq(t, `{"command":"make release"}`, ahpReadyInput(t, waitForActionType(t, chatSub, "chat/toolCallReady")))
 
 	_, err = c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatToolCallConfirmedAction{
 		Type: ahptypes.ActionTypeChatToolCallConfirmed, TurnId: "turn-1", ToolCallId: "tool-1", Approved: false,

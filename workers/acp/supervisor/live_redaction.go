@@ -228,6 +228,25 @@ func (r *credentialRedactor) redactPermission(permission *harnessv2.PermissionRe
 	}
 }
 
+// permissionRawInput returns the redacted input of the call a permission
+// request is for, or nothing when it is not a JSON value within the bound.
+func (r *credentialRedactor) permissionRawInput(toolCall json.RawMessage) json.RawMessage {
+	var call struct {
+		RawInput json.RawMessage `json:"rawInput"`
+	}
+	if json.Unmarshal(toolCall, &call) != nil {
+		return nil
+	}
+	raw := json.RawMessage(bytes.TrimSpace(call.RawInput))
+	if len(raw) == 0 || string(raw) == acpJSONNull || len(raw) > harnessv2.MaxToolCallRawInputBytes || !json.Valid(raw) {
+		return nil
+	}
+	if raw = r.redactRawInput(raw); len(raw) > harnessv2.MaxToolCallRawInputBytes {
+		return nil
+	}
+	return raw
+}
+
 // redactText applies exact then pattern redaction to a complete value.
 func (r *credentialRedactor) redactText(value string) string {
 	if value == "" {
