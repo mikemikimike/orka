@@ -176,10 +176,10 @@ AHP connection tokens are made for URLs that stay pasted in an app:
 - **Owned by one person.** A token acts as the person who minted it, in the namespace it was
   minted in, with no more authority than they had. Only its owner can list or revoke it.
 - **Bound to sign-in.** At connect, and every 30 seconds while connected, Orka checks that the
-  token's owner could still sign in: an OIDC-minted token needs the configured issuer and a
-  subject `controller.oidc.allowedSubjects` still admits, and a token minted from a context
-  token needs its issuer still configured. Removing someone from the allowlist cuts off
-  their tokens, even ones minted before. Disabling a person only in the identity provider
+  token's owner could still sign in: the token needs the configured OIDC issuer, a subject
+  `controller.oidc.allowedSubjects` still admits, and the namespace a sign-in gets now,
+  `controller.oidc.namespace`. Removing someone from the allowlist, or moving that
+  namespace, cuts off their tokens, even ones minted before. Disabling a person only in the identity provider
   does not; revoke their tokens too.
 - **Stored as hashes.** Orka keeps only a SHA-256 hash of each token and never logs one. A
   lost URL cannot be shown again: mint a new one.

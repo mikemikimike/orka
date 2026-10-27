@@ -875,7 +875,13 @@ func (b *ahpBackend) CreateSession(ctx context.Context, principal ahphost.Princi
 		BaseBranch: baseBranch, Runtime: req.Provider, ApprovalMode: mode, Branch: branch, WorkDir: workDir,
 	}
 	record.OrkaSession = ahpOrkaSessionName(principal.UserKey, record, 0)
+	// The session record, which claims the branch and holds the project, is
+	// written last, so a failure leaves at most the chat's random-keyed record.
+	if err := b.putRecord(ctx, principal.UserKey, ahpRecordChat, chat, req.Session); err != nil {
+		return nil, err
+	}
 	if err := b.putRecord(ctx, principal.UserKey, ahpRecordSession, req.Session, record); err != nil {
+		_ = b.store.DeleteAHPRecord(context.WithoutCancel(ctx), principal.UserKey, ahpRecordChat, chat)
 		return nil, err
 	}
 	if b.workspaces.enabled() {
@@ -886,9 +892,6 @@ func (b *ahpBackend) CreateSession(ctx context.Context, principal ahphost.Princi
 			_ = b.workspaces.ensureWorktree(setupCtx, principal, pod, project, record)
 			cancel()
 		}
-	}
-	if err := b.putRecord(ctx, principal.UserKey, ahpRecordChat, chat, req.Session); err != nil {
-		return nil, err
 	}
 	now := b.now().UTC().Format(time.RFC3339Nano)
 	title := project.Owner + "/" + project.Name

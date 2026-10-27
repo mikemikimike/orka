@@ -8,6 +8,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1226,18 +1227,57 @@ func TestAHPBackendRunsMessagesSentDuringATurn(t *testing.T) {
 	require.Empty(t, state.QueuedMessages)
 }
 
-// ahpFailingStore fails the session writes fail selects while armed.
+// ahpFailingStore fails the record writes fail selects while armed, of kind
+// when it is set and of sessions otherwise.
 type ahpFailingStore struct {
 	store.AHPStore
 	armed atomic.Bool
+	kind  string
 	fail  func(store.AHPRecord) bool
 }
 
 func (s *ahpFailingStore) PutAHPRecord(ctx context.Context, record store.AHPRecord) error {
-	if s.armed.Load() && record.Kind == ahpRecordSession && s.fail(record) {
+	kind := cmp.Or(s.kind, ahpRecordSession)
+	if s.armed.Load() && record.Kind == kind && s.fail(record) {
 		return errors.New("the store refused the write")
 	}
 	return s.AHPStore.PutAHPRecord(ctx, record)
+}
+
+// A session whose records cannot all be written leaves none behind, so its
+// branch can be claimed again and its project removed.
+func TestAHPBackendSessionThatCannotBeRecordedLeavesNothing(t *testing.T) {
+	for _, kind := range []string{ahpRecordChat, ahpRecordSession} {
+		t.Run(kind, func(t *testing.T) {
+			env := newAHPTestEnv(t)
+			failing := &ahpFailingStore{AHPStore: env.backend.store, kind: kind, fail: func(store.AHPRecord) bool { return true }}
+			env.backend.store = failing
+			c := env.connect("alice")
+			ctx := ahpCtx(t)
+			var cloned struct {
+				Project map[string]any `json:"project"`
+			}
+			require.NoError(t, c.Request(ctx, ahpExtensionCloneProject, map[string]string{"url": ahpTestRepo + ".git"}, &cloned))
+			alice := ahphost.UserKey("https://issuer.example", "alice")
+			provider := "copilot"
+			create := func(session string) error {
+				return c.Request(ctx, "createSession", ahptypes.CreateSessionParams{
+					Channel: session, Provider: &provider, WorkingDirectories: []string{ahpTestDir},
+					Config: map[string]json.RawMessage{"branch": json.RawMessage(`"feature"`)},
+				}, nil)
+			}
+
+			failing.armed.Store(true)
+			require.Error(t, create(ahpTestSession))
+			failing.armed.Store(false)
+			for _, kind := range []string{ahpRecordChat, ahpRecordSession} {
+				records, err := env.backend.store.ListAHPRecords(ctx, alice, kind)
+				require.NoError(t, err)
+				require.Empty(t, records, "no %s record is left behind", kind)
+			}
+			require.NoError(t, create("ahp-session:/two"), "the branch is free for another session")
+		})
+	}
 }
 
 // ahpFailingScanStore refuses to list sessions while armed, and counts the

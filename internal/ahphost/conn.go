@@ -893,7 +893,8 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	}
 	committed = true
 	c.host.notifyRoot(c.principal.UserKey, methodSessionAdded, ahptypes.SessionAddedParams{Channel: rootChannel, Summary: summary})
-	return c.host.updateActiveSessions(ctx, c.principal)
+	c.host.updateActiveSessions(ctx, c.principal)
+	return nil
 }
 
 // takeBackSession removes what a failed createSession made: the catalog
@@ -957,7 +958,8 @@ func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
 		return err
 	}
 	c.host.notifyRoot(c.principal.UserKey, methodSessionRemoved, ahptypes.SessionRemovedParams{Channel: rootChannel, Session: session})
-	return c.host.updateActiveSessions(ctx, c.principal)
+	c.host.updateActiveSessions(ctx, c.principal)
+	return nil
 }
 
 // dispatchAction validates a client action, lets its session's backend
@@ -1047,15 +1049,20 @@ func (c *conn) dispatchAction(ctx context.Context, raw json.RawMessage) {
 }
 
 // updateActiveSessions journals the user's session count on the root channel.
-func (h *Host) updateActiveSessions(ctx context.Context, principal Principal) error {
+// It runs once a session is created or disposed of, which a failure here must
+// not report as failed: the count is logged instead, and the next session
+// created or disposed of counts again.
+func (h *Host) updateActiveSessions(ctx context.Context, principal Principal) {
 	sessions, err := h.cfg.Store.ListAHPSessions(ctx, principal.UserKey)
-	if err != nil {
-		return err
+	if err == nil {
+		action := ahptypes.StateAction{Value: &ahptypes.RootActiveSessionsChangedAction{
+			Type: ahptypes.ActionTypeRootActiveSessionsChanged, ActiveSessions: int64(len(sessions)),
+		}}
+		err = h.apply(ctx, principal, rootChannel, []ahptypes.StateAction{action}, nil)
 	}
-	action := ahptypes.StateAction{Value: &ahptypes.RootActiveSessionsChangedAction{
-		Type: ahptypes.ActionTypeRootActiveSessionsChanged, ActiveSessions: int64(len(sessions)),
-	}}
-	return h.apply(ctx, principal, rootChannel, []ahptypes.StateAction{action}, nil)
+	if err != nil {
+		h.cfg.Logger.Error(err, "update the AHP active session count")
+	}
 }
 
 // detectDialect picks the per-client translation layer. Only the default

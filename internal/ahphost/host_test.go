@@ -198,6 +198,49 @@ func TestASessionThatCannotBeCataloguedIsTakenBack(t *testing.T) {
 	}
 }
 
+// failingSessionListStore refuses to list sessions while armed.
+type failingSessionListStore struct {
+	store.AHPStore
+	armed atomic.Bool
+}
+
+func (s *failingSessionListStore) ListAHPSessions(ctx context.Context, userKey string) ([]store.AHPSession, error) {
+	if s.armed.Load() {
+		return nil, errors.New("the store refused the read")
+	}
+	return s.AHPStore.ListAHPSessions(ctx, userKey)
+}
+
+// A session count that cannot be updated does not fail the creation or
+// disposal it follows: both are already done, and a retry would be refused.
+func TestASessionCountThatCannotBeUpdatedFailsNothing(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingSessionListStore{AHPStore: s}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	userKey := UserKey("https://issuer.example", "alice")
+
+	failing.armed.Store(true)
+	createSession(t, client, "ahp-session:/one")
+	_, err = s.GetAHPSession(ctx, userKey, "ahp-session:/one")
+	require.NoError(t, err, "the session is kept")
+	require.NoError(t, client.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: "ahp-session:/one"}, nil))
+	_, err = s.GetAHPSession(ctx, userKey, "ahp-session:/one")
+	require.ErrorIs(t, err, store.ErrNotFound, "the session is gone")
+}
+
 // An authorized action the host cannot journal is rejected, and the backend
 // is told, so it can let go of what it held for the action.
 func TestAnActionThatCannotBeAppliedIsReleased(t *testing.T) {
