@@ -870,11 +870,14 @@ func (b *JobBuilder) buildEnvVarsWithOptions(ctx context.Context, task *corev1al
 	envVars = setControllerEnvValue(envVars, workerenv.AutonomousMode, "")
 	envVars = setControllerEnvValue(envVars, workerenv.ResolvedApprovals, "")
 	envVars = setControllerEnvValue(envVars, workerenv.ApprovalRequiredTools, "")
-	containerTaskRuntimeClasses := ""
 	if task.Spec.Type == corev1alpha1.TaskTypeAI {
-		containerTaskRuntimeClasses = workerenv.JoinCSV(b.ContainerTaskRuntimeClasses)
+		// Pinned even when empty: a container's env takes precedence over its
+		// envFrom, so an Agent Secret key of this name cannot supply an
+		// allowlist the operator never set.
+		envVars = setControllerEnvValue(envVars, workerenv.ContainerTaskRuntimeClasses, workerenv.JoinCSV(b.ContainerTaskRuntimeClasses))
+	} else {
+		envVars = setControllerEnv(envVars, workerenv.ContainerTaskRuntimeClasses, "")
 	}
-	envVars = setControllerEnv(envVars, workerenv.ContainerTaskRuntimeClasses, containerTaskRuntimeClasses)
 	envVars = setTransactionCredentialAuthorizationEnv(
 		envVars,
 		task.Spec.Transaction,

@@ -163,6 +163,17 @@ func TestBuildPassesContainerTaskRuntimeClassAllowlistOnlyToAIWorkers(t *testing
 	if got, ok := findEnvVar(job.Spec.Template.Spec.Containers[0].Env, workerenv.ContainerTaskRuntimeClasses); ok {
 		t.Fatalf("container Task env %s = %q, want it removed", workerenv.ContainerTaskRuntimeClasses, got.Value)
 	}
+
+	// An empty allowlist is pinned, not removed: env wins over envFrom, so a
+	// key of this name in an Agent Secret cannot enable runtime classes.
+	builder.ContainerTaskRuntimeClasses = nil
+	job, err = builder.Build(context.Background(), envSourceTestTask(corev1alpha1.TaskTypeAI, "", spoofed), nil, nil)
+	if err != nil {
+		t.Fatalf("Build(ai, empty allowlist) error = %v", err)
+	}
+	if got, ok := findEnvVar(job.Spec.Template.Spec.Containers[0].Env, workerenv.ContainerTaskRuntimeClasses); !ok || got.Value != "" {
+		t.Fatalf("AI worker %s with an empty allowlist = %#v, found=%v; want it pinned to an empty value", workerenv.ContainerTaskRuntimeClasses, got, ok)
+	}
 }
 
 // The workspace preparation init container holds the clone credential; Git
