@@ -74,6 +74,8 @@ type UsageTask struct {
 	PhaseObservedAt time.Time          `json:"-"`
 	PhaseAttempt    int32              `json:"-"`
 	GatewayOwner    *UsageGatewayOwner `json:"gatewayOwner,omitempty"`
+	// Requester is retained for access checks only; reports omit it.
+	Requester *UsageRequester `json:"requester,omitempty"`
 }
 
 // UsageGatewayOwner retains the immutable access boundary after Task cleanup.
@@ -82,6 +84,13 @@ type UsageGatewayOwner struct {
 	NamespaceUID string `json:"namespaceUID"`
 	Name         string `json:"name"`
 	UID          string `json:"uid"`
+}
+
+// UsageRequester retains who requested a Task, so access that depends on
+// the requester survives Task cleanup.
+type UsageRequester struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
 }
 
 // UsageTaskPhase retains the lifecycle timestamp in ObservedAt for ordering

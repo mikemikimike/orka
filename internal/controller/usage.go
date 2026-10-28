@@ -61,6 +61,9 @@ func usageTaskSnapshot(task *corev1alpha1.Task) store.UsageTask {
 		result.GatewayOwner = &store.UsageGatewayOwner{Namespace: owner.GatewayNamespace, NamespaceUID: owner.NamespaceUID,
 			Name: owner.GatewayName, UID: owner.GatewayUID}
 	}
+	if requester := task.Spec.RequestedBy; requester != nil {
+		result.Requester = &store.UsageRequester{Issuer: requester.Issuer, Subject: requester.Subject}
+	}
 	return result
 }
 

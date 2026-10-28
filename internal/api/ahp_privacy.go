@@ -18,6 +18,7 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/labels"
+	"github.com/orka-agents/orka/internal/store"
 )
 
 // An Agent Host Protocol turn belongs to the person who sent it. People
@@ -201,4 +202,17 @@ func ahpSessionHiddenBy(ui *UserInfo, session string, owners map[string]*corev1a
 	}
 	owner := owners[session]
 	return owner == nil || !ahpOwns(ui, owner)
+}
+
+// ahpUsageHidden reports retained usage in an AHP session that the person may
+// not see. While a turn's Task still continues the session, that Task's
+// requester decides, as for the session itself. Once the session's Tasks are
+// cleaned up, the requester retained with the usage decides, so people keep
+// seeing their own usage.
+func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task) bool {
+	if owners[task.SessionName] != nil {
+		return ahpSessionHiddenBy(ui, task.SessionName, owners)
+	}
+	requester := task.Requester
+	return requester == nil || requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
 }

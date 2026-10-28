@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,54 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, hidden, sessionHidden, subject)
 	}
+}
+
+// Usage outlives the Tasks of AHP turns: once a session's Tasks are cleaned up,
+// the requester retained with each Task's usage decides who sees it, and while
+// a turn's Task continues the session, its requester still decides.
+func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
+	const namespace = "default"
+	bobsTurn := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-bob-t1", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, RequestedBy: &corev1alpha1.RequestedBy{Issuer: "https://issuer.example", Subject: "bob"},
+			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-live"},
+		},
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	handlers := NewHandlers(HandlersConfig{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(bobsTurn).Build()})
+	requester := func(subject string) *store.UsageRequester {
+		return &store.UsageRequester{Issuer: "https://issuer.example", Subject: subject}
+	}
+	rows := []store.UsageTask{
+		{Namespace: namespace, TaskUID: "alice-gone", SessionName: "ahp-gone", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "bob-gone", SessionName: "ahp-gone", Requester: requester("bob")},
+		{Namespace: namespace, TaskUID: "unknown-gone", SessionName: "ahp-gone"},
+		{Namespace: namespace, TaskUID: "other-issuer", SessionName: "ahp-gone", Requester: &store.UsageRequester{Issuer: "https://other.example", Subject: "alice"}},
+		{Namespace: namespace, TaskUID: "alice-in-bobs", SessionName: "ahp-live", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
+	}
+	hidden := func(caller *UserInfo) map[string]bool {
+		data := store.UsageData{Tasks: slices.Clone(rows)}
+		app := fiber.New()
+		app.Get("/", func(c fiber.Ctx) error {
+			c.Locals(UserInfoContextKey, caller)
+			return handlers.filterUsageTaskAccess(c, &data, time.Now())
+		})
+		response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+		require.NoError(t, err)
+		require.NoError(t, response.Body.Close())
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		return data.HiddenTasks
+	}
+	require.Equal(t, map[string]bool{
+		"default/bob-gone": true, "default/unknown-gone": true, "default/other-issuer": true, "default/alice-in-bobs": true,
+	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
+	require.Equal(t, map[string]bool{
+		"default/alice-gone": true, "default/unknown-gone": true, "default/other-issuer": true,
+	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
+	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }
 
 // A page of sessions leaves out another person's AHP sessions, and its

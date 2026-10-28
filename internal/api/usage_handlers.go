@@ -258,7 +258,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 				}
 				ahpOwners[task.Namespace] = owners
 			}
-			if ahpSessionHiddenBy(ui, task.SessionName, owners) {
+			if ahpUsageHidden(ui, task, owners) {
 				data.HiddenTasks[key] = true
 				if task.WorkID != "" {
 					hiddenWorks[task.WorkID] = true

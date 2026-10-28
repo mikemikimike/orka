@@ -182,6 +182,9 @@ func mergeUsageTaskSnapshot(task *store.UsageTask, existing store.UsageTask) err
 	if existing.GatewayOwner != nil {
 		task.GatewayOwner = existing.GatewayOwner
 	}
+	if existing.Requester != nil {
+		task.Requester = existing.Requester
+	}
 	task.StartedAt = existing.StartedAt
 	if task.WorkID == "" {
 		task.WorkID = existing.WorkID
