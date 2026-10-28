@@ -33,7 +33,7 @@ spec:
 ```
 
 ```bash
-orka task download example-screenshot example.png
+orka task download -n orka-system example-screenshot example.png
 ```
 
 Put the script in `args` and leave `command` empty. The image's entrypoint is Orka's
@@ -116,16 +116,21 @@ spec:
       const { chromium } = require("playwright");
       (async () => {
         const browser = await chromium.launch();
-        const page = await browser.newPage();
-        await page.goto(process.env.PAGE_URL, { timeout: 30000 });
-        await page.screenshot({ path: "/tmp/artifacts/page.png", fullPage: true });
-        const title = await page.title();
-        await browser.close();
-        console.log(JSON.stringify({
-          version: 1, outcome: "completed", summary: `Title: ${title}`,
-          data: { url: process.env.PAGE_URL, title },
-          artifacts: [{ filename: "page.png", contentType: "image/png" }],
-        }));
+        try {
+          const page = await browser.newPage();
+          await page.goto(process.env.PAGE_URL, { timeout: 30000 });
+          await page.screenshot({ path: "/tmp/artifacts/page.png", fullPage: true });
+          const title = await page.title();
+          console.log(JSON.stringify({
+            version: 1, outcome: "completed", summary: `Title: ${title}`,
+            data: { url: process.env.PAGE_URL, title },
+            artifacts: [{ filename: "page.png", contentType: "image/png" }],
+          }));
+        } finally {
+          // Always close the browser: an open browser keeps Node running until
+          // the soft deadline, which would replace this result with unknown_outcome.
+          await browser.close();
+        }
       })().catch((err) => {
         console.log(JSON.stringify({ version: 1, outcome: "blocked", summary: String(err) }));
         process.exitCode = 1;
@@ -207,9 +212,13 @@ state.
 - **No default egress policy.** Worker Pods have no Orka NetworkPolicy, so a browser Task can
   reach whatever the node can, including other in-cluster services and cloud metadata
   endpoints. Restrict egress with your own NetworkPolicies for the namespace.
-- **Proxies, certificates, and DNS.** Pass a proxy as literal `HTTPS_PROXY` and `NO_PROXY`
-  values, or to Playwright's `proxy` option. A private CA belongs in your own image built on
-  this one; do not turn certificate checks off. Name resolution is the cluster's DNS.
+- **Proxies, certificates, and DNS.** Give the proxy to the browser itself: Playwright does
+  not pass `HTTPS_PROXY` on to Chromium's page traffic. Use `proxy: { server: "http://proxy:3128",
+  bypass: "*.svc,169.254.169.254" }` in `chromium.launch`, `--proxy-server` and `--proxy-bypass`
+  with `playwright screenshot`, or `--proxy-server` with `chromium-headless`. Literal `HTTPS_PROXY`
+  and `NO_PROXY` env values cover only the script's own HTTP calls, such as `fetch` or `npx`.
+  A private CA belongs in your own image built on this one; do not turn certificate checks
+  off. Name resolution is the cluster's DNS.
 - **CAPTCHAs, MFA, bot detection, and rate limits.** Stop and report `captcha`,
   `login_required`, or `blocked` rather than trying to get around them.
 
