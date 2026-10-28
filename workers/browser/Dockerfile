@@ -50,8 +50,35 @@ RUN set -eu; \
     usermod -l worker -d /tmp -s /bin/sh node; \
     printf '%s\n' \
       '#!/bin/sh' \
+      '# Wait for the Pod network to settle. The IPv6 link-local address finishes' \
+      '# duplicate-address detection about a second after the Pod starts, and' \
+      '# Chromium treats that as a network change: requests in flight fail with' \
+      '# net::ERR_NETWORK_CHANGED. A tentative address has flag 0x40 in' \
+      '# /proc/net/if_inet6. Gives up after 5 s so a stuck address never blocks.' \
+      'i=0' \
+      'while [ "$i" -lt 100 ]; do' \
+      '  tentative=0' \
+      '  while read -r _addr _index _prefix _scope flags _name; do' \
+      '    [ "$(( 0x$flags & 0x40 ))" -ne 0 ] && tentative=1' \
+      '  done < /proc/net/if_inet6 2>/dev/null' \
+      '  [ "$tentative" -eq 0 ] && exit 0' \
+      '  i=$((i + 1)); sleep 0.05' \
+      'done' \
+      'echo "wait-for-network: an address stayed tentative for 5 s; continuing" >&2' \
+      > /usr/local/bin/wait-for-network; \
+    chmod 0755 /usr/local/bin/wait-for-network; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# The image entrypoint: settle the network, then run the Task args under /worker.' \
+      '/usr/local/bin/wait-for-network' \
+      'exec /worker "$@"' \
+      > /usr/local/bin/browser-entrypoint; \
+    chmod 0755 /usr/local/bin/browser-entrypoint; \
+    printf '%s\n' \
+      '#!/bin/sh' \
       '# Raw Chromium for CLI use, with the flags Orka Task Pods need.' \
       'set -eu' \
+      '/usr/local/bin/wait-for-network' \
       'for chrome in /ms-playwright/chromium-*/chrome-linux*/chrome; do' \
       '  exec "$chrome" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu \' \
       '    --user-data-dir=/tmp/chrome-profile "$@"' \
@@ -79,4 +106,5 @@ ENV HOME=/tmp \
 WORKDIR /tmp
 USER 1000:1000
 
-ENTRYPOINT ["/worker"]
+# browser-entrypoint execs /worker once the Pod network has settled.
+ENTRYPOINT ["/usr/local/bin/browser-entrypoint"]

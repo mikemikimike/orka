@@ -58,7 +58,10 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		"XDG_CACHE_HOME=/tmp/.cache",
 		"XDG_CONFIG_HOME=/tmp/.config",
 		"USER 1000:1000",
-		`ENTRYPOINT ["/worker"]`,
+		`ENTRYPOINT ["/usr/local/bin/browser-entrypoint"]`,
+		`exec /worker "$@"`,
+		"/usr/local/bin/wait-for-network",
+		"/proc/net/if_inet6",
 		"--no-sandbox --disable-dev-shm-usage",
 		"--user-data-dir=/tmp/chrome-profile",
 	} {
