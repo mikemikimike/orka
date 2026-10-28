@@ -204,15 +204,39 @@ func ahpSessionHiddenBy(ui *UserInfo, session string, owners map[string]*corev1a
 	return owner == nil || !ahpOwns(ui, owner)
 }
 
+// ahpUsageSession identifies the usage rows of one session.
+type ahpUsageSession struct{ namespace, namespaceUID, session string }
+
+// ahpRetainedRequesters returns, for each AHP session among the usage rows,
+// the requester those rows retain. Rows that name different requesters leave
+// the session no one's.
+func ahpRetainedRequesters(tasks []store.UsageTask) map[ahpUsageSession]*store.UsageRequester {
+	requesters := map[ahpUsageSession]*store.UsageRequester{}
+	for _, task := range tasks {
+		if !strings.HasPrefix(task.SessionName, ahpNamePrefix) || task.Requester == nil {
+			continue
+		}
+		key := ahpUsageSession{task.Namespace, task.NamespaceUID, task.SessionName}
+		if known, seen := requesters[key]; !seen {
+			requesters[key] = task.Requester
+		} else if known != nil && *known != *task.Requester {
+			requesters[key] = nil
+		}
+	}
+	return requesters
+}
+
 // ahpUsageHidden reports retained usage in an AHP session that the person may
-// not see. While a turn's Task still continues the session, that Task's
-// requester decides, as for the session itself. Once the session's Tasks are
-// cleaned up, the requester retained with the usage decides, so people keep
-// seeing their own usage.
-func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task) bool {
+// not see. A session's usage is shown or hidden as a whole, since its usage
+// counters span its turns: shown in part, a session could show the rest.
+// While a turn's Task still continues the session, that Task's requester
+// decides, as for the session itself. Once the session's Tasks are cleaned
+// up, the requester its usage retains decides, so people keep seeing their
+// own usage.
+func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task, retained map[ahpUsageSession]*store.UsageRequester) bool {
 	if owners[task.SessionName] != nil {
 		return ahpSessionHiddenBy(ui, task.SessionName, owners)
 	}
-	requester := task.Requester
+	requester := retained[ahpUsageSession{task.Namespace, task.NamespaceUID, task.SessionName}]
 	return requester == nil || requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
 }

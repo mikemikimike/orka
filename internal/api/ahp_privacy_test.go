@@ -35,6 +35,7 @@ import (
 	"github.com/orka-agents/orka/internal/store"
 	"github.com/orka-agents/orka/internal/store/sqlite"
 	"github.com/orka-agents/orka/internal/store/storetest"
+	"github.com/orka-agents/orka/internal/usage"
 )
 
 // An AHP turn's Task and the Orka Session it continues are the requester's:
@@ -256,8 +257,9 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 }
 
 // Usage outlives the Tasks of AHP turns: once a session's Tasks are cleaned up,
-// the requester retained with each Task's usage decides who sees it, and while
-// a turn's Task continues the session, its requester still decides.
+// the requester its usage retains decides who sees it, and while a turn's Task
+// continues the session, its requester still decides. Either way a session is
+// shown or hidden as a whole.
 func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	const namespace = "default"
 	bobsTurn := &corev1alpha1.Task{
@@ -274,10 +276,12 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		return &store.UsageRequester{Issuer: "https://issuer.example", Subject: subject}
 	}
 	rows := []store.UsageTask{
-		{Namespace: namespace, TaskUID: "alice-gone", SessionName: "ahp-gone", Requester: requester("alice")},
-		{Namespace: namespace, TaskUID: "bob-gone", SessionName: "ahp-gone", Requester: requester("bob")},
-		{Namespace: namespace, TaskUID: "unknown-gone", SessionName: "ahp-gone"},
-		{Namespace: namespace, TaskUID: "other-issuer", SessionName: "ahp-gone", Requester: &store.UsageRequester{Issuer: "https://other.example", Subject: "alice"}},
+		{Namespace: namespace, TaskUID: "alice-turn", SessionName: "ahp-alice", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "alice-legacy", SessionName: "ahp-alice"},
+		{Namespace: namespace, TaskUID: "unknown", SessionName: "ahp-unknown"},
+		{Namespace: namespace, TaskUID: "mixed-alice", SessionName: "ahp-mixed", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "mixed-bob", SessionName: "ahp-mixed", Requester: requester("bob")},
+		{Namespace: namespace, TaskUID: "other-issuer", SessionName: "ahp-other", Requester: &store.UsageRequester{Issuer: "https://other.example", Subject: "alice"}},
 		{Namespace: namespace, TaskUID: "alice-in-bobs", SessionName: "ahp-live", Requester: requester("alice")},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
@@ -295,12 +299,58 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		return data.HiddenTasks
 	}
 	require.Equal(t, map[string]bool{
-		"default/bob-gone": true, "default/unknown-gone": true, "default/other-issuer": true, "default/alice-in-bobs": true,
+		"default/unknown": true, "default/mixed-alice": true, "default/mixed-bob": true, "default/other-issuer": true, "default/alice-in-bobs": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
 	require.Equal(t, map[string]bool{
-		"default/alice-gone": true, "default/unknown-gone": true, "default/other-issuer": true,
+		"default/alice-turn": true, "default/alice-legacy": true, "default/unknown": true, "default/mixed-alice": true, "default/mixed-bob": true,
+		"default/other-issuer": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
+}
+
+// A session's usage counter spans its turns, and the report shows the first
+// total it sees as the session's earlier usage. Hidden turns must not reach a
+// person through a visible turn that shares their counter.
+func TestAHPUsageCounterDoesNotShowAnotherPersonsTurn(t *testing.T) {
+	const namespace = "default"
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	handlers := NewHandlers(HandlersConfig{Client: fake.NewClientBuilder().WithScheme(scheme).Build()})
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	tokens := func(n int64) *int64 { return &n }
+	turn := func(uid, subject string, at time.Time) store.UsageTask {
+		return store.UsageTask{Namespace: namespace, NamespaceUID: "namespace-uid", TaskUID: uid, TaskName: uid, SessionName: "ahp-shared",
+			Phase: "Succeeded", Runtime: "agent", StartedAt: at, Requester: &store.UsageRequester{Issuer: "https://issuer.example", Subject: subject}}
+	}
+	data := store.UsageData{
+		Tasks: []store.UsageTask{turn("bobs-turn", "bob", start), turn("alices-turn", "alice", start.Add(time.Minute))},
+		Observations: []store.UsageObservation{
+			// Bob's turn reports no counts; Alice's turn then reports the
+			// counter's total, Bob's tokens included.
+			{ID: "bob", Namespace: namespace, NamespaceUID: "namespace-uid", TaskUID: "bobs-turn", SessionName: "ahp-shared", CounterID: "session",
+				Scope: store.UsageScopeSession, Source: store.UsageSourceAgent, Status: store.UsageStatusCompleted, ObservedAt: start.Add(30 * time.Second)},
+			{ID: "alice", Namespace: namespace, NamespaceUID: "namespace-uid", TaskUID: "alices-turn", SessionName: "ahp-shared", CounterID: "session",
+				Scope: store.UsageScopeSession, Source: store.UsageSourceAgent, Status: store.UsageStatusCompleted, ObservedAt: start.Add(90 * time.Second),
+				InputTokens: tokens(4242), OutputTokens: tokens(77)},
+		},
+	}
+	filter := store.UsageFilter{Namespaces: []string{namespace}, NamespaceUIDs: map[string]string{namespace: "namespace-uid"},
+		From: start.Add(-time.Hour), Until: start.Add(time.Hour), AsOf: start.Add(time.Hour)}
+	app := fiber.New()
+	app.Get("/", func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"})
+		return handlers.filterUsageTaskAccess(c, &data, filter.AsOf)
+	})
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	report, err := usage.Build(data, filter)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(report)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "4242")
+	require.NotContains(t, string(encoded), "turn")
 }
 
 // A page of sessions leaves out another person's AHP sessions, and its
