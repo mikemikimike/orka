@@ -65,10 +65,16 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		"/proc/net/if_inet6",
 		"--no-sandbox --disable-dev-shm-usage",
 		"--user-data-dir=/tmp/chrome-profile",
+		"/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell",
 	} {
 		if !strings.Contains(finalStage, required) {
 			t.Errorf("final stage is missing %q", required)
 		}
+	}
+	// Full Chromium calls Google sign-in, sync, and update services by itself,
+	// which a proxy log of any raw chromium-headless run would show.
+	if strings.Contains(finalStage, "/ms-playwright/chromium-*/chrome-linux") {
+		t.Error("chromium-headless must run the headless shell, not full Chromium")
 	}
 	if strings.Contains(finalStage, "\nCMD ") {
 		t.Error("the final stage must not set CMD: a Task's args are the command the worker runs")

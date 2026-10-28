@@ -80,15 +80,17 @@ RUN set -eu; \
     chmod 0755 /usr/local/bin/browser-entrypoint; \
     printf '%s\n' \
       '#!/bin/sh' \
-      '# Raw Chromium for CLI use, with the flags Orka Task Pods need.' \
+      '# Chromium for CLI use, with the flags Orka Task Pods need. This is the headless' \
+      '# shell Playwright runs headless: unlike full Chromium, it has no sign-in, sync,' \
+      '# or component-update services, so it makes no requests of its own.' \
       'set -eu' \
       'trap "exit 143" TERM INT' \
       '/usr/local/bin/wait-for-network' \
-      'for chrome in /ms-playwright/chromium-*/chrome-linux*/chrome; do' \
-      '  exec "$chrome" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu \' \
+      'for chrome in /ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell; do' \
+      '  [ -x "$chrome" ] && exec "$chrome" --no-sandbox --disable-dev-shm-usage --disable-gpu \' \
       '    --user-data-dir=/tmp/chrome-profile "$@"' \
       'done' \
-      'echo "chromium-headless: no Playwright Chromium under /ms-playwright" >&2' \
+      'echo "chromium-headless: no Playwright headless shell under /ms-playwright" >&2' \
       'exit 1' \
       > /usr/local/bin/chromium-headless; \
     chmod 0755 /usr/local/bin/chromium-headless
