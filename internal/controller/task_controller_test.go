@@ -349,6 +349,8 @@ var _ = Describe("Task Controller", func() {
 
 		It("should fail a container task whose env reads a Secret without the direct mount opt-in", func() {
 			ctx := context.Background()
+			// The job builder reads the opt-in from the process environment.
+			GinkgoT().Setenv(directSecretMountsEnvVar, "false")
 			r := newReconciler()
 			taskName := "test-pending-env-secret-ref"
 			ns := defaultNS

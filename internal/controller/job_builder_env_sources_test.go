@@ -64,6 +64,8 @@ func TestBuildRejectsContainerTaskEnvObjectSourcesWithoutDirectSecretMounts(t *t
 	for _, tt := range tests {
 		for worker, image := range map[string]string{"managed": "", "custom": testBusyboxImage} {
 			t.Run(tt.name+"/"+worker, func(t *testing.T) {
+				// The builder reads the opt-in from the process environment.
+				t.Setenv(directSecretMountsEnvVar, "false")
 				builder := setupJobBuilder()
 				literal := corev1.EnvVar{Name: "MODE", Value: "smoke"}
 				task := envSourceTestTask(corev1alpha1.TaskTypeContainer, image, literal, tt.env)
