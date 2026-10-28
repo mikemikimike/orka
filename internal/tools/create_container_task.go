@@ -572,12 +572,16 @@ func parseContainerTaskEnvArg(a map[string]any) ([]corev1.EnvVar, string, bool) 
 			return nil, r, false
 		}
 		seen[name] = true
+		if total += len(name); total > maxContainerTaskEnvTotalBytes {
+			r := containerTaskArgError(fmt.Sprintf("env is more than %d bytes in total", maxContainerTaskEnvTotalBytes), "Pass less through env: read large inputs from a file in the image or workspace")
+			return nil, r, false
+		}
 		value := chatGetStringArg(entry, valueField)
 		if len(value) > maxContainerTaskEnvValueBytes {
 			r := containerTaskArgError(fmt.Sprintf("env[%d].value is %d bytes; at most %d are allowed", i, len(value), maxContainerTaskEnvValueBytes), "Write large inputs to a file in the image or workspace instead")
 			return nil, r, false
 		}
-		if total += len(name) + len(value); total > maxContainerTaskEnvTotalBytes {
+		if total += len(value); total > maxContainerTaskEnvTotalBytes {
 			r := containerTaskArgError(fmt.Sprintf("env is more than %d bytes in total", maxContainerTaskEnvTotalBytes), "Pass less through env: read large inputs from a file in the image or workspace")
 			return nil, r, false
 		}
@@ -662,6 +666,14 @@ func parseContainerTaskRetryPolicyArg(a map[string]any) (*corev1alpha1.RetryPoli
 	if !ok {
 		r := containerTaskArgError("retryPolicy must be an object", `Pass retryPolicy as {"maxRetries":2,"initialDelay":"30s"}`)
 		return nil, r, false
+	}
+	for key := range values {
+		switch key {
+		case maxRetriesField, backoffMultiplierField, initialDelayField:
+		default:
+			r := containerTaskArgError(fmt.Sprintf("retryPolicy has unsupported field %q", key), "retryPolicy takes maxRetries, backoffMultiplier, and initialDelay")
+			return nil, r, false
+		}
 	}
 	policy := &corev1alpha1.RetryPolicy{}
 	if value, ok := values[maxRetriesField]; ok && value != nil {

@@ -146,6 +146,7 @@ func TestCreateContainerTaskTool_RejectsInvalidSpecArgs(t *testing.T) {
 		{name: "negative quantity", fragment: `"resources":{"requests":{"memory":"-1Gi"}}`, mention: "resources.requests.memory"},
 		{name: "request above limit", fragment: `"resources":{"requests":{"cpu":"4"},"limits":{"cpu":"2"}}`, mention: "resources.requests.cpu"},
 		{name: "too many retries", fragment: `"retryPolicy":{"maxRetries":6}`, mention: "maxRetries"},
+		{name: "unknown retryPolicy key", fragment: `"retryPolicy":{"maxRetry":3}`, mention: `"maxRetry"`},
 		{name: "negative retries", fragment: `"retryPolicy":{"maxRetries":-1}`, mention: "maxRetries"},
 		{name: "fractional retries", fragment: `"retryPolicy":{"maxRetries":1.5}`, mention: "maxRetries"},
 		{name: "low backoff", fragment: `"retryPolicy":{"backoffMultiplier":0.5}`, mention: "backoffMultiplier"},
