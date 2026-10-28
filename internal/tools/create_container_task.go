@@ -470,8 +470,11 @@ const (
 	jsonSchemaMaxItemsField        = "maxItems"
 	jsonSchemaAdditionalProperties = "additionalProperties"
 
-	maxContainerTaskEnvVars           = 64
-	maxContainerTaskEnvValueBytes     = 32 << 10
+	maxContainerTaskEnvVars       = 64
+	maxContainerTaskEnvValueBytes = 32 << 10
+	// maxContainerTaskEnvTotalBytes keeps the Task object well inside the
+	// API server's request limit (1.5 MiB by default on etcd).
+	maxContainerTaskEnvTotalBytes     = 256 << 10
 	maxContainerTaskRetries           = 5
 	minContainerTaskBackoffMultiplier = 1
 	maxContainerTaskBackoffMultiplier = 10
@@ -533,6 +536,7 @@ func parseContainerTaskEnvArg(a map[string]any) ([]corev1.EnvVar, string, bool) 
 	}
 	env := make([]corev1.EnvVar, 0, len(items))
 	seen := make(map[string]bool, len(items))
+	total := 0
 	for i, item := range items {
 		entry, ok := item.(map[string]any)
 		if !ok {
@@ -573,6 +577,10 @@ func parseContainerTaskEnvArg(a map[string]any) ([]corev1.EnvVar, string, bool) 
 			r := containerTaskArgError(fmt.Sprintf("env[%d].value is %d bytes; at most %d are allowed", i, len(value), maxContainerTaskEnvValueBytes), "Write large inputs to a file in the image or workspace instead")
 			return nil, r, false
 		}
+		if total += len(name) + len(value); total > maxContainerTaskEnvTotalBytes {
+			r := containerTaskArgError(fmt.Sprintf("env is more than %d bytes in total", maxContainerTaskEnvTotalBytes), "Pass less through env: read large inputs from a file in the image or workspace")
+			return nil, r, false
+		}
 		env = append(env, corev1.EnvVar{Name: name, Value: value})
 	}
 	if len(env) == 0 {
@@ -587,13 +595,20 @@ func reservedContainerTaskEnvName(name string) bool {
 	return strings.HasPrefix(name, "ORKA_") || strings.HasPrefix(name, "OTEL_EXPORTER_OTLP") || name == "OTEL_RESOURCE_ATTRIBUTES"
 }
 
-// rejectEmptyContainerTaskQuantities fails on an empty or null quantity, which
-// the shared parser drops. Any resources replace the Task's defaults, so a
-// dropped entry would silently run without the limit the caller meant to set.
-func rejectEmptyContainerTaskQuantities(a map[string]any) (string, bool) {
+// validateContainerTaskResourceShape fails on an unknown key under resources
+// and on an empty or null quantity, both of which the shared parser drops. Any
+// resources replace the Task's defaults, so a dropped entry would silently run
+// without the limit the caller meant to set.
+func validateContainerTaskResourceShape(a map[string]any) (string, bool) {
 	resources, ok := a[resourcesField].(map[string]any)
 	if !ok {
 		return "", true
+	}
+	for key := range resources {
+		if key != resourceRequestsField && key != resourceLimitsField {
+			r := containerTaskArgError(fmt.Sprintf("resources has unsupported field %q", key), "resources takes requests and limits")
+			return r, false
+		}
 	}
 	for _, key := range []string{resourceRequestsField, resourceLimitsField} {
 		values, ok := resources[key].(map[string]any)
@@ -611,7 +626,7 @@ func rejectEmptyContainerTaskQuantities(a map[string]any) (string, bool) {
 }
 
 func parseContainerTaskResourcesArg(a map[string]any) (corev1.ResourceRequirements, string, bool) {
-	if errResult, ok := rejectEmptyContainerTaskQuantities(a); !ok {
+	if errResult, ok := validateContainerTaskResourceShape(a); !ok {
 		return corev1.ResourceRequirements{}, errResult, false
 	}
 	resources, errResult, ok := parseResourceRequirementsArg(a)

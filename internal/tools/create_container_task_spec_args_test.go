@@ -117,6 +117,11 @@ func TestCreateContainerTaskTool_RejectsInvalidSpecArgs(t *testing.T) {
 	for i := range manyEnv {
 		manyEnv[i] = fmt.Sprintf(`{"name":"V%d","value":"x"}`, i)
 	}
+	// Sixteen values under the per-value cap that together pass the total cap.
+	largeEnv := make([]string, 16)
+	for i := range largeEnv {
+		largeEnv[i] = fmt.Sprintf(`{"name":"BIG_%d","value":"%s"}`, i, strings.Repeat("x", 20000))
+	}
 	tests := []struct {
 		name      string
 		allowed   []string
@@ -136,6 +141,8 @@ func TestCreateContainerTaskTool_RejectsInvalidSpecArgs(t *testing.T) {
 		{name: "env null item", fragment: `"env":[null]`, mention: "env[0]"},
 		{name: "malformed quantity", fragment: `"resources":{"limits":{"cpu":"two"}}`, mention: "resources.limits.cpu"},
 		{name: "empty quantity", fragment: `"resources":{"limits":{"cpu":"","memory":"2Gi"}}`, mention: "resources.limits.cpu"},
+		{name: "unknown resources key", fragment: `"resources":{"limit":{"cpu":"1"}}`, mention: `"limit"`},
+		{name: "env too large in total", fragment: `"env":[` + strings.Join(largeEnv, ",") + `]`, mention: "in total"},
 		{name: "negative quantity", fragment: `"resources":{"requests":{"memory":"-1Gi"}}`, mention: "resources.requests.memory"},
 		{name: "request above limit", fragment: `"resources":{"requests":{"cpu":"4"},"limits":{"cpu":"2"}}`, mention: "resources.requests.cpu"},
 		{name: "too many retries", fragment: `"retryPolicy":{"maxRetries":6}`, mention: "maxRetries"},
