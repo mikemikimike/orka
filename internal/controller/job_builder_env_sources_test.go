@@ -133,3 +133,45 @@ func TestBuildLeavesAITaskEnvSourcesToTheTrustedWorkerPolicy(t *testing.T) {
 		t.Fatal("AI Task env secretKeyRef should keep its existing behavior")
 	}
 }
+
+// The workspace preparation init container holds the clone credential; Git
+// would run a caller-chosen command from GIT_CONFIG_PARAMETERS with it, so
+// Task env stays out of it apart from the proxy variables.
+func TestBuildKeepsTaskEnvOutOfTheWorkspaceInitContainer(t *testing.T) {
+	t.Setenv(directSecretMountsEnvVar, "false")
+	task := envSourceTestTask(corev1alpha1.TaskTypeContainer, testBusyboxImage,
+		corev1.EnvVar{Name: "GIT_CONFIG_PARAMETERS", Value: "'credential.helper=!cat /secrets/git/token'"},
+		corev1.EnvVar{Name: "https_proxy", Value: "http://proxy:3128"},
+		corev1.EnvVar{Name: "MODE", Value: "smoke"},
+	)
+	task.Spec.Workspace = &corev1alpha1.WorkspaceConfig{
+		GitRepo:           "https://github.com/example/repo",
+		ReadCredentialRef: &corev1alpha1.WorkspaceCredentialReference{Name: "my-git-creds"},
+	}
+	job, err := setupJobBuilder().Build(context.Background(), task, nil, nil)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	var initEnv []corev1.EnvVar
+	for _, c := range job.Spec.Template.Spec.InitContainers {
+		if c.Name == workspacePreparationInitContainerName {
+			initEnv = c.Env
+		}
+	}
+	if initEnv == nil {
+		t.Fatal("no workspace preparation init container")
+	}
+	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "MODE"} {
+		if got, ok := findEnvVar(initEnv, name); ok {
+			t.Fatalf("init container has %s=%q; Task env must not reach the clone credential", name, got.Value)
+		}
+	}
+	if got, ok := findEnvVar(initEnv, "https_proxy"); !ok || got.Value != "http://proxy:3128" {
+		t.Fatalf("init container https_proxy = %#v, found=%v; the proxy variables pass through", got, ok)
+	}
+	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "https_proxy", "MODE"} {
+		if _, ok := findEnvVar(job.Spec.Template.Spec.Containers[0].Env, name); !ok {
+			t.Fatalf("worker container is missing %s; the Task's own command keeps its env", name)
+		}
+	}
+}

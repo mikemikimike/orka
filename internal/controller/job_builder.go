@@ -2468,7 +2468,7 @@ func (b *JobBuilder) workspaceInitEnvVars(task *corev1alpha1.Task, validationTas
 		{Name: TaskNamespaceEnvVar, Value: task.Namespace},
 		{Name: ControllerURLEnvVar, Value: b.ControllerURL},
 	}
-	envVars = append(envVars, task.Spec.Env...)
+	envVars = append(envVars, workspaceInitPassthroughEnv(task.Spec.Env)...)
 	if task.Spec.PriorTaskRef != nil {
 		envVars = append(envVars, corev1.EnvVar{Name: workerenv.PriorTask, Value: task.Spec.PriorTaskRef.Name})
 		priorNS := task.Spec.PriorTaskRef.Namespace
@@ -2482,6 +2482,22 @@ func (b *JobBuilder) workspaceInitEnvVars(task *corev1alpha1.Task, validationTas
 		envVars = append(envVars, corev1.EnvVar{Name: workerenv.GitRefShallow, Value: scheduledRunLabelValue})
 	}
 	return envVars
+}
+
+// workspaceInitPassthroughEnv is the part of a Task's env that reaches the
+// workspace preparation init container. That container holds the clone
+// credential, and Git honours variables such as GIT_CONFIG_PARAMETERS,
+// GIT_ASKPASS, and GIT_SSH_COMMAND that would run a caller-chosen command
+// with it, so only the HTTP proxy variables a clone may need pass through.
+func workspaceInitPassthroughEnv(env []corev1.EnvVar) []corev1.EnvVar {
+	var out []corev1.EnvVar
+	for _, envVar := range env {
+		switch strings.ToUpper(envVar.Name) {
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY":
+			out = append(out, envVar)
+		}
+	}
+	return out
 }
 
 func workspaceWorkingDir(task *corev1alpha1.Task) string {

@@ -165,7 +165,9 @@ Environment-variable injection applies to an Agent's `secretRef`, not a Task's.
 entry uses `valueFrom.secretKeyRef`, `valueFrom.configMapKeyRef`, or `valueFrom.fileKeyRef`
 ends `Failed` before its Pod is created, and the message names the entry and the opt-in.
 `valueFrom.fieldRef` and `valueFrom.resourceFieldRef` read the Pod's own metadata and are
-always allowed.
+always allowed. With a workspace, `env` reaches your command but not the init container that
+clones the repository with the read credential; only the `HTTP_PROXY`, `HTTPS_PROXY`, and
+`NO_PROXY` variables pass through to it.
 :::
 
 ## When an agent creates these
