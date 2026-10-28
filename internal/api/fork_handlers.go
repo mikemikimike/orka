@@ -169,10 +169,9 @@ func (h *Handlers) ForkTask(c fiber.Ctx) error {
 		return err
 	}
 	stampTaskRequesterFromUserInfo(forked, GetUserInfo(c))
-	// The fork's own session, named after the fork, cannot be another
-	// person's AHP session.
+	// The session the fork continues cannot be another person's AHP session.
 	if forked.Spec.SessionRef != nil {
-		hidden, err := ahpSessionHiddenIn(c.Context(), h.client, GetUserInfo(c), namespace, forked.Spec.SessionRef.Name)
+		hidden, err := h.forkSessionHidden(c.Context(), GetUserInfo(c), namespace, forked.Name, forked.Spec.SessionRef.Name)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up the session's owner: %v", err))
 		}
@@ -307,6 +306,32 @@ func deterministicForkTaskName(sourceName string, afterSeq int64, requester, ide
 	}
 	sum := sha256.Sum256([]byte(seed))
 	return fmt.Sprintf("%s-fork-%s", forkcontext.SanitizeTaskNamePrefix(sourceName), hex.EncodeToString(sum[:4]))
+}
+
+// forkSessionHidden reports a session a fork may not continue: another
+// person's AHP session. A fork of an AHP turn whose workspace is reused per
+// session starts a session named after itself, with the AHP prefix its name
+// inherits; that one is the fork's own while no Task continues it and no
+// Session by its name exists.
+func (h *Handlers) forkSessionHidden(ctx context.Context, ui *UserInfo, namespace, fork, session string) (bool, error) {
+	if !ahpPerson(ui) || !strings.HasPrefix(session, ahpNamePrefix) {
+		return false, nil
+	}
+	owners, err := ahpSessionOwnersIn(ctx, h.client, namespace, []string{session})
+	if err != nil {
+		return false, err
+	}
+	if session == fork && owners[session] == nil {
+		if h.sessionStore == nil {
+			return false, nil
+		}
+		if _, err := h.sessionStore.GetSession(ctx, namespace, session); errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+	}
+	return ahpSessionHiddenBy(ui, session, owners), nil
 }
 
 // generatedForkTaskName mints a unique fork name (random suffix). This is the

@@ -8,6 +8,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,15 +18,20 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+	kubernetestesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+	"github.com/orka-agents/orka/internal/events"
 	"github.com/orka-agents/orka/internal/labels"
 	"github.com/orka-agents/orka/internal/store"
 	"github.com/orka-agents/orka/internal/store/sqlite"
+	"github.com/orka-agents/orka/internal/store/storetest"
 )
 
 // An AHP turn's Task and the Orka Session it continues are the requester's:
@@ -133,4 +139,66 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 	caller = &UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:orka-system:operator"}
 	status, _ = call(http.MethodGet, "/tasks/ahp-alice-t1", "")
 	require.Equal(t, http.StatusOK, status, "a ServiceAccount keeps the access RBAC grants it")
+}
+
+// A fork of a person's own AHP turn whose workspace is reused per session
+// starts its own session, named after the fork with the AHP prefix: the fork
+// goes ahead. A fork named for an AHP session already in use does not.
+func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
+	const namespace = "default"
+	requester := func(subject string) *corev1alpha1.RequestedBy {
+		return &corev1alpha1.RequestedBy{Issuer: "https://issuer.example", Subject: subject}
+	}
+	turn := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-alice-t1", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, Prompt: "alice's plan", RequestedBy: requester("alice"),
+			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-alice", Append: true},
+			Execution: &corev1alpha1.ExecutionSpec{Workspace: &corev1alpha1.ExecutionWorkspaceSpec{
+				ClassRef:    &corev1alpha1.WorkspaceClassReference{Name: "session-only"},
+				ReusePolicy: corev1alpha1.WorkspaceReusePolicySession,
+			}},
+		},
+	}
+	bobs := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-bob-t1", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, Prompt: "bob's plan", RequestedBy: requester("bob"),
+			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-bob"},
+		},
+	}
+	eventStore := storetest.NewFakeExecutionEventStore()
+	appendTestTaskEvent(t, eventStore, turn.Name, events.ExecutionEventTypeTaskStarted)
+	db, err := sqlite.NewDB(":memory:")
+	require.NoError(t, err)
+	ss := sqlite.NewStore(db, ":memory:")
+	for _, name := range []string{"ahp-alice", "ahp-bob", "ahp-orphan"} {
+		require.NoError(t, ss.CreateSession(context.Background(), &store.SessionRecord{Namespace: namespace, Name: name, SessionType: "task"}))
+	}
+	h, app := setupPostP0Handlers(t, eventStore, ss, turn, bobs)
+	reviews := kubernetesfake.NewClientset()
+	reviews.PrependReactor("create", "subjectaccessreviews", func(kubernetestesting.Action) (bool, runtime.Object, error) {
+		return true, externalToolReview(true), nil
+	})
+	h.clientset = reviews
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice", Username: "alice", Namespace: namespace})
+		return c.Next()
+	})
+	app.Post("/api/v1/tasks/:id/fork", h.ahpTaskPrivate(h.ForkTask))
+
+	resp := testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t1/fork?namespace=default", map[string]any{})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var forked ForkTaskResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&forked))
+	created := &corev1alpha1.Task{}
+	require.NoError(t, h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: forked.NewTaskName}, created))
+	require.True(t, strings.HasPrefix(created.Name, ahpNamePrefix))
+	require.Equal(t, &corev1alpha1.SessionReference{Name: created.Name, Create: true, Append: true}, created.Spec.SessionRef)
+
+	for _, name := range []string{"ahp-bob", "ahp-orphan"} {
+		resp := testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t1/fork?namespace=default", map[string]any{"newTaskName": name})
+		require.Equal(t, http.StatusNotFound, resp.StatusCode, name)
+		require.True(t, apierrors.IsNotFound(h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &corev1alpha1.Task{})), name)
+	}
 }
