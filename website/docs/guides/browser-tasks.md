@@ -67,10 +67,10 @@ chat prompt tells agents which image to use and when a browser Task fits. Set
 
 | In the image | Details |
 | --- | --- |
-| Playwright 1.64.1 | `playwright` CLI on `PATH`; scripts can `require("playwright")` without installing anything |
+| Playwright 1.64.1 | `playwright` CLI on `PATH`; scripts can `require("playwright")` without installing anything. Do not run `playwright install`: the browsers are already there, and on the read-only root filesystem it hangs |
 | Chromium | Playwright's own build and headless shell for that version, under `/ms-playwright` |
-| Node.js 24 on Debian 13 | Noto fonts, including color emoji, for legible screenshots; `git`, for workspaces |
-| `chromium-headless` | Raw Chromium with the flags below, for `--screenshot`, `--dump-dom`, or `--print-to-pdf` |
+| Node.js 24 on Debian 13 | Noto fonts, including color emoji, for legible screenshots; `git`, for workspaces. There is no Python |
+| `chromium-headless` | Playwright's headless shell with the flags below, for `--screenshot`, `--dump-dom`, or `--print-to-pdf`. Unlike full Chromium, it calls no Google services of its own |
 | User | UID/GID 1000, `HOME=/tmp` |
 | Entrypoint | A wrapper that waits for the Pod's network to settle, then runs `/worker`, the same binary as the default worker image |
 
@@ -96,6 +96,11 @@ With a workspace, Orka sets `HOME=/home/worker` and runs the command in `/worksp
 Start from requests of `500m` CPU and `1Gi` memory and limits of `2` CPUs and `2Gi`. Raise
 the memory limit to `4Gi` for traces, video, or long sessions with many tabs. The namespace's
 `ResourceQuota` and `LimitRange` still apply.
+
+A Pod that goes over its memory limit is killed whole, worker included: the Task fails with
+an out-of-memory message, and nothing in `/tmp/artifacts` is uploaded. Full-page screenshots
+of long pages are CPU-heavy. At 2 CPUs, several taken in parallel can exceed Playwright's
+30-second timeout, so take them one at a time or raise the CPU limit.
 
 ## Scripts
 
@@ -154,9 +159,15 @@ be the JSON alone. Redirect them when the script prints one, for example with
 `chromium-headless ... 2>/tmp/artifacts/chromium.log`. Playwright keeps the browser's
 stderr out of the script's own output, so the Node example above is unaffected.
 
+Kubernetes rewrites `args` and `command` before the shell sees them: `$$` becomes `$`, and
+`$(NAME)` becomes the value of `NAME` when the Task's `env` defines it. Playwright's
+`page.$$eval` therefore arrives as `page.$eval` and fails. Use
+`page.locator(...).evaluateAll(...)` instead, or write `$$$$` wherever the script needs `$$`.
+
 ## Deadlines and stop conditions
 
-When a Task has a `timeout`, the worker stops the script shortly before it. It uploads what
+A Task without a `timeout` has no deadline: a script that hangs runs until someone deletes
+the Task. When a Task has a `timeout`, the worker stops the script shortly before it. It uploads what
 is already in `/tmp/artifacts` and posts the output so far with the outcome
 `unknown_outcome`, and the Task ends `Failed`. Write screenshots as the script goes, not
 only at the end, so a run that hangs still shows where it was.
@@ -224,12 +235,15 @@ state.
 - **No default egress policy.** Worker Pods have no Orka NetworkPolicy, so a browser Task can
   reach whatever the node can, including other in-cluster services and cloud metadata
   endpoints. Restrict egress with your own NetworkPolicies for the namespace.
-- **Proxies, certificates, and DNS.** Give the proxy to the browser itself: Playwright does
-  not pass `HTTPS_PROXY` on to Chromium's page traffic. Use `proxy: { server: "http://proxy:3128" }`
-  in `chromium.launch`, `--proxy-server` with `playwright screenshot`, or `--proxy-server` with
-  `chromium-headless`, and add a bypass list only for destinations that must not go through
-  the proxy. Literal `HTTPS_PROXY` and `NO_PROXY` env values reach only the script's own
-  tooling, such as `npx`; Node's built-in `fetch` honors them only with `NODE_USE_ENV_PROXY=1`.
+- **Proxies, certificates, and DNS.** `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` in the
+  Task's `env` apply to Chromium's page traffic, to tooling such as `npx`, and to the worker's
+  own result and artifact uploads; Node's built-in `fetch` honors them only with
+  `NODE_USE_ENV_PROXY=1`. Whenever you set them, list the cluster's service domains in
+  `NO_PROXY`, for example `.svc,.cluster.local`: otherwise the uploads to
+  `ORKA_CONTROLLER_URL` go to the proxy with the Task's callback token, and fail if the proxy
+  cannot reach the cluster. To proxy only the browser, leave the env unset and use
+  `proxy: { server: "http://proxy:3128" }` in `chromium.launch`, `--proxy-server` with
+  `playwright screenshot`, or `--proxy-server` with `chromium-headless`.
   A private CA belongs in your own image built on this one; do not turn certificate checks
   off. Name resolution is the cluster's DNS.
 - **CAPTCHAs, MFA, bot detection, and rate limits.** Stop and report `captcha`,
