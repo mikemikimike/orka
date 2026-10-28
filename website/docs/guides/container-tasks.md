@@ -180,15 +180,22 @@ files, reports. How they reach Orka depends on the image.
 The default worker image, and any custom image whose `ENTRYPOINT` is Orka's `/worker`
 binary, deliver for you:
 
-- The command's stdout and stderr become the result.
+- The command's stdout and stderr become the result. A command that prints nothing posts
+  no result, and the Pod log is kept instead; its artifacts are still uploaded.
 - Every regular file in `/tmp/artifacts` is uploaded as an artifact when the command
   ends: at most 10 MB per file and 50 MB per run. Subdirectories and symlinks are skipped.
+  Uploads do not depend on the result being posted.
 - When the Task has a `timeout`, the worker stops the command shortly before it, uploads
   what is already in `/tmp/artifacts`, and posts the output so far with the outcome
-  `unknown_outcome`. The Task still ends `Failed`, and its worker exits with code 124.
-  The margin is a tenth of the timeout, from 20 seconds to 2 minutes, and never more than
-  half of a very short timeout. It is measured from the worker's start, so a slow image
-  pull or repository clone eats into it.
+  `unknown_outcome`. The Task ends `Failed` as timed out, like a Task killed by the Job
+  deadline, and a `retryPolicy` does not rerun it: the outcome is unknown, so a follow-up
+  Task reconciles it. The worker exits with code 124. The margin is a tenth of the
+  timeout, from 20 seconds to 2 minutes, and never more than half of a very short timeout.
+- The timeout runs from the Task's start, as the Job deadline does, so scheduling, the
+  image pull, and the repository clone count against it. When startup alone uses the
+  budget, the command is stopped at once and only what is already in `/tmp/artifacts` can
+  be delivered. Give a Task on a large image, or on a node that has not pulled it yet,
+  a timeout well above its expected run time.
 
 With a custom image, put the command in `args` and leave `command` empty. An explicit
 `command` replaces the entrypoint, and then only the log fallback below applies.
@@ -205,6 +212,7 @@ environment variables:
 | `ORKA_TASK_NAMESPACE`, `ORKA_TASK_NAME`, `ORKA_TASK_UID` | The Task's identity |
 | `ORKA_SA_TOKEN_PATH` | The file holding the Pod's callback token |
 | `ORKA_TIMEOUT_SECONDS` | The Task's `timeout`, when it has one |
+| `ORKA_DEADLINE` | When that timeout ends, in RFC 3339; stop and deliver before it |
 
 Authenticate every request with `Authorization: Bearer <token>`, reading the token from
 `ORKA_SA_TOKEN_PATH` each time, because the kubelet rotates it. The token is bound to this
