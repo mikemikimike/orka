@@ -213,10 +213,11 @@ state.
   reach whatever the node can, including other in-cluster services and cloud metadata
   endpoints. Restrict egress with your own NetworkPolicies for the namespace.
 - **Proxies, certificates, and DNS.** Give the proxy to the browser itself: Playwright does
-  not pass `HTTPS_PROXY` on to Chromium's page traffic. Use `proxy: { server: "http://proxy:3128",
-  bypass: "*.svc,169.254.169.254" }` in `chromium.launch`, `--proxy-server` and `--proxy-bypass`
-  with `playwright screenshot`, or `--proxy-server` with `chromium-headless`. Literal `HTTPS_PROXY`
-  and `NO_PROXY` env values cover only the script's own HTTP calls, such as `fetch` or `npx`.
+  not pass `HTTPS_PROXY` on to Chromium's page traffic. Use `proxy: { server: "http://proxy:3128" }`
+  in `chromium.launch`, `--proxy-server` with `playwright screenshot`, or `--proxy-server` with
+  `chromium-headless`, and add a bypass list only for destinations that must not go through
+  the proxy. Literal `HTTPS_PROXY` and `NO_PROXY` env values reach only the script's own
+  tooling, such as `npx`; Node's built-in `fetch` honors them only with `NODE_USE_ENV_PROXY=1`.
   A private CA belongs in your own image built on this one; do not turn certificate checks
   off. Name resolution is the cluster's DNS.
 - **CAPTCHAs, MFA, bot detection, and rate limits.** Stop and report `captcha`,
