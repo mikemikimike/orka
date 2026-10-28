@@ -36,7 +36,7 @@ spec:
 orka task download -n orka-system example-screenshot example.png
 ```
 
-Put the script in `args` and leave `command` empty. The image's entrypoint waits for the
+Put the script in `args` and leave `command` out. The image's entrypoint waits for the
 Pod's network to settle (below), then runs Orka's `/worker`, which runs `args` as the
 command, keeps its output as the result, and uploads every file in `/tmp/artifacts`. A
 `command` replaces that entrypoint, and then nothing is uploaded.
