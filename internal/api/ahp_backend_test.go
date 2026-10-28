@@ -1875,6 +1875,51 @@ func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
 }
 
+// A turn the previous leader streamed in full before it stopped is settled by
+// recovery from its Task without showing the answer twice.
+func TestAHPBackendRecoveryDoesNotRepeatAStreamedAnswer(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	_, err = c.Dispatch(ctx, chat, ahpUserTurn("turn-1", "wake me"))
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+	var turn *ahpTurn
+	require.Eventually(t, func() bool { turn = env.backend.activeTurn(alice.UserKey, ahpTestSession); return turn != nil },
+		5*time.Second, 20*time.Millisecond)
+	env.publish(taskName, &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: "woke-up"}})
+	waitForActionType(t, chatSub, "chat/delta")
+
+	// The leader stops before it settles the turn; the Task then succeeds.
+	env.backend.forgetTurn(turn)
+	env.backend.mu.Lock()
+	delete(env.backend.recovered, alice.UserKey)
+	env.backend.mu.Unlock()
+	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte("woke-up")))
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	task.Status.ResultRef = &corev1alpha1.ResultReference{Available: true}
+	require.NoError(t, env.kube.Status().Update(ctx, task))
+
+	env.backend.recoverTurns(ctx, alice)
+	waitForActionType(t, chatSub, "chat/turnComplete")
+	state, err := ahphost.ChannelState(ctx, env.backend.store, alice.UserKey, chat)
+	require.NoError(t, err)
+	turns := state.Chat.Turns
+	require.Len(t, turns, 1)
+	require.Equal(t, 1, strings.Count(ahpResponseText(turns[0].ResponseParts), "woke-up"), "the answer is shown once")
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Equal(t, "woke-up", record.History[len(record.History)-1].Reply)
+}
+
 // ahpConfigEmitter records the session config changes the backend shows.
 type ahpConfigEmitter struct {
 	mu      sync.Mutex

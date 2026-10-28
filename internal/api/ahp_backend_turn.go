@@ -75,6 +75,9 @@ type ahpTurn struct {
 	textPart        string
 	thoughtPart     string
 	streamedText    bool
+	// shown is the text a turn this process recovered already showed, streamed
+	// by the process before it.
+	shown string
 	// lagged reports that live updates stopped before the turn ended, so the
 	// text streamed so far may be only part of its answer.
 	lagged bool
@@ -970,10 +973,19 @@ func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 		// fell behind it is the turn's answer, in a part of its own beside
 		// the text that streamed, and the reply the conversation keeps.
 		if data, err := t.b.h.resultStore.GetResult(t.ctx, task.Namespace, task.Name); err == nil {
-			if t.lagged {
-				t.textPart, t.reply = "", ""
+			answer := executionevents.RedactExecutionEventText(string(data))
+			// Text already shown may hold the whole answer: streamed before
+			// live updates fell behind, or by the process before a restart.
+			// It is not shown twice, and stays the reply the conversation
+			// keeps.
+			if whole := strings.TrimSpace(answer); whole != "" && strings.Contains(t.shown+t.reply, whole) {
+				t.reply = ahpTail(whole, ahpExchangeMax)
+			} else {
+				if t.lagged {
+					t.textPart, t.reply = "", ""
+				}
+				t.text(answer)
 			}
-			t.text(executionevents.RedactExecutionEventText(string(data)))
 		}
 	}
 	t.finishPlan()
@@ -1130,11 +1142,27 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 			task: record.ActiveTask, startedAt: started, emit: b.emitterFor(principal), ctx: turnCtx, cancel: cancel,
 			tools: map[string]*ahpToolCall{},
 		}
+		// The previous leader may have streamed some or all of the answer.
+		if state, err := ahphost.ChannelState(ctx, b.store, principal.UserKey, record.Chat); err == nil &&
+			state.Chat != nil && state.Chat.ActiveTurn != nil && state.Chat.ActiveTurn.Id == record.ActiveTurn {
+			turn.shown = ahpResponseText(state.Chat.ActiveTurn.ResponseParts)
+		}
 		b.mu.Lock()
 		b.turns[ahpTurnKey(principal.UserKey, record.Session)] = turn
 		b.mu.Unlock()
 		go turn.run(b.live.Subscribe(record.Namespace, record.ActiveTask))
 	}
+}
+
+// ahpResponseText is the text of a turn's markdown parts.
+func ahpResponseText(parts []ahptypes.ResponsePart) string {
+	var text strings.Builder
+	for _, part := range parts {
+		if markdown, ok := part.Value.(*ahptypes.MarkdownResponsePart); ok {
+			text.WriteString(markdown.Content)
+		}
+	}
+	return text.String()
 }
 
 // endUnstartedTurn ends a turn clients were shown started that the session

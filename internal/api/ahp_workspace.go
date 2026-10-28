@@ -631,10 +631,17 @@ func (w *ahpWorkspaces) dropWorktree(ctx context.Context, principal ahphost.Prin
 }
 
 // ahpWorktreeRemoveScript removes, from the checkout $1, the worktree $2 when
-// its HEAD reaches no commit that a branch, tag or remote-tracking branch
-// does not, as a commit made on a detached HEAD, and git finds it clean.
+// nothing in it exists only there: its HEAD reaches no commit that a branch,
+// tag or remote-tracking branch does not, as a commit made on a detached
+// HEAD; git finds no change or untracked file, whatever the repository's
+// status settings; and no file is one git was told not to check. Any check
+// that fails keeps the worktree.
 const ahpWorktreeRemoveScript = `n=$(git -C "$2" rev-list --count HEAD --not --branches --tags --remotes) || exit 0
 [ "$n" = 0 ] || exit 0
+c=$(git -C "$2" status --porcelain --untracked-files=all --ignore-submodules=none) || exit 0
+[ -z "$c" ] || exit 0
+f=$(git -C "$2" ls-files -v) || exit 0
+printf '%s\n' "$f" | grep -q -E '^([a-z]|S) ' && exit 0
 git -C "$1" worktree remove "$2"`
 
 // removeUnlessHoldsWork deletes the user's workspace Pod unless something in

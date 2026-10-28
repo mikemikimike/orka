@@ -164,8 +164,14 @@ func TestAHPCloneAndWorktreeScripts(t *testing.T) {
 	// whose detached HEAD holds commits no ref has.
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "draft.txt"), []byte("draft\n"), 0o600))
 	out, err = script(ahpWorktreeRemoveScript, checkout, worktree)
-	require.Error(t, err, "a worktree with an untracked file was removed: %s", out)
-	require.FileExists(t, filepath.Join(worktree, "draft.txt"))
+	require.NoError(t, err, out)
+	require.FileExists(t, filepath.Join(worktree, "draft.txt"), "a worktree with an untracked file was removed")
+	// Nor does a repository setting that hides untracked files.
+	git(checkout, "config", "status.showUntrackedFiles", "no")
+	out, err = script(ahpWorktreeRemoveScript, checkout, worktree)
+	require.NoError(t, err, out)
+	require.FileExists(t, filepath.Join(worktree, "draft.txt"), "a hidden untracked file was removed")
+	git(checkout, "config", "--unset", "status.showUntrackedFiles")
 	require.NoError(t, os.Remove(filepath.Join(worktree, "draft.txt")))
 	git(worktree, "checkout", "--quiet", "--detach")
 	git(worktree, "commit", "--quiet", "--allow-empty", "-m", "detached")
