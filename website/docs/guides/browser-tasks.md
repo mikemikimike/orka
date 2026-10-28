@@ -129,7 +129,7 @@ spec:
           const title = await page.title();
           console.log(JSON.stringify({
             version: 1, outcome: "completed", summary: `Title: ${title}`,
-            data: { url: process.env.PAGE_URL, title },
+            data: { title },
             artifacts: [{ filename: "page.png", contentType: "image/png" }],
           }));
         } finally {
@@ -138,7 +138,9 @@ spec:
           await browser.close();
         }
       })().catch((err) => {
-        console.log(JSON.stringify({ version: 1, outcome: "blocked", summary: String(err) }));
+        // A launch, network, or script error is not the site refusing: fail the
+        // Task with the error instead of reporting an outcome such as blocked.
+        console.error(String(err));
         process.exitCode = 1;
       });
   resources:
