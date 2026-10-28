@@ -1224,6 +1224,10 @@ func TestBuildSystemPromptRoutesBrowserWorkToTheBrowserWorkerImage(t *testing.T)
 		"no connector or skill covers the site",
 		"search snippets never establish availability, price, or booking state",
 		"never put credentials in literal env values",
+		`require("playwright")`,
+		"the image has no Python, and playwright install hangs there",
+		"locator(...).evaluateAll instead of page.$$eval",
+		"a timeout such as 5m",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("browser guidance is missing %q", want)

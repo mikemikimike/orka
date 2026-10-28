@@ -356,7 +356,11 @@ func taskTypeParts() []promptPart {
 func browserTaskPart(image string) promptPart {
 	return promptPart{text: fmt.Sprintf(`  Browser tasks (Playwright, Chromium): use image %q, put the script in args and leave command empty,
   e.g. args: ["sh","-c","playwright screenshot --browser=chromium https://example.com /tmp/artifacts/page.png"].
-  Files in /tmp/artifacts become downloadable artifacts. Set resources: requests cpu 500m, memory 1Gi; limits cpu 2, memory 2Gi.
+  Run scripts as args ["node","-e",<script>] with require("playwright"): Chromium and that package are already installed,
+  the image has no Python, and playwright install hangs there. Kubernetes turns $$ into $ in args, so call
+  locator(...).evaluateAll instead of page.$$eval. To return data, print one version-1 structured result JSON as the only output.
+  Files in /tmp/artifacts become downloadable artifacts. Set resources: requests cpu 500m, memory 1Gi; limits cpu 2, memory 2Gi;
+  and a timeout such as 5m, because a task without one never times out.
   Use a browser task only when no connector or skill covers the site and fetched text cannot establish the fact:
   the user asked to visit or act on a site, the fact depends on live state (availability, exact prices, account state),
   or the page needs interaction (login, forms, JavaScript). A failed web_fetch proves nothing about the browser path,
