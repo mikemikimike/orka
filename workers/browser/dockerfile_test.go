@@ -61,6 +61,7 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		`ENTRYPOINT ["/usr/local/bin/browser-entrypoint"]`,
 		`exec /worker "$@"`,
 		"/usr/local/bin/wait-for-network",
+		`trap "exit 143" TERM INT`,
 		"/proc/net/if_inet6",
 		"--no-sandbox --disable-dev-shm-usage",
 		"--user-data-dir=/tmp/chrome-profile",

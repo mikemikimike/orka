@@ -14,7 +14,8 @@ browser_image="$4"
   echo "manager manifest must be a regular file: ${manager_yaml}" >&2
   exit 1
 }
-[[ -n "${ai_image}" && -n "${general_image}" && -n "${browser_image}" ]] || {
+# The browser image is optional: an empty value leaves the chat guidance out.
+[[ -n "${ai_image}" && -n "${general_image}" ]] || {
   echo "worker image references must not be empty" >&2
   exit 1
 }

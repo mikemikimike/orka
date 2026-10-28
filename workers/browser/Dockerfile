@@ -55,6 +55,9 @@ RUN set -eu; \
       '# Chromium treats that as a network change: requests in flight fail with' \
       '# net::ERR_NETWORK_CHANGED. A tentative address has flag 0x40 in' \
       '# /proc/net/if_inet6. Gives up after 5 s so a stuck address never blocks.' \
+      '# As PID 1 the wrapper gets no default signal action, so a cancellation' \
+      '# during the wait must be handled or the command would still start.' \
+      'trap "exit 143" TERM INT' \
       'i=0' \
       'while [ "$i" -lt 100 ]; do' \
       '  tentative=0' \
@@ -70,7 +73,8 @@ RUN set -eu; \
     printf '%s\n' \
       '#!/bin/sh' \
       '# The image entrypoint: settle the network, then run the Task args under /worker.' \
-      '/usr/local/bin/wait-for-network' \
+      'trap "exit 143" TERM INT' \
+      '/usr/local/bin/wait-for-network || exit $?' \
       'exec /worker "$@"' \
       > /usr/local/bin/browser-entrypoint; \
     chmod 0755 /usr/local/bin/browser-entrypoint; \
@@ -78,6 +82,7 @@ RUN set -eu; \
       '#!/bin/sh' \
       '# Raw Chromium for CLI use, with the flags Orka Task Pods need.' \
       'set -eu' \
+      'trap "exit 143" TERM INT' \
       '/usr/local/bin/wait-for-network' \
       'for chrome in /ms-playwright/chromium-*/chrome-linux*/chrome; do' \
       '  exec "$chrome" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu \' \
