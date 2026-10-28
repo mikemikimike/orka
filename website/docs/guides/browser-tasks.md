@@ -36,10 +36,10 @@ spec:
 orka task download -n orka-system example-screenshot example.png
 ```
 
-Put the script in `args` and leave `command` empty. The image's entrypoint is Orka's
-`/worker`, which runs `args` as the command, keeps its output as the result, and uploads
-every file in `/tmp/artifacts`. A `command` replaces that entrypoint, and then nothing is
-uploaded.
+Put the script in `args` and leave `command` empty. The image's entrypoint waits for the
+Pod's network to settle (below), then runs Orka's `/worker`, which runs `args` as the
+command, keeps its output as the result, and uploads every file in `/tmp/artifacts`. A
+`command` replaces that entrypoint, and then nothing is uploaded.
 
 An agent creates the same Task with `create_container_task`:
 
@@ -72,7 +72,7 @@ chat prompt tells agents which image to use and when a browser Task fits. Set
 | Node.js 24 on Debian 13 | Noto fonts, including color emoji, for legible screenshots; `git`, for workspaces |
 | `chromium-headless` | Raw Chromium with the flags below, for `--screenshot`, `--dump-dom`, or `--print-to-pdf` |
 | User | UID/GID 1000, `HOME=/tmp` |
-| Entrypoint | `/worker`, the same binary as the default worker image |
+| Entrypoint | A wrapper that waits for the Pod's network to settle, then runs `/worker`, the same binary as the default worker image |
 
 ## What a Task Pod does to Chromium
 
@@ -87,6 +87,7 @@ Each restriction affects a browser:
 | Read-only root filesystem; only `/tmp` is writable | Profiles, caches, and downloads need a writable home | `HOME=/tmp`, `XDG_CACHE_HOME=/tmp/.cache`, `XDG_CONFIG_HOME=/tmp/.config`, and `--user-data-dir=/tmp/chrome-profile` for raw Chromium |
 | `/tmp` is an `emptyDir` with no size limit | Traces and videos land on the node's disk | Keep recordings short; each artifact is limited to 10 MB |
 | Default limits of 1 CPU and 2 GiB | Page loads stall at 1 CPU | Set `resources`, below |
+| The Pod's IPv6 link-local address finishes duplicate-address detection about a second after the Pod starts | Chromium treats it as a network change and fails requests in flight with `net::ERR_NETWORK_CHANGED`, so the first navigation to a slow site fails | The entrypoint and `chromium-headless` wait for it, at most 5 seconds. With another image, wait until `/proc/net/if_inet6` lists no address with flag `0x40`, or retry the first navigation once. |
 
 With a workspace, Orka sets `HOME=/home/worker` and runs the command in `/workspace`.
 
@@ -146,6 +147,9 @@ Without Node, `chromium-headless` covers simple jobs:
 ```bash
 chromium-headless --screenshot=/tmp/artifacts/page.png --window-size=1280,800 https://example.com
 ```
+
+Chromium prints D-Bus connection errors on stderr in a Pod. They are harmless, and the
+worker keeps them in the result after the command's stdout.
 
 ## Deadlines and stop conditions
 
@@ -243,7 +247,7 @@ spec:
   args:
     - |
       set -eu
-      export HOME=/tmp npm_config_cache=/tmp/npm-cache
+      export HOME=/tmp npm_config_cache=/tmp/npm-cache npm_config_update_notifier=false
       npx -y playwright@1.64.1 screenshot --browser=chromium https://example.com /tmp/example.png
       node -e '
         const fs = require("fs");
@@ -262,4 +266,6 @@ spec:
 ```
 
 This image is about 1 GB compressed and installs Playwright on every run, which needs
-access to the npm registry. The Orka image avoids both.
+access to the npm registry. The Orka image avoids both. Installing takes long enough
+that the Pod's network has settled before the browser starts; a script that launches
+Chromium at once should wait for that (see the table above).
