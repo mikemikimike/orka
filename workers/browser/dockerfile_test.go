@@ -66,6 +66,10 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		"--no-sandbox --disable-dev-shm-usage",
 		"--user-data-dir=/tmp/chrome-profile",
 		"/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell",
+		// playwright install would hang on the read-only root filesystem.
+		"install|install-deps|chromium|chromium-headless-shell|ffmpeg|-*) ;;",
+		"mv -f /usr/local/bin/playwright.orka /usr/local/bin/playwright",
+		`exec node /usr/local/lib/node_modules/playwright/cli.js "$@"`,
 	} {
 		if !strings.Contains(finalStage, required) {
 			t.Errorf("final stage is missing %q", required)

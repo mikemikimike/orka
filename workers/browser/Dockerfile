@@ -93,7 +93,28 @@ RUN set -eu; \
       'echo "chromium-headless: no Playwright headless shell under /ms-playwright" >&2' \
       'exit 1' \
       > /usr/local/bin/chromium-headless; \
-    chmod 0755 /usr/local/bin/chromium-headless
+    chmod 0755 /usr/local/bin/chromium-headless; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# The playwright CLI. Chromium for this version is already installed, and on the' \
+      '# read-only root filesystem `playwright install` waits on a lock until the Task' \
+      '# deadline, so installing Chromium or its dependencies succeeds at once, silently' \
+      '# so a script'"'"'s JSON result stays intact. Other browsers cannot be added.' \
+      'case "${1:-}" in' \
+      '  install|install-deps)' \
+      '    for arg in "$@"; do' \
+      '      case "$arg" in' \
+      '        install|install-deps|chromium|chromium-headless-shell|ffmpeg|-*) ;;' \
+      '        *) echo "playwright $1: only Chromium is installed in this image, and browsers cannot be added at run time" >&2; exit 1 ;;' \
+      '      esac' \
+      '    done' \
+      '    exit 0 ;;' \
+      'esac' \
+      'exec node /usr/local/lib/node_modules/playwright/cli.js "$@"' \
+      > /usr/local/bin/playwright.orka; \
+    chmod 0755 /usr/local/bin/playwright.orka; \
+    mv -f /usr/local/bin/playwright.orka /usr/local/bin/playwright; \
+    test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}"
 
 COPY LICENSE NOTICE.md /usr/share/licenses/orka/
 COPY --from=builder --chown=0:0 /out/worker /worker

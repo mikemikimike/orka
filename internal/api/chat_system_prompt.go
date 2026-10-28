@@ -357,7 +357,7 @@ func browserTaskPart(image string) promptPart {
 	return promptPart{text: fmt.Sprintf(`  Browser tasks (Playwright, Chromium): use image %q, put the script in args and leave command empty,
   e.g. args: ["sh","-c","playwright screenshot --browser=chromium https://example.com /tmp/artifacts/page.png"].
   Run scripts as args ["node","-e",<script>] with require("playwright"): Chromium and that package are already installed,
-  the image has no Python, and playwright install hangs there. Kubernetes turns $$ into $ in args, so call
+  the image has no Python, and playwright install is unnecessary. Kubernetes turns $$ into $ in args, so call
   locator(...).evaluateAll instead of page.$$eval. To return data, print one version-1 structured result JSON as the only output.
   Files in /tmp/artifacts become downloadable artifacts. Set resources: requests cpu 500m, memory 1Gi; limits cpu 2, memory 2Gi;
   and a timeout such as 5m, because a task without one never times out.

@@ -1225,7 +1225,7 @@ func TestBuildSystemPromptRoutesBrowserWorkToTheBrowserWorkerImage(t *testing.T)
 		"search snippets never establish availability, price, or booking state",
 		"never put credentials in literal env values",
 		`require("playwright")`,
-		"the image has no Python, and playwright install hangs there",
+		"the image has no Python, and playwright install is unnecessary",
 		"locator(...).evaluateAll instead of page.$$eval",
 		"a timeout such as 5m",
 	} {
