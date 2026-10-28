@@ -30,6 +30,14 @@ import (
 // every Task an AHP turn creates.
 const ahpNamePrefix = "ahp-"
 
+// ahpSessionName returns a session name as the controller reads it, without
+// surrounding space, and whether it is an AHP session's. Checks read names
+// so: one with a space would otherwise pass for a different session.
+func ahpSessionName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	return name, strings.HasPrefix(name, ahpNamePrefix)
+}
+
 // ahpPerson reports a caller signed in as a person rather than a workload.
 func ahpPerson(ui *UserInfo) bool {
 	return ui != nil && (ui.AuthType == AuthTypeOIDC || ui.AuthType == AuthTypeContextToken)
@@ -50,8 +58,11 @@ func ahpTurnTask(task *corev1alpha1.Task) bool {
 		return true
 	}
 	ref := task.Spec.SessionRef
-	return strings.HasPrefix(task.Name, ahpNamePrefix) && ref != nil && strings.HasPrefix(ref.Name, ahpNamePrefix) &&
-		task.Spec.RequestedBy != nil
+	if ref == nil {
+		return false
+	}
+	_, ahp := ahpSessionName(ref.Name)
+	return strings.HasPrefix(task.Name, ahpNamePrefix) && ahp && task.Spec.RequestedBy != nil
 }
 
 // ahpTaskHidden reports an AHP turn's Task the caller may not see.
@@ -110,7 +121,7 @@ func (h *Handlers) ahpTaskCheck(c fiber.Ctx) error {
 
 func (h *Handlers) ahpSessionCheck(c fiber.Ctx) error {
 	ui := GetUserInfo(c)
-	if !ahpPerson(ui) || !strings.HasPrefix(c.Params("id"), ahpNamePrefix) {
+	if _, ahp := ahpSessionName(c.Params("id")); !ahpPerson(ui) || !ahp {
 		return nil
 	}
 	namespace, err := h.resolveNamespace(c, c.Query(toolNamespaceArg, ""))
@@ -136,8 +147,8 @@ func ahpSessionOwnersIn(ctx context.Context, r client.Reader, namespace string, 
 	owners := map[string]*corev1alpha1.Task{}
 	wanted := map[string]bool{}
 	for _, session := range sessions {
-		if strings.HasPrefix(session, ahpNamePrefix) {
-			wanted[session] = true
+		if name, ahp := ahpSessionName(session); ahp {
+			wanted[name] = true
 		}
 	}
 	if len(wanted) == 0 {
@@ -146,8 +157,10 @@ func ahpSessionOwnersIn(ctx context.Context, r client.Reader, namespace string, 
 	collect := func(tasks *corev1alpha1.TaskList) {
 		for i := range tasks.Items {
 			task := &tasks.Items[i]
-			if ref := task.Spec.SessionRef; ref != nil && wanted[ref.Name] && owners[ref.Name] == nil && ahpTurnTask(task) {
-				owners[ref.Name] = task
+			if ref := task.Spec.SessionRef; ref != nil && ahpTurnTask(task) {
+				if name, _ := ahpSessionName(ref.Name); wanted[name] && owners[name] == nil {
+					owners[name] = task
+				}
 			}
 		}
 	}
@@ -170,7 +183,8 @@ func ahpSessionOwnersIn(ctx context.Context, r client.Reader, namespace string, 
 // another person's turns use, or one named like AHP's that no turn's Task
 // names any more, which nothing can show to be the caller's.
 func ahpSessionHiddenIn(ctx context.Context, r client.Reader, ui *UserInfo, namespace, session string) (bool, error) {
-	if !ahpPerson(ui) || !strings.HasPrefix(session, ahpNamePrefix) {
+	session, ahp := ahpSessionName(session)
+	if !ahpPerson(ui) || !ahp {
 		return false, nil
 	}
 	owners, err := ahpSessionOwnersIn(ctx, r, namespace, []string{session})
@@ -181,7 +195,8 @@ func ahpSessionHiddenIn(ctx context.Context, r client.Reader, ui *UserInfo, name
 }
 
 func ahpSessionHiddenBy(ui *UserInfo, session string, owners map[string]*corev1alpha1.Task) bool {
-	if !ahpPerson(ui) || !strings.HasPrefix(session, ahpNamePrefix) {
+	session, ahp := ahpSessionName(session)
+	if !ahpPerson(ui) || !ahp {
 		return false
 	}
 	owner := owners[session]

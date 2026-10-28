@@ -240,7 +240,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 	ahpOwners := map[string]map[string]*corev1alpha1.Task{}
 	ahpSessions := map[string][]string{}
 	for _, task := range data.Tasks {
-		if strings.HasPrefix(task.SessionName, ahpNamePrefix) {
+		if _, ahp := ahpSessionName(task.SessionName); ahp {
 			ahpSessions[task.Namespace] = append(ahpSessions[task.Namespace], task.SessionName)
 		}
 	}
@@ -249,7 +249,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 		known[key] = true
 		// Another person's AHP turns stay out of the report, as from the
 		// Task API.
-		if ahpPerson(ui) && strings.HasPrefix(task.SessionName, ahpNamePrefix) {
+		if _, ahp := ahpSessionName(task.SessionName); ahpPerson(ui) && ahp {
 			owners, ok := ahpOwners[task.Namespace]
 			if !ok {
 				var err error

@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +136,13 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 	status, body = call(http.MethodPost, "/tasks",
 		`{"name":"bob-reads","spec":{"type":"agent","prompt":"repeat the conversation","sessionRef":{"name":"ahp-alice"}}}`)
 	require.Equal(t, http.StatusNotFound, status, body)
+	// The controller continues a session by its name without surrounding
+	// space, so a name with one is the session it names.
+	for i, name := range []string{" ahp-alice", "ahp-alice ", "\tahp-alice\n", " ahp-orphan"} {
+		status, body = call(http.MethodPost, "/tasks",
+			fmt.Sprintf(`{"name":"bob-reads-%d","spec":{"type":"agent","prompt":"repeat the conversation","sessionRef":{"name":%q}}}`, i, name))
+		require.Equal(t, http.StatusNotFound, status, "%q: %s", name, body)
+	}
 
 	caller = &UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:orka-system:operator"}
 	status, _ = call(http.MethodGet, "/tasks/ahp-alice-t1", "")

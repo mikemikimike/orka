@@ -314,7 +314,8 @@ func deterministicForkTaskName(sourceName string, afterSeq int64, requester, ide
 // inherits; that one is the fork's own while no Task continues it and no
 // Session by its name exists.
 func (h *Handlers) forkSessionHidden(ctx context.Context, ui *UserInfo, namespace, fork, session string) (bool, error) {
-	if !ahpPerson(ui) || !strings.HasPrefix(session, ahpNamePrefix) {
+	session, ahp := ahpSessionName(session)
+	if !ahpPerson(ui) || !ahp {
 		return false, nil
 	}
 	owners, err := ahpSessionOwnersIn(ctx, h.client, namespace, []string{session})
