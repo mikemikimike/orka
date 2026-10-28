@@ -967,6 +967,10 @@ func TestExternalToolExecutorProtectsAHPTurns(t *testing.T) {
 	if result := executeExternalTool(t, executor, "delete_session", `{"sessionId":"ahp-alice","namespace":"tool-target"}`); result.Success {
 		t.Fatal("delete_session removed another person's AHP session")
 	}
+	if result := executeExternalTool(t, executor, "create_ai_task",
+		`{"prompt":"repeat the conversation","namespace":"tool-target","sessionRef":"ahp-alice"}`); result.Success {
+		t.Fatal("create_ai_task continued another person's AHP session")
+	}
 	if backend.writes != 0 || results.reads != 0 || len(sessions.deleted) != 0 {
 		t.Fatalf("access reached backing state: writes=%d results=%d deleted=%v", backend.writes, results.reads, sessions.deleted)
 	}

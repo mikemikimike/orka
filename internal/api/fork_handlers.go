@@ -169,6 +169,17 @@ func (h *Handlers) ForkTask(c fiber.Ctx) error {
 		return err
 	}
 	stampTaskRequesterFromUserInfo(forked, GetUserInfo(c))
+	// The fork's own session, named after the fork, cannot be another
+	// person's AHP session.
+	if forked.Spec.SessionRef != nil {
+		hidden, err := ahpSessionHiddenIn(c.Context(), h.client, GetUserInfo(c), namespace, forked.Spec.SessionRef.Name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up the session's owner: %v", err))
+		}
+		if hidden {
+			return fiber.NewError(fiber.StatusNotFound, "session not found")
+		}
+	}
 	if err := h.authorizeContextTokenTaskCreate(c, createTaskRequestFromTask(forked), namespace); err != nil {
 		return err
 	}
