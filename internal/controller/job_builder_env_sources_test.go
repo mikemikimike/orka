@@ -230,6 +230,21 @@ func TestBuildTellsContainerWorkersTheirTimeout(t *testing.T) {
 	}
 }
 
+func TestContainerWorkerDeadlineUsesTheJobsWholeSeconds(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 750_000_000, time.UTC)
+	task := envSourceTestTask(corev1alpha1.TaskTypeContainer, testBusyboxImage)
+	task.Spec.Timeout = &metav1.Duration{Duration: 2900 * time.Millisecond}
+	// activeDeadlineSeconds and ORKA_TIMEOUT_SECONDS see 2s, so the deadline
+	// is 2s from now, not 2.9s.
+	if got, want := containerWorkerDeadline(task, JobBuildOptions{}, now), "2026-10-28T12:00:02.75Z"; got != want {
+		t.Fatalf("containerWorkerDeadline() = %q, want %q", got, want)
+	}
+	task.Spec.Timeout = &metav1.Duration{Duration: 500 * time.Millisecond}
+	if got := containerWorkerDeadline(task, JobBuildOptions{}, now); got != "" {
+		t.Fatalf("containerWorkerDeadline() = %q for a sub-second timeout, want none like ORKA_TIMEOUT_SECONDS", got)
+	}
+}
+
 // The workspace preparation init container holds the clone credential; Git
 // would run a caller-chosen command from GIT_CONFIG_PARAMETERS with it, so
 // Task env stays out of it apart from the proxy variables.

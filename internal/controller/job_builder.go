@@ -1104,11 +1104,14 @@ func containerWorkerTimeoutSeconds(task *corev1alpha1.Task, opts JobBuildOptions
 // measuring its soft deadline from it is at worst slightly early, and the
 // image pull and clone before the worker ran count against the timeout.
 func containerWorkerDeadline(task *corev1alpha1.Task, opts JobBuildOptions, now time.Time) string {
-	if containerWorkerTimeoutSeconds(task, opts) == "" {
+	seconds, err := strconv.ParseInt(containerWorkerTimeoutSeconds(task, opts), 10, 64)
+	if err != nil || seconds <= 0 {
 		return ""
 	}
-	// Fractional seconds matter to a short timeout's margin.
-	return now.Add(task.Spec.Timeout.Duration).UTC().Format(time.RFC3339Nano)
+	// The Job deadline and ORKA_TIMEOUT_SECONDS use the whole seconds of the
+	// timeout, so the worker's deadline does too; only the timestamp keeps
+	// fractional precision.
+	return now.Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339Nano)
 }
 
 func appendTaskEnvVars(envVars []corev1.EnvVar, task *corev1alpha1.Task) []corev1.EnvVar {
