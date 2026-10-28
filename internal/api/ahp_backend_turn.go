@@ -48,9 +48,12 @@ const (
 	// ahpExchangeMax bounds each message and reply the history keeps, and
 	// ahpHistoryMax how many exchanges; ahpCarryOverMax bounds the history a
 	// new Orka Session starts with.
-	ahpExchangeMax  = 4 << 10
-	ahpHistoryMax   = 20
-	ahpCarryOverMax = 24 << 10
+	ahpExchangeMax = 4 << 10
+	// ahpPartCompareMax bounds the newest markdown part kept to tell whether
+	// it already is a turn's stored answer.
+	ahpPartCompareMax = 1 << 20
+	ahpHistoryMax     = 20
+	ahpCarryOverMax   = 24 << 10
 	// ahpGenericPromptFailure is the Task message for a prompt that failed
 	// without a more specific reason.
 	ahpGenericPromptFailure = "prompt failed"
@@ -75,9 +78,13 @@ type ahpTurn struct {
 	textPart        string
 	thoughtPart     string
 	streamedText    bool
-	// shown is the text a turn this process recovered already showed, streamed
-	// by the process before it.
-	shown string
+	// shownPart is the newest markdown part of a turn this process recovered,
+	// streamed by the process before it.
+	shownPart string
+	// partText is the newest markdown part this process streamed, unless it
+	// grew past ahpPartCompareMax (partOver).
+	partText string
+	partOver bool
 	// lagged reports that live updates stopped before the turn ended, so the
 	// text streamed so far may be only part of its answer.
 	lagged bool
@@ -526,13 +533,18 @@ func (t *ahpTurn) text(content string) {
 	t.thoughtPart = ""
 	if t.textPart == "" {
 		t.textPart = ahpRandomHex(8)
-		t.lastText = ""
+		t.lastText, t.partText, t.partOver = "", "", false
 		t.chat(ahptypes.StateAction{Value: &ahptypes.ChatResponsePartAction{
 			Type: ahptypes.ActionTypeChatResponsePart, TurnId: t.id,
 			Part: ahptypes.ResponsePart{Value: &ahptypes.MarkdownResponsePart{Kind: ahptypes.ResponsePartKindMarkdown, Id: t.textPart}},
 		}})
 	}
 	t.lastText = ahpTail(t.lastText+content, ahpFailureTextMax)
+	if !t.partOver && len(t.partText)+len(content) <= ahpPartCompareMax {
+		t.partText += content
+	} else {
+		t.partText, t.partOver = "", true
+	}
 	t.reply = ahpTail(t.reply+content, ahpExchangeMax)
 	t.streamedText = true
 	t.chat(ahptypes.StateAction{Value: &ahptypes.ChatDeltaAction{Type: ahptypes.ActionTypeChatDelta, TurnId: t.id, PartId: t.textPart, Content: content}})
@@ -974,11 +986,15 @@ func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 		// the text that streamed, and the reply the conversation keeps.
 		if data, err := t.b.h.resultStore.GetResult(t.ctx, task.Namespace, task.Name); err == nil {
 			answer := executionevents.RedactExecutionEventText(string(data))
-			// Text already shown may hold the whole answer: streamed before
-			// live updates fell behind, or by the process before a restart.
-			// It is not shown twice, and stays the reply the conversation
-			// keeps.
-			if whole := strings.TrimSpace(answer); whole != "" && strings.Contains(t.shown+t.reply, whole) {
+			// The newest text shown may already be the whole answer: streamed
+			// before live updates fell behind, or by the process before a
+			// restart. It is not shown twice, and stays the reply the
+			// conversation keeps.
+			newest, known := t.shownPart, true
+			if t.streamedText {
+				newest, known = t.partText, !t.partOver
+			}
+			if whole := strings.TrimSpace(answer); whole != "" && known && strings.TrimSpace(newest) == whole {
 				t.reply = ahpTail(whole, ahpExchangeMax)
 			} else {
 				if t.lagged {
@@ -1145,7 +1161,7 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 		// The previous leader may have streamed some or all of the answer.
 		if state, err := ahphost.ChannelState(ctx, b.store, principal.UserKey, record.Chat); err == nil &&
 			state.Chat != nil && state.Chat.ActiveTurn != nil && state.Chat.ActiveTurn.Id == record.ActiveTurn {
-			turn.shown = ahpResponseText(state.Chat.ActiveTurn.ResponseParts)
+			turn.shownPart = ahpLastMarkdown(state.Chat.ActiveTurn.ResponseParts)
 		}
 		b.mu.Lock()
 		b.turns[ahpTurnKey(principal.UserKey, record.Session)] = turn
@@ -1154,15 +1170,14 @@ func (b *ahpBackend) recoverTurns(ctx context.Context, principal ahphost.Princip
 	}
 }
 
-// ahpResponseText is the text of a turn's markdown parts.
-func ahpResponseText(parts []ahptypes.ResponsePart) string {
-	var text strings.Builder
-	for _, part := range parts {
+// ahpLastMarkdown is the content of a turn's newest markdown part.
+func ahpLastMarkdown(parts []ahptypes.ResponsePart) string {
+	for _, part := range slices.Backward(parts) {
 		if markdown, ok := part.Value.(*ahptypes.MarkdownResponsePart); ok {
-			text.WriteString(markdown.Content)
+			return markdown.Content
 		}
 	}
-	return text.String()
+	return ""
 }
 
 // endUnstartedTurn ends a turn clients were shown started that the session

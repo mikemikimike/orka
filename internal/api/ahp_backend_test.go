@@ -1875,9 +1875,30 @@ func TestAHPBackendUsesTheStoredResultAfterLiveUpdatesLag(t *testing.T) {
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
 }
 
+// ahpTurnText is the text of a turn's markdown parts.
+func ahpTurnText(parts []ahptypes.ResponsePart) string {
+	var text strings.Builder
+	for _, part := range parts {
+		if markdown, ok := part.Value.(*ahptypes.MarkdownResponsePart); ok {
+			text.WriteString(markdown.Content)
+		}
+	}
+	return text.String()
+}
+
 // A turn the previous leader streamed in full before it stopped is settled by
-// recovery from its Task without showing the answer twice.
+// recovery from its Task without showing the answer twice; one whose shown
+// text is not the answer still gets it.
 func TestAHPBackendRecoveryDoesNotRepeatAStreamedAnswer(t *testing.T) {
+	for _, test := range []struct{ streamed, answer, want string }{
+		{streamed: "woke-up", answer: "woke-up", want: "woke-up"},
+		{streamed: "42 is not the result", answer: "42", want: "42 is not the result42"},
+	} {
+		t.Run(test.streamed, func(t *testing.T) { testAHPRecoveredAnswer(t, test.streamed, test.answer, test.want) })
+	}
+}
+
+func testAHPRecoveredAnswer(t *testing.T, streamed, answer, want string) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")
 	ctx := ahpCtx(t)
@@ -1895,7 +1916,7 @@ func TestAHPBackendRecoveryDoesNotRepeatAStreamedAnswer(t *testing.T) {
 	var turn *ahpTurn
 	require.Eventually(t, func() bool { turn = env.backend.activeTurn(alice.UserKey, ahpTestSession); return turn != nil },
 		5*time.Second, 20*time.Millisecond)
-	env.publish(taskName, &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: "woke-up"}})
+	env.publish(taskName, &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: streamed}})
 	waitForActionType(t, chatSub, "chat/delta")
 
 	// The leader stops before it settles the turn; the Task then succeeds.
@@ -1903,7 +1924,7 @@ func TestAHPBackendRecoveryDoesNotRepeatAStreamedAnswer(t *testing.T) {
 	env.backend.mu.Lock()
 	delete(env.backend.recovered, alice.UserKey)
 	env.backend.mu.Unlock()
-	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte("woke-up")))
+	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte(answer)))
 	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
 	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
 	task.Status.ResultRef = &corev1alpha1.ResultReference{Available: true}
@@ -1915,9 +1936,9 @@ func TestAHPBackendRecoveryDoesNotRepeatAStreamedAnswer(t *testing.T) {
 	require.NoError(t, err)
 	turns := state.Chat.Turns
 	require.Len(t, turns, 1)
-	require.Equal(t, 1, strings.Count(ahpResponseText(turns[0].ResponseParts), "woke-up"), "the answer is shown once")
+	require.Equal(t, want, ahpTurnText(turns[0].ResponseParts))
 	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
-	require.Equal(t, "woke-up", record.History[len(record.History)-1].Reply)
+	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
 }
 
 // ahpConfigEmitter records the session config changes the backend shows.
