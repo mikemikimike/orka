@@ -40,7 +40,9 @@ auth() { printf 'Authorization: Bearer %s' "$(cat "$ORKA_SA_TOKEN_PATH")"; }
 code() {
   status=000
   for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    status=$(curl -s -o /dev/null -w '%{http_code}' -H "$(auth)" "$@" || echo 000)
+    # curl prints 000 itself when no response arrived; only keep the shell alive.
+    status=$(curl -s -o /dev/null -w '%{http_code}' -H "$(auth)" "$@") || true
+    [ -n "$status" ] || status=000
     case "$status" in 000|502|503|504) sleep 1 ;; *) break ;; esac
   done
   echo "$status"
