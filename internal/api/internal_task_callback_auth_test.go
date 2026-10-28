@@ -101,7 +101,9 @@ func newTaskCallbackFixture(t *testing.T) taskCallbackFixture {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	results := sqlite.NewStore(db, ":memory:")
-	f.server = NewServer(kube, nil, ServerConfig{ResultStore: results, ArtifactStore: results, PlanStore: results, APIReader: kube})
+	f.server = NewServer(kube, nil, ServerConfig{
+		ResultStore: results, ArtifactStore: results, PlanStore: results, ExecutionEventStore: results, APIReader: kube,
+	})
 	return f
 }
 
@@ -125,6 +127,8 @@ func TestTaskCallbackTokenPostsOnlyResultsArtifactsAndEvents(t *testing.T) {
 		f.request(t, http.MethodPost, "/internal/v1/results/default/task-a", f.callback, []byte(`{"version":1,"summary":"ok"}`)))
 	require.Equal(t, http.StatusCreated,
 		f.request(t, http.MethodPost, "/internal/v1/artifacts/default/task-a/shot.png", f.callback, []byte("png")))
+	require.Equal(t, http.StatusCreated,
+		f.request(t, http.MethodPost, "/internal/v1/events/default/task/task-a", f.callback, []byte(`{"type":"WorkerStarted"}`)))
 	for _, audiences := range *f.reviews {
 		require.Equal(t, []string{workerenv.TaskCallbackTokenAudience}, audiences,
 			"a callback token must be reviewed against its own audience only")
