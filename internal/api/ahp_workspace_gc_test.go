@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/orka-agents/orka/internal/ahphost"
 )
@@ -64,6 +65,31 @@ func TestAHPWorkspaceCollectorKeepsWorkspacesInUse(t *testing.T) {
 	require.True(t, apierrors.IsNotFound(err), "an idle workspace with nothing running is removed")
 	require.NoError(t, env.kube.Get(context.Background(), types.NamespacedName{Namespace: w.namespace, Name: ahpWorkspacePodName(bob.UserKey)}, &corev1.Pod{}),
 		"a workspace with a shell stays")
+}
+
+// Disposing of the last session keeps a workspace it cannot check: a Pod whose
+// container is restarting, or has not started, still has its files.
+func TestAHPWorkspaceDisposalKeepsAWorkspaceItCannotCheck(t *testing.T) {
+	env := newAHPTestEnv(t)
+	w := &ahpWorkspaces{b: env.backend, clientset: kubefake.NewClientset(), rest: &rest.Config{}, namespace: "orka-ahp-workspaces", image: "example.com/git@sha256:" + ahpHash("x")}
+	env.backend.workspaces = w
+	for name, status := range map[string]corev1.PodStatus{
+		"restarting": {Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: ahpWorkspaceContainer, RestartCount: 1, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}},
+		"pending": {Phase: corev1.PodPending},
+	} {
+		t.Run(name, func(t *testing.T) {
+			principal := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", name)}
+			pod := w.podSpec(principal)
+			pod.Status = status
+			require.NoError(t, env.kube.Create(context.Background(), pod))
+			require.False(t, w.removeUnlessHoldsWork(context.Background(), principal))
+			require.NoError(t, env.kube.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}), "the workspace stays")
+		})
+	}
+	require.True(t, w.removeUnlessHoldsWork(context.Background(), ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "none")}),
+		"no workspace is no workspace to keep")
 }
 
 // A branch's changes are found from its base, or without one, as for a

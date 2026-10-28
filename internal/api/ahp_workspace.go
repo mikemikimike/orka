@@ -652,10 +652,15 @@ printf '%s\n' "$f" | grep -q -E '^([a-z]|S) ' && exit 0
 git -C "$1" worktree remove "$2"`
 
 // removeUnlessHoldsWork deletes the user's workspace Pod unless something in
-// it exists nowhere else, and reports whether it did. A Pod that is not
-// running has nothing to check and goes.
+// it may exist nowhere else, and reports whether it did. A Pod that cannot be
+// checked, as while its container restarts, still has its files: it stays,
+// for the idle collector to decide about.
 func (w *ahpWorkspaces) removeUnlessHoldsWork(ctx context.Context, principal ahphost.Principal) bool {
-	if pod, running := w.running(ctx, principal); running && w.holdsWork(ctx, pod) {
+	pod, running := w.running(ctx, principal)
+	if running && w.holdsWork(ctx, pod) {
+		return false
+	}
+	if !running && pod != nil && pod.Labels[ahpWorkspaceUserLabel] == principal.UserKey[:40] && pod.DeletionTimestamp.IsZero() {
 		return false
 	}
 	w.remove(ctx, principal)
