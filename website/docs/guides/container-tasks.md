@@ -181,7 +181,10 @@ The default worker image, and any custom image whose `ENTRYPOINT` is Orka's `/wo
 binary, deliver for you:
 
 - The command's stdout and stderr become the result. A command that prints nothing posts
-  no result, and the Pod log is kept instead; its artifacts are still uploaded.
+  no result, and the Pod log is kept instead; its artifacts are still uploaded. Output that
+  is a [structured result](#recommended-result-shape) is kept as it is; with a workspace,
+  the worker adds `baseSHA`, `headSHA`, `diff`, and `files` to it, and wraps any other
+  output in the `summary` of its own.
 - Every regular file in `/tmp/artifacts` is uploaded as an artifact when the command
   ends: at most 10 MB per file and 50 MB per run. Subdirectories and symlinks are skipped.
   Uploads do not depend on the result being posted.
@@ -238,7 +241,7 @@ curl -fsS -X POST "$ORKA_RESULT_ENDPOINT" \
 | | Result | Artifact |
 | --- | --- | --- |
 | Size limit | 10 MB | 10 MB per file |
-| Name | — | One path segment: at most 255 characters, no `/`, no control characters, not `.` or `..` |
+| Name | — | One path segment: at most 255 bytes, no `/`, no control characters, not `.` or `..` |
 | Repeated `POST` | The last one wins | The same name replaces the earlier file |
 | Success status | `204` | `201` |
 | After the Task finishes | Refused with `403` | Refused with `403` |
