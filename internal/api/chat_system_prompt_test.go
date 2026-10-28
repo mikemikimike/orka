@@ -1219,7 +1219,7 @@ func TestBuildSystemPromptRoutesBrowserWorkToTheBrowserWorkerImage(t *testing.T)
 	}
 	for _, want := range []string{
 		`use image "` + image + `"`,
-		"put the script in args and leave command empty",
+		"put the script in args and omit command",
 		"/tmp/artifacts",
 		"no connector or skill covers the site",
 		"search snippets never establish availability, price, or booking state",

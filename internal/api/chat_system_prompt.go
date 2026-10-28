@@ -354,7 +354,7 @@ func taskTypeParts() []promptPart {
 // browserTaskPart routes browser work to the browser worker image, and says
 // when a browser task is the right tool at all.
 func browserTaskPart(image string) promptPart {
-	return promptPart{text: fmt.Sprintf(`  Browser tasks (Playwright, Chromium): use image %q, put the script in args and leave command empty,
+	return promptPart{text: fmt.Sprintf(`  Browser tasks (Playwright, Chromium): use image %q, put the script in args and omit command,
   e.g. args: ["sh","-c","playwright screenshot --browser=chromium https://example.com /tmp/artifacts/page.png"].
   Run scripts as args ["node","-e",<script>] with require("playwright"): Chromium and that package are already installed,
   the image has no Python, and playwright install is unnecessary. Kubernetes turns $$ into $ in args, so call
