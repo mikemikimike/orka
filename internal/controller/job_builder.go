@@ -2488,10 +2488,16 @@ func (b *JobBuilder) workspaceInitEnvVars(task *corev1alpha1.Task, validationTas
 // workspace preparation init container. That container holds the clone
 // credential, and Git honours variables such as GIT_CONFIG_PARAMETERS,
 // GIT_ASKPASS, and GIT_SSH_COMMAND that would run a caller-chosen command
-// with it, so only the HTTP proxy variables a clone may need pass through.
+// with it, so only the HTTP proxy variables a clone may need pass through,
+// plus the prior-Task patch digest that a repository mutation Task pins so
+// preparation can refuse a changed patch.
 func workspaceInitPassthroughEnv(env []corev1.EnvVar) []corev1.EnvVar {
 	var out []corev1.EnvVar
 	for _, envVar := range env {
+		if envVar.Name == workerenv.PriorTaskDiffSHA256 {
+			out = append(out, envVar)
+			continue
+		}
 		switch strings.ToUpper(envVar.Name) {
 		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY":
 			out = append(out, envVar)

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+	"github.com/orka-agents/orka/internal/workerenv"
 )
 
 func envSourceTestTask(taskType corev1alpha1.TaskType, image string, env ...corev1.EnvVar) *corev1alpha1.Task {
@@ -143,6 +144,8 @@ func TestBuildKeepsTaskEnvOutOfTheWorkspaceInitContainer(t *testing.T) {
 		corev1.EnvVar{Name: "GIT_CONFIG_PARAMETERS", Value: "'credential.helper=!cat /secrets/git/token'"},
 		corev1.EnvVar{Name: "https_proxy", Value: "http://proxy:3128"},
 		corev1.EnvVar{Name: "MODE", Value: "smoke"},
+		corev1.EnvVar{Name: workerenv.PriorTaskDiffSHA256, Value: "abc123"},
+		corev1.EnvVar{Name: "ORKA_SOMETHING_ELSE", Value: "x"},
 	)
 	task.Spec.Workspace = &corev1alpha1.WorkspaceConfig{
 		GitRepo:           "https://github.com/example/repo",
@@ -161,13 +164,17 @@ func TestBuildKeepsTaskEnvOutOfTheWorkspaceInitContainer(t *testing.T) {
 	if initEnv == nil {
 		t.Fatal("no workspace preparation init container")
 	}
-	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "MODE"} {
+	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "MODE", "ORKA_SOMETHING_ELSE"} {
 		if got, ok := findEnvVar(initEnv, name); ok {
 			t.Fatalf("init container has %s=%q; Task env must not reach the clone credential", name, got.Value)
 		}
 	}
 	if got, ok := findEnvVar(initEnv, "https_proxy"); !ok || got.Value != "http://proxy:3128" {
 		t.Fatalf("init container https_proxy = %#v, found=%v; the proxy variables pass through", got, ok)
+	}
+	// A repository mutation Task pins the approved patch for preparation to verify.
+	if got, ok := findEnvVar(initEnv, workerenv.PriorTaskDiffSHA256); !ok || got.Value != "abc123" {
+		t.Fatalf("init container %s = %#v, found=%v; the patch digest must pass through", workerenv.PriorTaskDiffSHA256, got, ok)
 	}
 	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "https_proxy", "MODE"} {
 		if _, ok := findEnvVar(job.Spec.Template.Spec.Containers[0].Env, name); !ok {
