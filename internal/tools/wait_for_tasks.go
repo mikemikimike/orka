@@ -495,6 +495,7 @@ func redactBrokeredWaitTaskResult(result *TaskResultInfo) {
 		return
 	}
 	result.Result = redact.SensitiveText(result.Result)
+	result.Outcome = redact.SensitiveText(result.Outcome)
 	result.Summary = redact.SensitiveText(result.Summary)
 	result.Verdict = redact.SensitiveText(result.Verdict)
 	result.Feedback = redact.SensitiveText(result.Feedback)

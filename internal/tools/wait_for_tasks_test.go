@@ -597,6 +597,7 @@ func TestWaitForTasksTool_Execute_RedactsBrokeredResultsBeforeTruncation(t *test
 	opaqueToken := "opaque-value-that-needs-key-context"
 	structured, err := json.Marshal(common.StructuredResult{
 		Version:  1,
+		Outcome:  secret,
 		Summary:  strings.Repeat("x", maxWaitTaskSummaryChars-11) + " " + secret,
 		Feedback: "password=correct-horse-battery-staple",
 		Data: map[string]any{
@@ -661,6 +662,9 @@ func TestWaitForTasksTool_Execute_RedactsBrokeredResultsBeforeTruncation(t *test
 	}
 	if len(waitResult.Results) != 1 || !strings.Contains(waitResult.Results[0].Summary, "[REDACTED]") {
 		t.Fatalf("redacted result = %#v", waitResult)
+	}
+	if !strings.Contains(waitResult.Results[0].Outcome, "[REDACTED]") {
+		t.Fatalf("brokered outcome was not redacted: %q", waitResult.Results[0].Outcome)
 	}
 	if waitResult.Results[0].Data["token"] != "[REDACTED]" || waitResult.Results[0].Data["safe"] != "visible" {
 		t.Fatalf("redacted data = %#v", waitResult.Results[0].Data)
