@@ -160,14 +160,24 @@ func TestAHPCloneAndWorktreeScripts(t *testing.T) {
 	require.NoError(t, err, out)
 	require.Equal(t, kept, git(worktree, "rev-parse", "HEAD"), "the unpublished branch is reused as it was")
 
-	// Removing a session's worktree keeps one with uncommitted work.
+	// Removing a session's worktree keeps one with uncommitted work, and one
+	// whose detached HEAD holds commits no ref has.
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "draft.txt"), []byte("draft\n"), 0o600))
-	remove := ahpWorktreeRemoveArgs(checkout, worktree)
-	require.Error(t, exec.Command(remove[0], remove[1:]...).Run(), "a worktree with an untracked file was removed")
+	out, err = script(ahpWorktreeRemoveScript, checkout, worktree)
+	require.Error(t, err, "a worktree with an untracked file was removed: %s", out)
 	require.FileExists(t, filepath.Join(worktree, "draft.txt"))
 	require.NoError(t, os.Remove(filepath.Join(worktree, "draft.txt")))
-	require.NoError(t, exec.Command(remove[0], remove[1:]...).Run(), "a clean worktree is removed")
-	require.NoDirExists(t, worktree)
+	git(worktree, "checkout", "--quiet", "--detach")
+	git(worktree, "commit", "--quiet", "--allow-empty", "-m", "detached")
+	detached := git(worktree, "rev-parse", "HEAD")
+	_, err = script(ahpWorktreeRemoveScript, checkout, worktree)
+	require.NoError(t, err)
+	require.DirExists(t, worktree, "a worktree whose HEAD alone reaches a commit was removed")
+	require.Equal(t, detached, git(worktree, "rev-parse", "HEAD"))
+	git(worktree, "checkout", "--quiet", "feature")
+	out, err = script(ahpWorktreeRemoveScript, checkout, worktree)
+	require.NoError(t, err, out)
+	require.NoDirExists(t, worktree, "a clean worktree on its branch is removed")
 	require.Equal(t, kept, git(checkout, "rev-parse", "feature"), "its branch stays")
 }
 

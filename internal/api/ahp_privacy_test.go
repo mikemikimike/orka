@@ -41,6 +41,15 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 			SessionRef:  &corev1alpha1.SessionReference{Name: "ahp-alice"},
 		},
 	}
+	// A turn's Task from before the label, recognized by its shape.
+	unlabelled := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-old-t1", Namespace: namespace},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, Prompt: "alice's older secret",
+			RequestedBy: &corev1alpha1.RequestedBy{Issuer: "https://issuer.example", Subject: "alice"},
+			SessionRef:  &corev1alpha1.SessionReference{Name: "ahp-old"},
+		},
+	}
 	shared := &corev1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: namespace},
 		Spec:       corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeContainer},
@@ -48,11 +57,11 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(turn, shared).Build()
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(turn, unlabelled, shared).Build()
 	db, err := sqlite.NewDB(":memory:")
 	require.NoError(t, err)
 	ss := sqlite.NewStore(db, ":memory:")
-	for _, name := range []string{"ahp-alice", "ahp-orphan", "team-session"} {
+	for _, name := range []string{"ahp-alice", "ahp-old", "ahp-orphan", "team-session"} {
 		require.NoError(t, ss.CreateSession(context.Background(), &store.SessionRecord{Namespace: namespace, Name: name, SessionType: "task"}))
 	}
 	handlers := NewHandlers(HandlersConfig{Client: kube, SessionStore: ss, ResultStore: ss})
@@ -91,12 +100,17 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 	require.Contains(t, body, "ahp-alice-t1")
 	status, _ = call(http.MethodGet, "/sessions/ahp-alice", "")
 	require.Equal(t, http.StatusOK, status)
+	status, _ = call(http.MethodGet, "/tasks/ahp-old-t1", "")
+	require.Equal(t, http.StatusOK, status)
+	status, _ = call(http.MethodGet, "/sessions/ahp-old", "")
+	require.Equal(t, http.StatusOK, status, "a session from before the label is still its owner's")
 	_, body = call(http.MethodGet, "/sessions", "")
 	require.Contains(t, body, `"ahp-alice"`)
 	require.NotContains(t, body, "ahp-orphan", "an AHP session no turn's Task names is nobody's to show")
 
 	caller = person("bob")
-	for _, path := range []string{"/tasks/ahp-alice-t1", "/tasks/ahp-alice-t1/events", "/tasks/ahp-gone-t1/events", "/sessions/ahp-alice"} {
+	for _, path := range []string{"/tasks/ahp-alice-t1", "/tasks/ahp-alice-t1/events", "/tasks/ahp-gone-t1/events", "/sessions/ahp-alice",
+		"/tasks/ahp-old-t1", "/sessions/ahp-old"} {
 		status, body := call(http.MethodGet, path, "")
 		require.Equal(t, http.StatusNotFound, status, path)
 		require.NotContains(t, body, "secret plan", path)
@@ -107,6 +121,7 @@ func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
 		"another person cannot delete the turn")
 	_, body = call(http.MethodGet, "/tasks", "")
 	require.NotContains(t, body, "ahp-alice-t1")
+	require.NotContains(t, body, "ahp-old-t1")
 	require.Contains(t, body, `"shared"`, "other Tasks stay visible")
 	_, body = call(http.MethodGet, "/sessions", "")
 	require.NotContains(t, body, "ahp-alice")

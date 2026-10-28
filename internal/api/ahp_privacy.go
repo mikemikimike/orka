@@ -41,9 +41,22 @@ func ahpOwns(ui *UserInfo, task *corev1alpha1.Task) bool {
 	return requester != nil && requester.Issuer == ui.Issuer && requester.Subject == ui.Subject
 }
 
+// ahpTurnTask reports a Task an AHP turn created: labelled so, or, as Tasks
+// from before the label were, named for an AHP session it continues for a
+// recorded requester. People cannot create such a Task: the API refuses a
+// Task that continues an AHP session not theirs.
+func ahpTurnTask(task *corev1alpha1.Task) bool {
+	if task.Labels[labels.LabelAHPTurn] == labels.LabelAHPTurnValue {
+		return true
+	}
+	ref := task.Spec.SessionRef
+	return strings.HasPrefix(task.Name, ahpNamePrefix) && ref != nil && strings.HasPrefix(ref.Name, ahpNamePrefix) &&
+		task.Spec.RequestedBy != nil
+}
+
 // ahpTaskHidden reports an AHP turn's Task the caller may not see.
 func ahpTaskHidden(ui *UserInfo, task *corev1alpha1.Task) bool {
-	return ahpPerson(ui) && task.Labels[labels.LabelAHPTurn] == labels.LabelAHPTurnValue && !ahpOwns(ui, task)
+	return ahpPerson(ui) && ahpTurnTask(task) && !ahpOwns(ui, task)
 }
 
 // ahpTaskPrivate guards a /tasks/:id route. A turn's Task that is gone can no
@@ -118,12 +131,12 @@ func (h *Handlers) ahpSessionCheck(c fiber.Ctx) error {
 // one such Task, which carries the turn's requester.
 func (h *Handlers) ahpSessionOwners(ctx context.Context, namespace string) (map[string]*corev1alpha1.Task, error) {
 	var tasks corev1alpha1.TaskList
-	if err := h.client.List(ctx, &tasks, client.InNamespace(namespace), client.MatchingLabels{labels.LabelAHPTurn: labels.LabelAHPTurnValue}); err != nil {
+	if err := h.client.List(ctx, &tasks, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 	owners := map[string]*corev1alpha1.Task{}
 	for i := range tasks.Items {
-		if ref := tasks.Items[i].Spec.SessionRef; ref != nil && ref.Name != "" {
+		if ref := tasks.Items[i].Spec.SessionRef; ref != nil && ref.Name != "" && ahpTurnTask(&tasks.Items[i]) {
 			owners[ref.Name] = &tasks.Items[i]
 		}
 	}

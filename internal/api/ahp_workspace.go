@@ -614,9 +614,9 @@ git merge --quiet --ff-only "origin/$2"`, "sh", ahpWorktreePath(project, record.
 	changes.sync(changed)
 }
 
-// dropWorktree removes a session's worktree from a running workspace when it
-// is clean: without --force, git keeps a worktree with changes or untracked
-// files, and its branch stays in the checkout either way.
+// dropWorktree removes a session's worktree from a running workspace when
+// nothing in it exists only there: without --force, git keeps a worktree with
+// changes or untracked files, and its branch stays in the checkout either way.
 func (w *ahpWorkspaces) dropWorktree(ctx context.Context, principal ahphost.Principal, project ahpProject, branch string) {
 	if !w.enabled() || branch == "" {
 		return
@@ -626,15 +626,16 @@ func (w *ahpWorkspaces) dropWorktree(ctx context.Context, principal ahphost.Prin
 		return
 	}
 	_ = w.withGit(ctx, principal, func(ctx context.Context) error {
-		return w.run(ctx, pod, ahpWorktreeRemoveArgs(project.Path, ahpWorktreePath(project, branch))...)
+		return w.run(ctx, pod, ahpShell, "-c", ahpWorktreeRemoveScript, "sh", project.Path, ahpWorktreePath(project, branch))
 	})
 }
 
-// ahpWorktreeRemoveArgs removes the worktree from the checkout at dir
-// only when it is clean.
-func ahpWorktreeRemoveArgs(dir, worktree string) []string {
-	return []string{"git", "-C", dir, "worktree", "remove", worktree}
-}
+// ahpWorktreeRemoveScript removes, from the checkout $1, the worktree $2 when
+// its HEAD reaches no commit that a branch, tag or remote-tracking branch
+// does not, as a commit made on a detached HEAD, and git finds it clean.
+const ahpWorktreeRemoveScript = `n=$(git -C "$2" rev-list --count HEAD --not --branches --tags --remotes) || exit 0
+[ "$n" = 0 ] || exit 0
+git -C "$1" worktree remove "$2"`
 
 // removeUnlessHoldsWork deletes the user's workspace Pod unless something in
 // it exists nowhere else, and reports whether it did. A Pod that is not
