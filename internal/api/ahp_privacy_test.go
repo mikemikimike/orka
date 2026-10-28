@@ -283,6 +283,10 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		{Namespace: namespace, TaskUID: "mixed-bob", SessionName: "ahp-mixed", Requester: requester("bob")},
 		{Namespace: namespace, TaskUID: "other-issuer", SessionName: "ahp-other", Requester: &store.UsageRequester{Issuer: "https://other.example", Subject: "alice"}},
 		{Namespace: namespace, TaskUID: "alice-in-bobs", SessionName: "ahp-live", Requester: requester("alice")},
+		// A name with surrounding space is the session it names.
+		{Namespace: namespace, TaskUID: "padded-alice-in-bobs", SessionName: " ahp-live", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "padded-alice", SessionName: "ahp-padded", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "padded-bob", SessionName: "ahp-padded ", Requester: requester("bob")},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
 	hidden := func(caller *UserInfo) map[string]bool {
@@ -300,10 +304,11 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	}
 	require.Equal(t, map[string]bool{
 		"default/unknown": true, "default/mixed-alice": true, "default/mixed-bob": true, "default/other-issuer": true, "default/alice-in-bobs": true,
+		"default/padded-alice-in-bobs": true, "default/padded-alice": true, "default/padded-bob": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
 	require.Equal(t, map[string]bool{
 		"default/alice-turn": true, "default/alice-legacy": true, "default/unknown": true, "default/mixed-alice": true, "default/mixed-bob": true,
-		"default/other-issuer": true,
+		"default/other-issuer": true, "default/padded-alice": true, "default/padded-bob": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }

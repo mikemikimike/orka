@@ -213,10 +213,11 @@ type ahpUsageSession struct{ namespace, namespaceUID, session string }
 func ahpRetainedRequesters(tasks []store.UsageTask) map[ahpUsageSession]*store.UsageRequester {
 	requesters := map[ahpUsageSession]*store.UsageRequester{}
 	for _, task := range tasks {
-		if !strings.HasPrefix(task.SessionName, ahpNamePrefix) || task.Requester == nil {
+		session, ahp := ahpSessionName(task.SessionName)
+		if !ahp || task.Requester == nil {
 			continue
 		}
-		key := ahpUsageSession{task.Namespace, task.NamespaceUID, task.SessionName}
+		key := ahpUsageSession{task.Namespace, task.NamespaceUID, session}
 		if known, seen := requesters[key]; !seen {
 			requesters[key] = task.Requester
 		} else if known != nil && *known != *task.Requester {
@@ -234,9 +235,10 @@ func ahpRetainedRequesters(tasks []store.UsageTask) map[ahpUsageSession]*store.U
 // up, the requester its usage retains decides, so people keep seeing their
 // own usage.
 func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task, retained map[ahpUsageSession]*store.UsageRequester) bool {
-	if owners[task.SessionName] != nil {
-		return ahpSessionHiddenBy(ui, task.SessionName, owners)
+	session, _ := ahpSessionName(task.SessionName)
+	if owners[session] != nil {
+		return ahpSessionHiddenBy(ui, session, owners)
 	}
-	requester := retained[ahpUsageSession{task.Namespace, task.NamespaceUID, task.SessionName}]
+	requester := retained[ahpUsageSession{task.Namespace, task.NamespaceUID, session}]
 	return requester == nil || requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
 }
