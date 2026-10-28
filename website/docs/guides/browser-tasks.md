@@ -67,7 +67,7 @@ chat prompt tells agents which image to use and when a browser Task fits. Set
 
 | In the image | Details |
 | --- | --- |
-| Playwright 1.64.1 | `playwright` CLI on `PATH`; scripts can `require("playwright")` without installing anything. Do not run `playwright install`: the browsers are already there, and on the read-only root filesystem it hangs |
+| Playwright 1.64.1 | `playwright` CLI on `PATH`; scripts can `require("playwright")` without installing anything. `playwright install` returns at once for Chromium, which is already installed; other browsers cannot be added |
 | Chromium | Playwright's own build and headless shell for that version, under `/ms-playwright` |
 | Node.js 24 on Debian 13 | Noto fonts, including color emoji, for legible screenshots; `git`, for workspaces. There is no Python |
 | `chromium-headless` | Playwright's headless shell with the flags below, for `--screenshot`, `--dump-dom`, or `--print-to-pdf`. Unlike full Chromium, it calls no Google services of its own |
