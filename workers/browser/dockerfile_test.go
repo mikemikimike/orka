@@ -69,7 +69,11 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		// playwright install would hang on the read-only root filesystem.
 		"install|install-deps|chromium|chromium-headless-shell|ffmpeg|-*) ;;",
 		"mv -f /usr/local/bin/playwright.orka /usr/local/bin/playwright",
-		`exec node /usr/local/lib/node_modules/playwright/cli.js "$@"`,
+		"cli=/usr/local/lib/node_modules/playwright/cli.js",
+		`exec node "$cli" "$@"`,
+		// Diagnostics and a browser path other than the image's reach the real installer.
+		`[ "${PLAYWRIGHT_BROWSERS_PATH:-}" = /ms-playwright ] || exec node "$cli" "$@"`,
+		`--help|-h|--list|--dry-run) exec node "$cli" "$@" ;;`,
 	} {
 		if !strings.Contains(finalStage, required) {
 			t.Errorf("final stage is missing %q", required)

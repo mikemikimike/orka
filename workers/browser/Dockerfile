@@ -96,12 +96,18 @@ RUN set -eu; \
     chmod 0755 /usr/local/bin/chromium-headless; \
     printf '%s\n' \
       '#!/bin/sh' \
-      '# The playwright CLI. Chromium for this version is already installed, and on the' \
-      '# read-only root filesystem `playwright install` waits on a lock until the Task' \
-      '# deadline, so installing Chromium or its dependencies succeeds at once, silently' \
-      '# so a script'"'"'s JSON result stays intact. Other browsers cannot be added.' \
+      '# The playwright CLI. Chromium for this version is already in /ms-playwright, where' \
+      '# `playwright install` waits on a lock on the read-only root filesystem until the' \
+      '# Task deadline. So with that browser path, installing Chromium or its dependencies' \
+      '# succeeds at once, silently so a JSON result stays intact, and other browsers are' \
+      '# refused. Help, --list, --dry-run, and any other browser path go to the real CLI.' \
+      'cli=/usr/local/lib/node_modules/playwright/cli.js' \
       'case "${1:-}" in' \
       '  install|install-deps)' \
+      '    [ "${PLAYWRIGHT_BROWSERS_PATH:-}" = /ms-playwright ] || exec node "$cli" "$@"' \
+      '    for arg in "$@"; do' \
+      '      case "$arg" in --help|-h|--list|--dry-run) exec node "$cli" "$@" ;; esac' \
+      '    done' \
       '    for arg in "$@"; do' \
       '      case "$arg" in' \
       '        install|install-deps|chromium|chromium-headless-shell|ffmpeg|-*) ;;' \
@@ -110,7 +116,7 @@ RUN set -eu; \
       '    done' \
       '    exit 0 ;;' \
       'esac' \
-      'exec node /usr/local/lib/node_modules/playwright/cli.js "$@"' \
+      'exec node "$cli" "$@"' \
       > /usr/local/bin/playwright.orka; \
     chmod 0755 /usr/local/bin/playwright.orka; \
     mv -f /usr/local/bin/playwright.orka /usr/local/bin/playwright; \
