@@ -163,6 +163,49 @@ func TestATerminalThatCannotBeFinishedIsTakenBack(t *testing.T) {
 	require.Equal(t, []string{"ahp-terminal:/one"}, backend.disposed, "the shell is disposed of")
 }
 
+// Creating or disposing of a terminal succeeds once done, even when the
+// terminal list cannot be updated after it: the client could not repeat it.
+// The list is built whole again on its next change.
+func TestATerminalChangeOutlivesAFailedTerminalListUpdate(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingSessionStore{AHPStore: s}
+	tokens := &TokenService{Store: s}
+	backend := &terminalBackend{fakeBackend: &fakeBackend{}, running: map[string]bool{}}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend.fakeBackend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	alice := UserKey("https://issuer.example", "alice")
+	claim := ahptypes.TerminalClaim{Value: &ahptypes.TerminalClientClaim{Kind: ahptypes.TerminalClaimKindClient, ClientId: "client-a"}}
+
+	// Only the terminal list's update journals an action; it fails.
+	failing.failActions.Store(true)
+	require.NoError(t, client.Request(ctx, "createTerminal", ahptypes.CreateTerminalParams{Channel: "ahp-terminal:/one", Claim: claim}, nil))
+	_, err = s.GetAHPChannelState(ctx, alice, "ahp-terminal:/one")
+	require.NoError(t, err, "the terminal stays")
+	require.NoError(t, client.Request(ctx, "disposeTerminal", ahptypes.DisposeTerminalParams{Channel: "ahp-terminal:/one"}, nil))
+	_, err = s.GetAHPChannelState(ctx, alice, "ahp-terminal:/one")
+	require.ErrorIs(t, err, store.ErrNotFound, "the terminal is gone")
+
+	failing.failActions.Store(false)
+	require.NoError(t, client.Request(ctx, "createTerminal", ahptypes.CreateTerminalParams{Channel: "ahp-terminal:/two", Claim: claim}, nil))
+	result, _, err := client.Subscribe(ctx, rootChannel)
+	require.NoError(t, err)
+	listed := make([]string, 0, len(result.Snapshot.State.Root.Terminals))
+	for _, terminal := range result.Snapshot.State.Root.Terminals {
+		listed = append(listed, terminal.Resource)
+	}
+	require.Equal(t, []string{"ahp-terminal:/two"}, listed)
+}
+
 // A terminal an earlier process left behind has what it still runs stopped
 // before its channel is swept; a running terminal is left alone.
 func TestALeftoverTerminalIsReapedBeforeItsChannelGoes(t *testing.T) {

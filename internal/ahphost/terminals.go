@@ -123,7 +123,8 @@ func (c *conn) createTerminal(ctx context.Context, raw json.RawMessage) error {
 		_ = c.host.cfg.Store.DeleteAHPChannelStates(cleanup, c.principal.UserKey, []string{params.Channel})
 		return err
 	}
-	return c.host.updateTerminals(ctx, c.principal)
+	c.host.refreshTerminals(ctx, c.principal)
+	return nil
 }
 
 func (c *conn) disposeTerminal(ctx context.Context, raw json.RawMessage) error {
@@ -151,7 +152,18 @@ func (c *conn) disposeTerminal(ctx context.Context, raw json.RawMessage) error {
 	if err := c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, []string{params.Channel}); err != nil {
 		return err
 	}
-	return c.host.updateTerminals(ctx, c.principal)
+	c.host.refreshTerminals(ctx, c.principal)
+	return nil
+}
+
+// refreshTerminals updates the user's terminal list after a terminal was
+// created or disposed of. That change is done, so a failed update does not
+// report it failed, which would leave the client unable to retry it: the list
+// is built whole again on its next change.
+func (h *Host) refreshTerminals(ctx context.Context, principal Principal) {
+	if err := h.updateTerminals(ctx, principal); err != nil {
+		h.cfg.Logger.Error(err, "could not update the terminal list")
+	}
 }
 
 // updateTerminals journals the user's terminal list on the root channel.
