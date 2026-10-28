@@ -252,7 +252,8 @@ spec:
       set -eu
       export HOME=/tmp npm_config_cache=/tmp/npm-cache npm_config_update_notifier=false
       # Wait for the Pod's IPv6 link-local address to settle; see "What a Task Pod does to Chromium".
-      i=0; while [ "$i" -lt 100 ]; do
+      # Without IPv6 the file is absent and there is nothing to wait for.
+      i=0; while [ "$i" -lt 100 ] && [ -r /proc/net/if_inet6 ]; do
         tentative=0
         while read -r _ _ _ _ flags _; do [ "$(( 0x$flags & 0x40 ))" -ne 0 ] && tentative=1; done < /proc/net/if_inet6
         [ "$tentative" -eq 0 ] && break; i=$((i + 1)); sleep 0.05
