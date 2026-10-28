@@ -549,7 +549,7 @@ deploy: verify-acp-runtime-images verify-static-mode-crds manifests kustomize ##
 	@set -eu; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 		cp -R config "$$tmp/config"; \
 		"$(CURDIR)/scripts/render-worker-images.sh" "$$tmp/config/manager/manager.yaml" \
-			"$(AI_WORKER_IMG)" "$(GENERAL_WORKER_IMG)"; \
+			"$(AI_WORKER_IMG)" "$(GENERAL_WORKER_IMG)" "$(BROWSER_WORKER_IMG)"; \
 		"$(CURDIR)/scripts/render-acp-runtime-images.sh" "$$tmp/config/acp-production" \
 			"${ACP_CODEX_RUNTIME_IMG}" "${ACP_CLAUDE_RUNTIME_IMG}" "${ACP_COPILOT_RUNTIME_IMG}" "${ACP_OPENCODE_RUNTIME_IMG}"; \
 		cd "$$tmp/config/acp-production"; \

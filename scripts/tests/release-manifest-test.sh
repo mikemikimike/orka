@@ -91,6 +91,7 @@ cat >"${test_root}/config/manager/manager.yaml" <<'EOF_MANAGER'
 args:
   - --ai-worker-image=ghcr.io/orka-agents/orka/ai-worker:0.0.1
   - --general-worker-image=ghcr.io/orka-agents/orka/general-worker:0.0.1
+  - --browser-worker-image=ghcr.io/orka-agents/orka/browser-worker:0.0.1
 EOF_MANAGER
 
 cat >"${test_root}/config/manager/kustomization.yaml" <<'EOF_KUSTOMIZATION'
@@ -112,6 +113,7 @@ for provider in codex claude copilot opencode; do
 done
 grep -Fq 'ghcr.io/orka-agents/orka/ai-worker:9.8.7-rc.3' "${test_root}/config/manager/manager.yaml"
 grep -Fq 'ghcr.io/orka-agents/orka/general-worker:9.8.7-rc.3' "${test_root}/config/manager/manager.yaml"
+grep -Fq 'ghcr.io/orka-agents/orka/browser-worker:9.8.7-rc.3' "${test_root}/config/manager/manager.yaml"
 test "$(grep -Fc 'newTag: 9.8.7-rc.3' "${test_root}/config/manager/kustomization.yaml")" -eq 1
 
 if (cd "${test_root}" && ./release update-version 9.8.7) >/dev/null 2>&1; then

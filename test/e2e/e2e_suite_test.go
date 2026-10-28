@@ -257,6 +257,7 @@ var _ = BeforeSuite(func() {
 		fmt.Sprintf("IMG=%s", managerRef),
 		fmt.Sprintf("AI_WORKER_IMG=%s", aiWorkerRef),
 		fmt.Sprintf("GENERAL_WORKER_IMG=%s", generalWorkerRef),
+		fmt.Sprintf("BROWSER_WORKER_IMG=%s", browserWorkerImageForDeploy()),
 		fmt.Sprintf("ACP_CODEX_RUNTIME_IMG=%s", acpCodexRuntimeRef),
 		fmt.Sprintf("ACP_CLAUDE_RUNTIME_IMG=%s", acpClaudeRuntimeRef),
 		fmt.Sprintf("ACP_COPILOT_RUNTIME_IMG=%s", acpCopilotRuntimeRef),
@@ -737,6 +738,15 @@ const (
 	browserWorkerPrebuilt = "prebuilt"
 	browserWorkerSkip     = "skip"
 )
+
+// browserWorkerImageForDeploy is what the controller advertises to chat; a
+// run that skips the browser image keeps the default reference.
+func browserWorkerImageForDeploy() string {
+	if browserWorkerRef != "" {
+		return browserWorkerRef
+	}
+	return browserWorkerImage
+}
 
 func browserWorkerMode() string {
 	switch mode := strings.TrimSpace(os.Getenv(browserWorkerEnvVar)); mode {
