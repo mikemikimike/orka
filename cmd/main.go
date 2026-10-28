@@ -1568,6 +1568,7 @@ func main() {
 	jobBuilder.AIWorkerImage = aiWorkerImage
 	jobBuilder.GeneralWorkerImage = generalWorkerImage
 	jobBuilder.ContainerTaskRuntimeClasses = containerTaskRuntimeClasses
+	jobBuilder.BrowserWorkerImage = browserWorkerImage
 	jobBuilder.AIWorkerServiceAccountName = aiWorkerServiceAccountName
 	jobBuilder.ContainerWorkerServiceAccountName = containerWorkerServiceAccountName
 	if contextTokenTTSConfig.Enabled() {
