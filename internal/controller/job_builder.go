@@ -1109,9 +1109,10 @@ func containerWorkerDeadline(task *corev1alpha1.Task, opts JobBuildOptions, now 
 		return ""
 	}
 	// The Job deadline and ORKA_TIMEOUT_SECONDS use the whole seconds of the
-	// timeout, so the worker's deadline does too; only the timestamp keeps
-	// fractional precision.
-	return now.Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339Nano)
+	// timeout, and the Task's recorded start loses its fraction of a second
+	// when persisted, so the worker's deadline is whole seconds from a
+	// truncated build time: never later than what the controller enforces.
+	return now.Truncate(time.Second).Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339Nano)
 }
 
 func appendTaskEnvVars(envVars []corev1.EnvVar, task *corev1alpha1.Task) []corev1.EnvVar {

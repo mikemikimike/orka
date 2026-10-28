@@ -234,9 +234,9 @@ func TestContainerWorkerDeadlineUsesTheJobsWholeSeconds(t *testing.T) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 750_000_000, time.UTC)
 	task := envSourceTestTask(corev1alpha1.TaskTypeContainer, testBusyboxImage)
 	task.Spec.Timeout = &metav1.Duration{Duration: 2900 * time.Millisecond}
-	// activeDeadlineSeconds and ORKA_TIMEOUT_SECONDS see 2s, so the deadline
-	// is 2s from now, not 2.9s.
-	if got, want := containerWorkerDeadline(task, JobBuildOptions{}, now), "2026-10-28T12:00:02.75Z"; got != want {
+	// activeDeadlineSeconds and ORKA_TIMEOUT_SECONDS see 2s, and a persisted
+	// start time loses its 0.75s, so the deadline is 2s from the whole second.
+	if got, want := containerWorkerDeadline(task, JobBuildOptions{}, now), "2026-10-28T12:00:02Z"; got != want {
 		t.Fatalf("containerWorkerDeadline() = %q, want %q", got, want)
 	}
 	task.Spec.Timeout = &metav1.Duration{Duration: 500 * time.Millisecond}

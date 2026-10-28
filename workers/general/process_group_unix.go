@@ -42,13 +42,21 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) (stopped bool, err error) {
 		// exit normally. Nor can its existence alone: an exited leader stays
 		// a zombie until Wait reaps it.
 		leaderRunning.Store(leaderAlive(group))
-		_ = syscall.Kill(-group, syscall.SIGKILL)
+		killGroupAndLeader(cmd, group)
 	})
 	err = cmd.Wait()
 	if !stop() {
 		// The kill has started; wait for it to record what it found.
 		<-killed
 	}
-	_ = syscall.Kill(-group, syscall.SIGKILL)
+	killGroupAndLeader(cmd, group)
 	return leaderRunning.Load(), err
+}
+
+// killGroupAndLeader kills the command's process group and, separately, the
+// leader by PID: a leader that moved itself into another group would otherwise
+// survive the group kill and keep Wait blocked past the delivery window.
+func killGroupAndLeader(cmd *exec.Cmd, group int) {
+	_ = syscall.Kill(-group, syscall.SIGKILL)
+	_ = cmd.Process.Kill()
 }

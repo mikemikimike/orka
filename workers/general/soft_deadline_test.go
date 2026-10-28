@@ -586,3 +586,45 @@ func TestRun_ShortTimeoutDeliversDespiteADetachedDescendant(t *testing.T) {
 		t.Fatalf("results = %q, want one soft-deadline account", controller.results)
 	}
 }
+
+// A leader that moves itself out of the process group must still be stopped
+// at the soft deadline, or Wait blocks until the Job deadline cancels delivery.
+func TestRun_SoftDeadlineStopsALeaderThatChangedProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is Unix-specific")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is needed to move the leader to another process group")
+	}
+	const taskName = "regrouped-leader-task"
+	const leader = "import os, sys, time; os.setpgrp(); print('regrouped', flush=True); time.sleep(60)"
+	controller := &softDeadlineController{}
+	server := controller.serve(t, taskName)
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifacts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(workerenv.ControllerURL, server.URL)
+	t.Setenv(workerenv.ResultEndpoint, "")
+	t.Setenv(workerenv.TaskName, taskName)
+	t.Setenv(workerenv.TaskNamespace, "default")
+	t.Setenv(workerenv.TimeoutSeconds, "2")
+	t.Setenv("ORKA_ARTIFACTS_DIR", artifacts)
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"worker", "python3", "-c", leader}
+
+	started := time.Now()
+	err := run()
+	if elapsed := time.Since(started); elapsed > 1900*time.Millisecond {
+		t.Fatalf("run() took %s, want the regrouped leader killed at the 1s soft deadline", elapsed)
+	}
+	if !errors.Is(err, errSoftDeadline) {
+		t.Fatalf("run() error = %v, want the soft deadline", err)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if len(controller.results) != 1 || !strings.Contains(string(controller.results[0]), "regrouped") {
+		t.Fatalf("results = %q, want one soft-deadline account with the leader's output", controller.results)
+	}
+}
