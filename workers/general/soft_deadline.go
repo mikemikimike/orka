@@ -67,7 +67,7 @@ func taskStart(getenv func(string) string, workerStart time.Time, timeout time.D
 	if timeout <= 0 {
 		return workerStart
 	}
-	deadline, err := time.Parse(time.RFC3339, strings.TrimSpace(getenv(workerenv.Deadline)))
+	deadline, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(getenv(workerenv.Deadline)))
 	if err != nil {
 		return workerStart
 	}

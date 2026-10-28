@@ -1970,7 +1970,11 @@ func (r *TaskReconciler) handleRunning(ctx context.Context, task *corev1alpha1.T
 			}
 			return r.completeExecutedTask(ctx, task, corev1alpha1.TaskPhaseFailed, timedOutTaskMessage(task))
 		}
-		if task.Spec.Timeout != nil && r.jobStoppedAtSoftDeadline(ctx, task) {
+		softDeadline, err := r.jobStoppedAtSoftDeadline(ctx, task)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if softDeadline {
 			// The worker stopped the command itself, shortly before the Job
 			// deadline, to deliver partial output. That is the timeout, and a
 			// run with an unknown outcome is not retried.
@@ -2117,13 +2121,18 @@ func softDeadlineTaskMessage(task *corev1alpha1.Task) string {
 
 // jobStoppedAtSoftDeadline reports a worker that stopped its command at the
 // Task's soft deadline and said so in its termination message. The exit code
-// alone cannot tell, since the command's own timeout(1) exits 124 too. A Pod
-// listing failure counts as no, and the generic failure path applies.
-func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *corev1alpha1.Task) bool {
+// alone cannot tell, since the command's own timeout(1) exits 124 too. The
+// decision gates a retry, so the Pods are read from the API server rather than
+// the cache, which can see the Job fail before it sees the Pod terminate, and a
+// read error is returned rather than taken as no.
+func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *corev1alpha1.Task) (bool, error) {
+	if task.Spec.Timeout == nil {
+		return false, nil
+	}
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(task.Namespace),
+	if err := uncachedReader(r.APIReader, r.Client).List(ctx, &podList, client.InNamespace(task.Namespace),
 		client.MatchingLabels{labels.LabelTask: labels.SelectorValue(task.Name)}); err != nil {
-		return false
+		return false, fmt.Errorf("list Pods of Task %s/%s for the soft-deadline check: %w", task.Namespace, task.Name, err)
 	}
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -2136,11 +2145,11 @@ func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *cor
 				term = cs.LastTerminationState.Terminated
 			}
 			if term != nil && strings.Contains(term.Message, workerenv.SoftDeadlineTerminationMessage) {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func podWaitingForMountInitialization(pod *corev1.Pod) bool {

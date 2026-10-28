@@ -1107,7 +1107,8 @@ func containerWorkerDeadline(task *corev1alpha1.Task, opts JobBuildOptions, now 
 	if containerWorkerTimeoutSeconds(task, opts) == "" {
 		return ""
 	}
-	return now.Add(task.Spec.Timeout.Duration).UTC().Format(time.RFC3339)
+	// Fractional seconds matter to a short timeout's margin.
+	return now.Add(task.Spec.Timeout.Duration).UTC().Format(time.RFC3339Nano)
 }
 
 func appendTaskEnvVars(envVars []corev1.EnvVar, task *corev1alpha1.Task) []corev1.EnvVar {

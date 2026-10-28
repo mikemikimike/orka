@@ -218,7 +218,7 @@ func TestBuildTellsContainerWorkersTheirTimeout(t *testing.T) {
 			if len(deadlines) != 1 {
 				t.Fatalf("%s = %v, want exactly one controller-owned value", workerenv.Deadline, deadlines)
 			}
-			deadline, err := time.Parse(time.RFC3339, deadlines[0])
+			deadline, err := time.Parse(time.RFC3339Nano, deadlines[0])
 			if err != nil {
 				t.Fatalf("%s = %q is not RFC 3339: %v", workerenv.Deadline, deadlines[0], err)
 			}

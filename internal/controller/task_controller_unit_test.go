@@ -8899,8 +8899,15 @@ func TestJobStoppedAtSoftDeadline(t *testing.T) {
 		{name: "another Job's Pod does not count", pod: pod("p4", "earlier-job", workerenv.SoftDeadlineTerminationMessage, 124)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newUnitReconciler(newTestScheme(), task, tt.pod)
-			if got := r.jobStoppedAtSoftDeadline(context.Background(), task); got != tt.want {
+			r := newUnitReconciler(newTestScheme(), task)
+			// The Pod is visible only through the API reader, as it is when the
+			// cache has seen the Job fail but not yet the Pod terminate.
+			r.APIReader = fake.NewClientBuilder().WithScheme(newTestScheme()).WithObjects(tt.pod).Build()
+			got, err := r.jobStoppedAtSoftDeadline(context.Background(), task)
+			if err != nil {
+				t.Fatalf("jobStoppedAtSoftDeadline() error = %v", err)
+			}
+			if got != tt.want {
 				t.Fatalf("jobStoppedAtSoftDeadline() = %v, want %v", got, tt.want)
 			}
 		})
