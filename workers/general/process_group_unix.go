@@ -37,10 +37,11 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) (stopped bool, err error) {
 	killed := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(killed)
-		// Wait reaps the leader as soon as it exits, so it still exists only
-		// if it was running. Its exit status cannot tell: a shell may report
-		// its killed child and exit normally.
-		leaderRunning.Store(syscall.Kill(group, 0) == nil)
+		// Only a leader that was still running counts as stopped here. Its
+		// exit status cannot tell: a shell may report its killed child and
+		// exit normally. Nor can its existence alone: an exited leader stays
+		// a zombie until Wait reaps it.
+		leaderRunning.Store(leaderAlive(group))
 		_ = syscall.Kill(-group, syscall.SIGKILL)
 	})
 	err = cmd.Wait()
