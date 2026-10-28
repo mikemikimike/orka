@@ -639,6 +639,20 @@ func jsonEqual(a, b any) bool {
 	return errA == nil && errB == nil && string(left) == string(right)
 }
 
+// forgetSession deletes a session's channels, then its catalog record: while
+// any channel is left, the record keeps the session findable, so disposing of
+// it again finishes. Both go under the lock actions apply under: an action
+// applying now finishes writing the session and its summary first, and a
+// later one finds the session gone, so neither writes it back.
+func (h *Host) forgetSession(ctx context.Context, userKey, session string, channels []string) error {
+	return h.locked(ctx, userKey, func(int64) error {
+		if err := h.cfg.Store.DeleteAHPChannelStates(ctx, userKey, channels); err != nil {
+			return err
+		}
+		return h.cfg.Store.DeleteAHPSession(ctx, userKey, session)
+	})
+}
+
 // storeChannels records new channel states without journaling actions.
 func (h *Host) storeChannels(ctx context.Context, userKey string, channels map[string]storedChannel) error {
 	hub := h.hub(userKey)

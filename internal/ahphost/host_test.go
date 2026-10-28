@@ -376,6 +376,68 @@ func TestADisposalThatFailsPartwayCanBeFinished(t *testing.T) {
 	}
 }
 
+// failingCleanupStore also refuses to delete channel states while armed.
+type failingCleanupStore struct {
+	*failingSessionStore
+	failDelete atomic.Bool
+}
+
+func (s *failingCleanupStore) DeleteAHPChannelStates(ctx context.Context, userKey string, channels []string) error {
+	if s.failDelete.Load() {
+		return errors.New("the store refused the delete")
+	}
+	return s.failingSessionStore.DeleteAHPChannelStates(ctx, userKey, channels)
+}
+
+// A creation that fails, and whose cleanup the store also refuses, does not
+// keep the URI from being created again: what it left before it was cataloged
+// is cleared by the next creation, and what it left after stays listed, so
+// disposing of it clears it.
+func TestAFailedCreationThatCannotCleanUpLeavesTheURIUsable(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	failing := &failingCleanupStore{failingSessionStore: &failingSessionStore{AHPStore: s}}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: failing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	provider := "fake"
+	create := func(uri string) error {
+		return client.Request(ctx, "createSession", ahptypes.CreateSessionParams{Channel: uri, Provider: &provider}, nil)
+	}
+	userKey := UserKey("https://issuer.example", "alice")
+
+	// The catalog record cannot be written: the channels stay, uncataloged.
+	failing.fail.Store(true)
+	failing.failDelete.Store(true)
+	require.Error(t, create("ahp-session:/one"))
+	_, err = s.GetAHPChannelState(ctx, userKey, "ahp-session:/one")
+	require.NoError(t, err, "the cleanup could not delete the channels")
+	failing.fail.Store(false)
+	failing.failDelete.Store(false)
+	require.NoError(t, create("ahp-session:/one"))
+
+	// The session cannot be made ready: the cataloged session stays listed.
+	failing.failActions.Store(true)
+	failing.failDelete.Store(true)
+	require.Error(t, create("ahp-session:/two"))
+	failing.failActions.Store(false)
+	failing.failDelete.Store(false)
+	_, err = s.GetAHPSession(ctx, userKey, "ahp-session:/two")
+	require.NoError(t, err, "the leftover session is listed")
+	require.NoError(t, client.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: "ahp-session:/two"}, nil))
+	require.NoError(t, create("ahp-session:/two"))
+}
+
 // pausingSessionStore holds the first catalog read after it is armed, once the
 // read is done, until released: a summary sync slow to write its update.
 type pausingSessionStore struct {

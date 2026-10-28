@@ -805,15 +805,7 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 		return rpcErr(ahptypes.ErrorCodeSessionAlreadyExists, "the session already exists")
 	}
 	defer release()
-	if _, err := c.host.cfg.Store.GetAHPSession(ctx, c.principal.UserKey, session); err == nil {
-		return rpcErr(ahptypes.ErrorCodeSessionAlreadyExists, "the session already exists")
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	// Another channel, such as a terminal, may already use the URI.
-	if _, _, err := c.host.readChannel(ctx, c.principal.UserKey, session); err == nil {
-		return rpcErr(ahptypes.ErrorCodeAlreadyExists, "the URI is already used by another channel")
-	} else if !errors.Is(err, errUnknownChannel) {
+	if err := c.freeSessionURI(ctx, session); err != nil {
 		return err
 	}
 	provider := ""
@@ -909,16 +901,58 @@ func (c *conn) createSession(ctx context.Context, raw json.RawMessage) (err erro
 	return nil
 }
 
-// takeBackSession removes what a failed createSession made: the catalog
-// record when it was written, the stored channels and the backend's session.
-func (c *conn) takeBackSession(ctx context.Context, backend SessionBackend, session string, cataloged bool, stored []string) {
-	if cataloged {
-		_ = c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session)
+// freeSessionURI makes sure no session or other channel uses a URI claimed
+// for a new session. A session's channels without its catalog record are what
+// a failed creation could not take back, since a session is cataloged before
+// it is ready and loses the record last: they are cleared for the new one.
+func (c *conn) freeSessionURI(ctx context.Context, session string) error {
+	if _, err := c.host.cfg.Store.GetAHPSession(ctx, c.principal.UserKey, session); err == nil {
+		return rpcErr(ahptypes.ErrorCodeSessionAlreadyExists, "the session already exists")
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
 	}
-	if len(stored) > 0 {
-		_ = c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, stored)
+	stored, _, err := c.host.readChannel(ctx, c.principal.UserKey, session)
+	if errors.Is(err, errUnknownChannel) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Another channel, such as a terminal, may already use the URI.
+	if stored.State.Session == nil {
+		return rpcErr(ahptypes.ErrorCodeAlreadyExists, "the URI is already used by another channel")
+	}
+	return c.host.forgetSession(ctx, c.principal.UserKey, session, sessionChannels(session, stored))
+}
+
+// takeBackSession removes what a failed createSession made: the stored
+// channels, the catalog record when it was written and the backend's session.
+// What a store failure leaves is found again: channels with the catalog
+// record keep the session listed for disposal, and channels without it are
+// cleared by the next creation of the URI.
+func (c *conn) takeBackSession(ctx context.Context, backend SessionBackend, session string, cataloged bool, stored []string) {
+	if cataloged || len(stored) > 0 {
+		_ = c.host.forgetSession(ctx, c.principal.UserKey, session, stored)
 	}
 	_ = backend.DisposeSession(ctx, c.principal, session)
+}
+
+// sessionChannels returns a session's channels as its stored state lists them:
+// the session's own, its chats and its changesets.
+func sessionChannels(session string, stored storedChannel) []string {
+	channels := []string{session}
+	if stored.State.Session == nil {
+		return channels
+	}
+	for _, chat := range stored.State.Session.Chats {
+		channels = append(channels, chat.Resource)
+	}
+	for _, changeset := range stored.State.Session.Changesets {
+		if !strings.Contains(changeset.UriTemplate, "{") {
+			channels = append(channels, changeset.UriTemplate)
+		}
+	}
+	return channels
 }
 
 // hostChannelScheme reports a URI on a scheme the host routes to terminals or
@@ -948,32 +982,15 @@ func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
 	if err != nil && !errors.Is(err, errUnknownChannel) {
 		return err
 	}
-	if err == nil && stored.State.Session != nil {
-		for _, chat := range stored.State.Session.Chats {
-			channels = append(channels, chat.Resource)
-		}
-		for _, changeset := range stored.State.Session.Changesets {
-			if !strings.Contains(changeset.UriTemplate, "{") {
-				channels = append(channels, changeset.UriTemplate)
-			}
-		}
+	if err == nil {
+		channels = sessionChannels(session, stored)
 	}
 	if backend, ok := c.host.cfg.Backends.Named(record.Backend); ok {
 		if err := backend.DisposeSession(ctx, c.principal, session); err != nil {
 			return err
 		}
 	}
-	// The catalog record goes last: while any of the session's channels is
-	// left, it keeps the session findable, so disposing of it again finishes.
-	// Both go under the lock actions apply under: an action applying now
-	// finishes writing the session and its summary first, and a later one
-	// finds the session gone, so neither writes it back.
-	if err := c.host.locked(ctx, c.principal.UserKey, func(int64) error {
-		if err := c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, channels); err != nil {
-			return err
-		}
-		return c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session)
-	}); err != nil {
+	if err := c.host.forgetSession(ctx, c.principal.UserKey, session, channels); err != nil {
 		return err
 	}
 	c.host.notifyRoot(c.principal.UserKey, methodSessionRemoved, ahptypes.SessionRemovedParams{Channel: rootChannel, Session: session})
