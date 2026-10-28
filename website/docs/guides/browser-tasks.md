@@ -161,6 +161,11 @@ is already in `/tmp/artifacts` and posts the output so far with the outcome
 `unknown_outcome`, and the Task ends `Failed`. Write screenshots as the script goes, not
 only at the end, so a run that hangs still shows where it was.
 
+That early stop is the worker's. An image without Orka's `/worker`, as under
+[Bring your own image](#bring-your-own-image), gets none: the deadline kills it with nothing
+more uploaded, so it has to upload as it goes and stop itself in time using
+`ORKA_TIMEOUT_SECONDS`.
+
 Do not rely on the timeout alone. Write the conditions for stopping into the script or the
 prompt that produces it, in three forms:
 
