@@ -151,7 +151,7 @@ func (w *ahpWorkspaces) podSpec(principal ahphost.Principal) *corev1.Pod {
 			Containers: []corev1.Container{{
 				Name: ahpWorkspaceContainer, Image: w.image,
 				// Keep the Pod alive for exec; nothing else runs.
-				Command:    []string{ahpShell, "-c", "trap 'exit 0' TERM; while :; do sleep 3600 & wait $!; done"},
+				Command:    []string{ahpShell, "-c", ahpWorkspaceKeepAlive},
 				WorkingDir: ahpWorkspaceRoot,
 				Env: []corev1.EnvVar{
 					{Name: "HOME", Value: ahpWorkspaceRoot + "/.home"},
@@ -526,6 +526,13 @@ staging=$(mktemp -d "$3/clone.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 git clone --quiet --filter=blob:none -- "$2" "$staging/checkout"
 mv "$staging/checkout" "$1"`
+
+// ahpWorkspaceKeepAlive keeps a workspace container running for exec. It
+// needs the image's sleep, as well as sh and git, and stops with an error when
+// there is none, rather than spin with the Pod looking ready.
+const ahpWorkspaceKeepAlive = `command -v sleep >/dev/null 2>&1 || { echo "the workspace image has no sleep command; it needs sh, git and sleep" >&2; exit 1; }
+trap 'exit 0' TERM
+while :; do sleep 3600 & wait $!; done`
 
 // ahpWorktreePath is a session's worktree: unique per project and branch, and
 // a project's branch belongs to one session.

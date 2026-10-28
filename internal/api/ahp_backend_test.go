@@ -42,12 +42,15 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/ahphost"
+	"github.com/orka-agents/orka/internal/approvals"
+	"github.com/orka-agents/orka/internal/events"
 	"github.com/orka-agents/orka/internal/executionmode"
 	harnessv2 "github.com/orka-agents/orka/internal/harness/v2"
 	"github.com/orka-agents/orka/internal/labels"
 	"github.com/orka-agents/orka/internal/liveevents"
 	"github.com/orka-agents/orka/internal/store"
 	"github.com/orka-agents/orka/internal/store/sqlite"
+	"github.com/orka-agents/orka/internal/store/storetest"
 )
 
 const (
@@ -1939,6 +1942,121 @@ func testAHPRecoveredAnswer(t *testing.T, streamed, answer, want string) {
 	require.Equal(t, want, ahpTurnText(turns[0].ResponseParts))
 	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
 	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
+}
+
+// ahpRefusingDeltaEmitter refuses the next text delta while armed, as a
+// journal that cannot be written.
+type ahpRefusingDeltaEmitter struct {
+	ahphost.Emitter
+	armed *atomic.Bool
+}
+
+func (e ahpRefusingDeltaEmitter) Emit(ctx context.Context, channel string, actions ...ahptypes.StateAction) error {
+	for _, action := range actions {
+		if _, ok := action.Value.(*ahptypes.ChatDeltaAction); ok && e.armed.CompareAndSwap(true, false) {
+			return errors.New("the journal refused the write")
+		}
+	}
+	return e.Emitter.Emit(ctx, channel, actions...)
+}
+
+// A piece of the answer the journal refused while it streamed is not lost:
+// the turn ends with the stored answer in full.
+func TestAHPBackendShowsTheStoredAnswerAfterARefusedDelta(t *testing.T) {
+	env := newAHPTestEnv(t)
+	var refuse atomic.Bool
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	_, err = c.Dispatch(ctx, chat, ahpUserTurn("turn-1", "explain"))
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	task := env.waitForTask(taskName)
+	var turn *ahpTurn
+	require.Eventually(t, func() bool { turn = env.backend.activeTurn(userKey, ahpTestSession); return turn != nil }, 5*time.Second, 20*time.Millisecond)
+	turn.mu.Lock()
+	turn.emit = ahpRefusingDeltaEmitter{Emitter: turn.emit, armed: &refuse}
+	turn.mu.Unlock()
+	chunk := func(text string) *harnessv2.UpdateEvent {
+		return &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: text}}
+	}
+	env.publish(taskName, chunk("The first part"))
+	waitForActionType(t, chatSub, "chat/delta")
+	refuse.Store(true)
+	env.publish(taskName, chunk(", the middle"))
+	require.Eventually(t, func() bool { return !refuse.Load() }, 5*time.Second, 10*time.Millisecond)
+	env.publish(taskName, chunk(" and the end."))
+	waitForActionType(t, chatSub, "chat/delta")
+
+	answer := "The first part, the middle and the end."
+	require.NoError(t, env.backend.h.resultStore.SaveResult(ctx, ahpTestNamespace, taskName, []byte(answer)))
+	require.NoError(t, env.kube.Get(ctx, types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, task))
+	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	task.Status.ResultRef = &corev1alpha1.ResultReference{Available: true}
+	require.NoError(t, env.kube.Status().Update(ctx, task))
+	waitForActionType(t, chatSub, "chat/turnComplete")
+	state, err := ahphost.ChannelState(ctx, env.backend.store, userKey, chat)
+	require.NoError(t, err)
+	require.Contains(t, ahpTurnText(state.Chat.Turns[0].ResponseParts), answer, "the whole answer is shown")
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	require.Equal(t, answer, record.History[len(record.History)-1].Reply)
+}
+
+// A permission request held while the turn's live updates fell behind is
+// still shown: the turn reads it back from its approval record.
+func TestAHPBackendShowsAPermissionRequestHeldWhileLiveUpdatesLagged(t *testing.T) {
+	env := newAHPTestEnv(t)
+	// A one-event buffer lets the test make the turn's subscription fall behind.
+	env.live = liveevents.NewBroker(1)
+	env.backend.live = env.live
+	approvalEvents := storetest.NewFakeExecutionEventStore()
+	env.backend.h.executionEventStore = approvalEvents
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "manual")
+	_, chatSub, err := c.Subscribe(ctx, chat)
+	require.NoError(t, err)
+	userKey := ahphost.UserKey("https://issuer.example", "alice")
+	_, err = c.Dispatch(ctx, chat, ahpUserTurn("turn-1", "run the tests"))
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, userKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	env.waitForTask(taskName)
+	var turn *ahpTurn
+	require.Eventually(t, func() bool { turn = env.backend.activeTurn(userKey, ahpTestSession); return turn != nil },
+		5*time.Second, 20*time.Millisecond)
+
+	// The controller holds a request and records it; its live event is lost
+	// with the others the turn could not take.
+	content, err := json.Marshal(map[string]any{
+		"approvalID": "approval-held", "kind": approvals.KindPermission, "action": "Allow the agent to run bash",
+		"riskSummary": "Run the tests", "targetTool": "bash", "toolCallID": "tool-held",
+		"expiresAt": time.Now().Add(5 * time.Minute),
+		"options":   []approvals.Option{{OptionID: "allow", Kind: "allow_once"}, {OptionID: "reject", Kind: "reject_once"}},
+	})
+	require.NoError(t, err)
+	_, err = approvalEvents.AppendExecutionEvent(ctx, &store.ExecutionEvent{
+		Namespace: ahpTestNamespace, StreamType: events.ExecutionEventStreamTypeTask, StreamID: taskName, TaskName: taskName,
+		Type: events.ExecutionEventTypeApprovalRequested, ToolCallID: "approval-held", Content: content,
+	})
+	require.NoError(t, err)
+	turn.mu.Lock()
+	for range 3 {
+		env.publish(taskName, &harnessv2.UpdateEvent{Kind: harnessv2.UpdateAssistantMessageChunk, AssistantMessage: &harnessv2.AssistantMessageChunk{Text: " lost"}})
+	}
+	turn.mu.Unlock()
+
+	ready := waitForActionType(t, chatSub, "chat/toolCallReady")
+	var action ahptypes.ChatToolCallReadyAction
+	require.NoError(t, json.Unmarshal(ready, &action))
+	require.Equal(t, "tool-held", action.ToolCallId)
+	require.NotNil(t, action.ConfirmationTitle, "the held request is shown for the person's decision")
 }
 
 // ahpConfigEmitter records the session config changes the backend shows.

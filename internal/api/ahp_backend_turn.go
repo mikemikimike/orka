@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -27,6 +28,7 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/ahphost"
+	"github.com/orka-agents/orka/internal/approvals"
 	executionevents "github.com/orka-agents/orka/internal/events"
 	harnessv2 "github.com/orka-agents/orka/internal/harness/v2"
 	"github.com/orka-agents/orka/internal/labels"
@@ -85,6 +87,9 @@ type ahpTurn struct {
 	// grew past ahpPartCompareMax (partOver).
 	partText string
 	partOver bool
+	// journalMissed reports a chat action the journal refused: what the
+	// chat shows may be missing part of the answer.
+	journalMissed atomic.Bool
 	// lagged reports that live updates stopped before the turn ended, so the
 	// text streamed so far may be only part of its answer.
 	lagged bool
@@ -403,12 +408,14 @@ func (t *ahpTurn) markCancelledByClient() {
 }
 
 func (t *ahpTurn) chat(actions ...ahptypes.StateAction) {
-	_ = t.emit.Emit(t.ctx, t.session.Chat, actions...)
+	if err := t.emit.Emit(t.ctx, t.session.Chat, actions...); err != nil {
+		t.journalMissed.Store(true)
+	}
 }
 
 // run follows the turn's live events and its Task until the Task settles.
 func (t *ahpTurn) run(sub *liveevents.Subscription) {
-	defer sub.Close()
+	defer func() { sub.Close() }()
 	defer t.b.forgetTurn(t)
 	events := sub.C()
 	ticker := time.NewTicker(ahpTurnPollInterval)
@@ -417,12 +424,18 @@ func (t *ahpTurn) run(sub *liveevents.Subscription) {
 		select {
 		case event, ok := <-events:
 			if !ok {
-				// The subscription fell behind: the turn ends from the Task's
-				// stored result instead of live updates.
-				events = nil
+				// The subscription fell behind and lost what it could not
+				// hold: the turn ends from the Task's stored result. A new
+				// subscription follows what comes next, and permission requests
+				// held meanwhile are read back from their records, so none
+				// waits unseen until it expires.
 				t.mu.Lock()
 				t.lagged = true
 				t.mu.Unlock()
+				sub.Close()
+				sub = t.b.live.Subscribe(t.session.Namespace, t.task)
+				events = sub.C()
+				t.recoverApprovals()
 				continue
 			}
 			t.handle(event)
@@ -854,6 +867,34 @@ func (t *ahpTurn) onApproval(approval *liveevents.Approval) {
 	}
 }
 
+// recoverApprovals shows the permission requests the turn's Task holds, from
+// their approval records, for those live updates the turn missed.
+func (t *ahpTurn) recoverApprovals() {
+	eventStore := t.b.h.executionEventStore
+	if eventStore == nil {
+		return
+	}
+	listed, err := approvals.ListEvents(t.ctx, eventStore, t.session.Namespace, t.task)
+	if err != nil {
+		log.Info("read an AHP turn's held permission requests", "namespace", t.session.Namespace, "task", t.task, "reason", err.Error())
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, held := range approvals.Derive(listed, t.b.now()) {
+		if held.Kind != approvals.KindPermission || held.Status != approvals.StatusPending {
+			continue
+		}
+		approval := &liveevents.Approval{
+			ID: held.ID, State: liveevents.ApprovalPending, ToolCallID: held.ToolCallID, ToolName: held.TargetTool, Title: held.RiskSummary,
+		}
+		if held.ExpiresAt != nil {
+			approval.ExpiresAt = *held.ExpiresAt
+		}
+		t.onApproval(approval)
+	}
+}
+
 // askForConfirmation shows a tool call as waiting for the person's decision,
 // with the call's input when it is known, so they see what they decide on.
 func (t *ahpTurn) askForConfirmation(id, title string, input json.RawMessage) {
@@ -979,7 +1020,8 @@ func ahpLines(text string) []string {
 func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if (!t.streamedText || t.lagged) && task.Status.ResultRef != nil && task.Status.ResultRef.Available && t.b.h.resultStore != nil {
+	missed := t.journalMissed.Load()
+	if (!t.streamedText || t.lagged || missed) && task.Status.ResultRef != nil && task.Status.ResultRef.Available && t.b.h.resultStore != nil {
 		// The stored result is whole, like a live final answer, and gets the
 		// same pattern redaction before anyone sees it. After live updates
 		// fell behind it is the turn's answer, in a part of its own beside
@@ -990,14 +1032,14 @@ func (t *ahpTurn) settle(task *corev1alpha1.Task) {
 			// before live updates fell behind, or by the process before a
 			// restart. It is not shown twice, and stays the reply the
 			// conversation keeps.
-			newest, known := t.shownPart, true
+			newest, known := t.shownPart, !missed
 			if t.streamedText {
-				newest, known = t.partText, !t.partOver
+				newest, known = t.partText, !t.partOver && !missed
 			}
 			if whole := strings.TrimSpace(answer); whole != "" && known && strings.TrimSpace(newest) == whole {
 				t.reply = ahpTail(whole, ahpExchangeMax)
 			} else {
-				if t.lagged {
+				if t.lagged || missed {
 					t.textPart, t.reply = "", ""
 				}
 				t.text(answer)

@@ -963,10 +963,12 @@ func (c *conn) disposeSession(ctx context.Context, raw json.RawMessage) error {
 			return err
 		}
 	}
-	if err := c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session); err != nil {
+	// The catalog record goes last: while any of the session's channels is
+	// left, it keeps the session findable, so disposing of it again finishes.
+	if err := c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, channels); err != nil {
 		return err
 	}
-	if err := c.host.cfg.Store.DeleteAHPChannelStates(ctx, c.principal.UserKey, channels); err != nil {
+	if err := c.host.cfg.Store.DeleteAHPSession(ctx, c.principal.UserKey, session); err != nil {
 		return err
 	}
 	c.host.notifyRoot(c.principal.UserKey, methodSessionRemoved, ahptypes.SessionRemovedParams{Channel: rootChannel, Session: session})

@@ -374,3 +374,23 @@ func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	env.backend.cfg.WorkspaceIdleTimeout = time.Hour
 	require.False(t, w.idle(alice.UserKey[:40], pod), "the use counts as recent")
 }
+
+// A workspace image without sleep stops its container with a reason rather
+// than spin while the Pod looks ready.
+func TestAHPWorkspaceKeepAliveNeedsSleep(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", ahpWorkspaceKeepAlive)
+	cmd.Env = []string{"PATH=" + t.TempDir()}
+	done := make(chan error, 1)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start())
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Contains(t, stderr.String(), "no sleep command")
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the keep-alive ran on without sleep")
+	}
+}
