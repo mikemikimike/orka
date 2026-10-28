@@ -253,10 +253,21 @@ spec:
         const fs = require("fs");
         const env = process.env;
         const url = `${env.ORKA_CONTROLLER_URL}/internal/v1/artifacts/${env.ORKA_TASK_NAMESPACE}/${env.ORKA_TASK_NAME}/example.png`;
-        const token = fs.readFileSync(env.ORKA_SA_TOKEN_PATH, "utf8").trim();
-        fetch(url, { method: "POST", body: fs.readFileSync("/tmp/example.png"),
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/png" } })
-          .then((response) => { if (!response.ok) process.exit(1); });
+        // A request can arrive before the controller has recorded the Pod, which answers
+        // 503 until it has: retry transient answers, reading the token each time.
+        (async () => {
+          for (let attempt = 1; attempt <= 15; attempt++) {
+            const token = fs.readFileSync(env.ORKA_SA_TOKEN_PATH, "utf8").trim();
+            const response = await fetch(url, { method: "POST", body: fs.readFileSync("/tmp/example.png"),
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/png" } }).catch(() => null);
+            if (response && response.ok) return;
+            if (response && ![502, 503, 504].includes(response.status)) {
+              console.error(`upload failed: HTTP ${response.status}`); process.exit(1);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+          console.error("upload gave up"); process.exit(1);
+        })();
       '
       echo uploaded example.png
   resources:
