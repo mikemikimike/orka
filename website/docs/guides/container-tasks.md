@@ -224,17 +224,29 @@ artifact, and event endpoints, and only while the Task is active. The Kubernetes
 rejects it.
 
 ```sh
-# Read the token for each request; a value cached at startup expires after an hour.
+# A request can arrive before the controller has recorded the Pod's Job, which answers
+# 503 until it has, so retry transient answers. The token is read for each attempt; a
+# value cached at startup expires after an hour.
+post() { # post <url> <content-type> <curl data option>...
+  url=$1; type=$2; shift 2
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url" \
+      -H "Authorization: Bearer $(cat "$ORKA_SA_TOKEN_PATH")" -H "Content-Type: $type" "$@") || true
+    case "$status" in
+      2*) return 0 ;;
+      000|502|503|504) sleep 1 ;;
+      *) echo "POST $url: HTTP $status" >&2; return 1 ;;
+    esac
+  done
+  echo "POST $url: gave up after HTTP $status" >&2; return 1
+}
 
 # Upload an artifact. The last path segment is the artifact's name.
-curl -fsS -X POST \
-  "$ORKA_CONTROLLER_URL/internal/v1/artifacts/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME/home.png" \
-  -H "Authorization: Bearer $(cat "$ORKA_SA_TOKEN_PATH")" -H "Content-Type: image/png" \
-  --data-binary @/tmp/home.png
+post "$ORKA_CONTROLLER_URL/internal/v1/artifacts/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME/home.png" \
+  image/png --data-binary @/tmp/home.png
 
 # Post the result.
-curl -fsS -X POST "$ORKA_RESULT_ENDPOINT" \
-  -H "Authorization: Bearer $(cat "$ORKA_SA_TOKEN_PATH")" -H "Content-Type: application/json" \
+post "$ORKA_RESULT_ENDPOINT" application/json \
   --data '{"version":1,"outcome":"completed","summary":"Checked the home page","data":{"title":"Example Domain"},"artifacts":[{"filename":"home.png","contentType":"image/png"}]}'
 ```
 
