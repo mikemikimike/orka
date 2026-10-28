@@ -2136,7 +2136,10 @@ func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *cor
 	}
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-		if task.Status.JobName != "" && !podBelongsToJob(pod, task.Status.JobName) {
+		// Only a Pod the current Job owns can speak for this attempt: the
+		// Task label alone, or a Job-name label, could come from an
+		// unrelated Pod and suppress a retry an ordinary failure deserves.
+		if !podOwnedByJob(pod, task.Status.JobName, task.Status.JobUID) {
 			continue
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
@@ -2150,6 +2153,24 @@ func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *cor
 		}
 	}
 	return false, nil
+}
+
+// podOwnedByJob reports a Pod whose controller owner reference is exactly the
+// named Job, by UID when the Task recorded one.
+func podOwnedByJob(pod *corev1.Pod, jobName, jobUID string) bool {
+	if pod == nil || strings.TrimSpace(jobName) == "" {
+		return false
+	}
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind != "Job" || owner.Name != jobName || owner.Controller == nil || !*owner.Controller {
+			continue
+		}
+		if jobUID != "" && string(owner.UID) != jobUID {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func podWaitingForMountInitialization(pod *corev1.Pod) bool {
