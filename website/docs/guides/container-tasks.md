@@ -177,8 +177,8 @@ files, reports. How they reach Orka depends on the image.
 
 ### Images that use Orka's worker entrypoint
 
-The default worker image, and any custom image whose `ENTRYPOINT` is Orka's `/worker`
-binary, deliver for you:
+The default worker image, and any custom image whose `ENTRYPOINT` runs Orka's `/worker`
+binary (the browser worker image wraps it), deliver for you:
 
 - The command's stdout and stderr become the result. A command that prints nothing posts
   no result, and the Pod log is kept instead; its artifacts are still uploaded. Output that
