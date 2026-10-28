@@ -224,17 +224,17 @@ artifact, and event endpoints, and only while the Task is active. The Kubernetes
 rejects it.
 
 ```sh
-TOKEN="$(cat "$ORKA_SA_TOKEN_PATH")"
+# Read the token for each request; a value cached at startup expires after an hour.
 
 # Upload an artifact. The last path segment is the artifact's name.
 curl -fsS -X POST \
   "$ORKA_CONTROLLER_URL/internal/v1/artifacts/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME/home.png" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: image/png" \
+  -H "Authorization: Bearer $(cat "$ORKA_SA_TOKEN_PATH")" -H "Content-Type: image/png" \
   --data-binary @/tmp/home.png
 
 # Post the result.
 curl -fsS -X POST "$ORKA_RESULT_ENDPOINT" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat "$ORKA_SA_TOKEN_PATH")" -H "Content-Type: application/json" \
   --data '{"version":1,"outcome":"completed","summary":"Checked the home page","data":{"title":"Example Domain"},"artifacts":[{"filename":"home.png","contentType":"image/png"}]}'
 ```
 
