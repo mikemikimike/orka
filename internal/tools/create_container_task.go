@@ -587,7 +587,33 @@ func reservedContainerTaskEnvName(name string) bool {
 	return strings.HasPrefix(name, "ORKA_") || strings.HasPrefix(name, "OTEL_EXPORTER_OTLP") || name == "OTEL_RESOURCE_ATTRIBUTES"
 }
 
+// rejectEmptyContainerTaskQuantities fails on an empty or null quantity, which
+// the shared parser drops. Any resources replace the Task's defaults, so a
+// dropped entry would silently run without the limit the caller meant to set.
+func rejectEmptyContainerTaskQuantities(a map[string]any) (string, bool) {
+	resources, ok := a[resourcesField].(map[string]any)
+	if !ok {
+		return "", true
+	}
+	for _, key := range []string{resourceRequestsField, resourceLimitsField} {
+		values, ok := resources[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		for name, raw := range values {
+			if text, isString := raw.(string); raw == nil || (isString && strings.TrimSpace(text) == "") {
+				r := containerTaskArgError(fmt.Sprintf("resources.%s.%s must be a Kubernetes quantity", key, name), "Omit the field instead of leaving it empty")
+				return r, false
+			}
+		}
+	}
+	return "", true
+}
+
 func parseContainerTaskResourcesArg(a map[string]any) (corev1.ResourceRequirements, string, bool) {
+	if errResult, ok := rejectEmptyContainerTaskQuantities(a); !ok {
+		return corev1.ResourceRequirements{}, errResult, false
+	}
 	resources, errResult, ok := parseResourceRequirementsArg(a)
 	if !ok {
 		return resources, errResult, false
