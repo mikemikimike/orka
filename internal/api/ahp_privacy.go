@@ -117,7 +117,7 @@ func (h *Handlers) ahpSessionCheck(c fiber.Ctx) error {
 	if err != nil {
 		return nil
 	}
-	hidden, err := h.ahpSessionHidden(c.Context(), ui, namespace, c.Params("id"))
+	hidden, err := ahpSessionHiddenIn(c.Context(), h.client, ui, namespace, c.Params("id"))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up the session's owner: %v", err))
 	}
@@ -127,30 +127,53 @@ func (h *Handlers) ahpSessionCheck(c fiber.Ctx) error {
 	return nil
 }
 
-// ahpSessionOwners returns, for each Orka Session an AHP turn's Task names,
-// one such Task, which carries the turn's requester.
-func (h *Handlers) ahpSessionOwners(ctx context.Context, namespace string) (map[string]*corev1alpha1.Task, error) {
-	var tasks corev1alpha1.TaskList
-	if err := h.client.List(ctx, &tasks, client.InNamespace(namespace)); err != nil {
+// ahpSessionOwnersIn returns, for each of the named sessions that is an AHP
+// session some turn's Task continues, one such Task, which carries the turn's
+// requester. It reads labelled turns first, and scans the namespace's other
+// Tasks only for sessions they leave unowned, which turns from before the
+// label may own.
+func ahpSessionOwnersIn(ctx context.Context, r client.Reader, namespace string, sessions []string) (map[string]*corev1alpha1.Task, error) {
+	owners := map[string]*corev1alpha1.Task{}
+	wanted := map[string]bool{}
+	for _, session := range sessions {
+		if strings.HasPrefix(session, ahpNamePrefix) {
+			wanted[session] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return owners, nil
+	}
+	collect := func(tasks *corev1alpha1.TaskList) {
+		for i := range tasks.Items {
+			task := &tasks.Items[i]
+			if ref := task.Spec.SessionRef; ref != nil && wanted[ref.Name] && owners[ref.Name] == nil && ahpTurnTask(task) {
+				owners[ref.Name] = task
+			}
+		}
+	}
+	var labelled corev1alpha1.TaskList
+	if err := r.List(ctx, &labelled, client.InNamespace(namespace), client.MatchingLabels{labels.LabelAHPTurn: labels.LabelAHPTurnValue}); err != nil {
 		return nil, err
 	}
-	owners := map[string]*corev1alpha1.Task{}
-	for i := range tasks.Items {
-		if ref := tasks.Items[i].Spec.SessionRef; ref != nil && ref.Name != "" && ahpTurnTask(&tasks.Items[i]) {
-			owners[ref.Name] = &tasks.Items[i]
+	collect(&labelled)
+	if len(owners) < len(wanted) {
+		var all corev1alpha1.TaskList
+		if err := r.List(ctx, &all, client.InNamespace(namespace)); err != nil {
+			return nil, err
 		}
+		collect(&all)
 	}
 	return owners, nil
 }
 
-// ahpSessionHidden reports an AHP Orka Session the caller may not see: one
+// ahpSessionHiddenIn reports an AHP Orka Session the caller may not see: one
 // another person's turns use, or one named like AHP's that no turn's Task
 // names any more, which nothing can show to be the caller's.
-func (h *Handlers) ahpSessionHidden(ctx context.Context, ui *UserInfo, namespace, session string) (bool, error) {
+func ahpSessionHiddenIn(ctx context.Context, r client.Reader, ui *UserInfo, namespace, session string) (bool, error) {
 	if !ahpPerson(ui) || !strings.HasPrefix(session, ahpNamePrefix) {
 		return false, nil
 	}
-	owners, err := h.ahpSessionOwners(ctx, namespace)
+	owners, err := ahpSessionOwnersIn(ctx, r, namespace, []string{session})
 	if err != nil {
 		return false, err
 	}

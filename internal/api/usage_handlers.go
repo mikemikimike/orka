@@ -238,6 +238,12 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 	}
 	ui := GetUserInfo(c)
 	ahpOwners := map[string]map[string]*corev1alpha1.Task{}
+	ahpSessions := map[string][]string{}
+	for _, task := range data.Tasks {
+		if strings.HasPrefix(task.SessionName, ahpNamePrefix) {
+			ahpSessions[task.Namespace] = append(ahpSessions[task.Namespace], task.SessionName)
+		}
+	}
 	for _, task := range data.Tasks {
 		key := task.Namespace + "/" + task.TaskUID
 		known[key] = true
@@ -247,7 +253,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 			owners, ok := ahpOwners[task.Namespace]
 			if !ok {
 				var err error
-				if owners, err = h.ahpSessionOwners(c.Context(), task.Namespace); err != nil {
+				if owners, err = ahpSessionOwnersIn(c.Context(), h.client, task.Namespace, ahpSessions[task.Namespace]); err != nil {
 					return err
 				}
 				ahpOwners[task.Namespace] = owners

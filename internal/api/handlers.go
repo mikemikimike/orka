@@ -584,7 +584,7 @@ func (h *Handlers) CreateTask(c fiber.Ctx) error {
 	// Another person's AHP conversation cannot be read through a Task that
 	// continues it.
 	if spec.SessionRef != nil {
-		hidden, err := h.ahpSessionHidden(c.Context(), GetUserInfo(c), namespace, spec.SessionRef.Name)
+		hidden, err := ahpSessionHiddenIn(c.Context(), h.client, GetUserInfo(c), namespace, spec.SessionRef.Name)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up the session's owner: %v", err))
 		}
@@ -1098,7 +1098,11 @@ func (h *Handlers) ListSessions(c fiber.Ctx) error {
 	ui := GetUserInfo(c)
 	var ahpOwners map[string]*corev1alpha1.Task
 	if ahpPerson(ui) {
-		if ahpOwners, err = h.ahpSessionOwners(ctx, namespace); err != nil {
+		names := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			names = append(names, s.Name)
+		}
+		if ahpOwners, err = ahpSessionOwnersIn(ctx, h.client, namespace, names); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up session owners: %v", err))
 		}
 	}
