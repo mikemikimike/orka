@@ -96,10 +96,11 @@ These workers use dedicated ServiceAccounts bound to `orka-ai-worker-role`,
 `orka-vendor-worker-role`, or `orka-container-worker-role`. Include these identities when
 auditing Kubernetes access.
 
-Container Tasks are untrusted compute. Their `spec.secretRef` and any `spec.env` entry that
-reads a Secret or ConfigMap through `valueFrom` reach the Pod only when an operator sets
-`ORKA_AGENT_DIRECT_SECRET_MOUNTS=true`; otherwise the Task fails before its Pod is created.
-See [Container tasks](../guides/container-tasks.md#other-fields).
+Container Tasks are untrusted compute. A Task's `spec.secretRef` is mounted only when an
+operator sets `ORKA_AGENT_DIRECT_SECRET_MOUNTS=true`; without it the mount is omitted and the
+Task still runs. A `spec.env` entry that reads a Secret or ConfigMap through `valueFrom` is
+refused outright: without the opt-in the Task fails before its Pod is created. See
+[Container tasks](../guides/container-tasks.md#other-fields).
 
 ### ACP RuntimePool Pods
 
