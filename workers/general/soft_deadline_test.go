@@ -554,8 +554,9 @@ func TestRun_ShortTimeoutDeliversDespiteADetachedDescendant(t *testing.T) {
 		t.Skip("python3 is needed to detach a descendant from the process group")
 	}
 	const taskName = "detached-task"
-	const detached = "import os, time; os.setpgrp(); time.sleep(60)"
-	t.Cleanup(func() { _ = exec.Command("pkill", "-f", detached).Run() })
+	// The marker is plain text, since pkill -f takes a regular expression.
+	const detached = "import os, time; orka_test_detached_descendant = 1; os.setpgrp(); time.sleep(60)"
+	t.Cleanup(func() { _ = exec.Command("pkill", "-f", "orka_test_detached_descendant").Run() })
 	controller := &softDeadlineController{}
 	server := controller.serve(t, taskName)
 	artifacts := filepath.Join(t.TempDir(), "artifacts")
@@ -597,7 +598,9 @@ func TestRun_SoftDeadlineStopsALeaderThatChangedProcessGroup(t *testing.T) {
 		t.Skip("python3 is needed to move the leader to another process group")
 	}
 	const taskName = "regrouped-leader-task"
-	const leader = "import os, sys, time; os.setpgrp(); print('regrouped', flush=True); time.sleep(60)"
+	const leader = "import os, sys, time; orka_test_regrouped_leader = 1; os.setpgrp(); " +
+		"print('regrouped', flush=True); time.sleep(60)"
+	t.Cleanup(func() { _ = exec.Command("pkill", "-f", "orka_test_regrouped_leader").Run() })
 	controller := &softDeadlineController{}
 	server := controller.serve(t, taskName)
 	artifacts := filepath.Join(t.TempDir(), "artifacts")
