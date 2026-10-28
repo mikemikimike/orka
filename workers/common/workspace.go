@@ -405,12 +405,15 @@ func FinalizeResult(workDir string, agentOutput string) ([]byte, error) {
 	}
 	files = uniqueStrings(files)
 
-	// A command that printed a structured result keeps it: the workspace
-	// fields are added to it instead of nesting it in a summary.
+	// A command that printed a structured result keeps its outcome, summary,
+	// data, and artifacts; the workspace and publication fields are computed
+	// here, so printed values for them are dropped rather than trusted.
 	sr := &StructuredResult{Summary: TruncateStructuredSummary(agentOutput)}
 	var printed StructuredResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(agentOutput)), &printed); err == nil && printed.Version != 0 {
 		printed.Summary = TruncateStructuredSummary(printed.Summary)
+		printed.BaseSHA, printed.HeadSHA, printed.Diff, printed.Files = "", "", "", nil
+		printed.PushBranch, printed.PushError = "", ""
 		sr = &printed
 	}
 	sr.BaseSHA = baseSHA

@@ -564,8 +564,10 @@ func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Printed workspace and publication fields are the worker's to compute.
 	printed := `{"version":1,"outcome":"blocked","summary":"captcha on checkout","data":{"step":"checkout"},` +
-		`"artifacts":[{"filename":"page.png","contentType":"image/png"}]}` + "\n"
+		`"artifacts":[{"filename":"page.png","contentType":"image/png"}],` +
+		`"diff":"fake","files":["ghost.txt"],"pushBranch":"fake","pushError":"fake","baseSHA":"fake","headSHA":"fake"}` + "\n"
 	data, err := FinalizeResult(dir, printed)
 	if err != nil {
 		t.Fatalf("FinalizeResult failed: %v", err)
@@ -578,8 +580,10 @@ func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
 		len(sr.Artifacts) != 1 || sr.Artifacts[0].Filename != "page.png" {
 		t.Fatalf("the printed structured result was not kept: %s", string(data))
 	}
-	if sr.BaseSHA == "" || sr.HeadSHA == "" || sr.Diff == "" || len(sr.Files) != 1 {
-		t.Fatalf("workspace fields were not added: %s", string(data))
+	if sr.BaseSHA == "" || sr.BaseSHA == "fake" || sr.HeadSHA == "" || sr.HeadSHA == "fake" ||
+		sr.Diff == "" || sr.Diff == "fake" || len(sr.Files) != 1 || sr.Files[0] == "ghost.txt" ||
+		sr.PushBranch != "" || sr.PushError != "" {
+		t.Fatalf("workspace fields were not computed by the worker: %s", string(data))
 	}
 }
 
