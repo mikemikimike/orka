@@ -264,13 +264,15 @@ when the Task finishes. Artifacts have no fallback. Outside Orka's worker entryp
 Upload them as they are written rather than at the end, because a Task stopped by its
 deadline uploads nothing more. `ORKA_TIMEOUT_SECONDS` lets the image stop itself in time.
 
-Read them back with the Task API or the CLI:
+Read them back with the Task API or the CLI. Without a namespace, the API looks in the
+caller's own namespace and the CLI in `default`, so name the Task's namespace, `orka-system`
+in the example above:
 
 | | API | CLI |
 | --- | --- | --- |
-| Result | `GET /api/v1/tasks/{name}/result` returns `{"result": "<the posted body>"}` | `orka task result <name>` |
-| List artifacts | `GET /api/v1/tasks/{name}/artifacts` | `orka task artifacts <name>` |
-| Download one | `GET /api/v1/tasks/{name}/artifacts/{filename}` | `orka task download <name> <filename>` |
+| Result | `GET /api/v1/tasks/{name}/result?namespace={namespace}` returns `{"result": "<the posted body>"}` | `orka task result <name> -n <namespace>` |
+| List artifacts | `GET /api/v1/tasks/{name}/artifacts?namespace={namespace}` | `orka task artifacts <name> -n <namespace>` |
+| Download one | `GET /api/v1/tasks/{name}/artifacts/{filename}?namespace={namespace}` | `orka task download <name> <filename> -n <namespace>` |
 
 ### Recommended result shape
 
