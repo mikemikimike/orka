@@ -1575,6 +1575,48 @@ func TestAHPChangesDropAFileThatNoLongerDiffers(t *testing.T) {
 	require.Equal(t, ahpTestDir+"/c.go", files[0].Edit.After.Uri)
 }
 
+// A session keeps only the contents its changed files name, whatever was
+// stored for earlier versions: a long session's edits do not grow it.
+func TestAHPChangesKeepOnlyTheContentsTheirFilesName(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	principal := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice"), Namespace: ahpTestNamespace}
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, principal.UserKey, ahpRecordSession, ahpTestSession, &record))
+	changes := &ahpChanges{b: env.backend, ctx: ctx, principal: principal, session: record, emit: env.backend.emitterFor(principal)}
+	dir := ahpTestDir[len("file://"):]
+	stored := func() []string {
+		records, err := env.backend.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordContent)
+		require.NoError(t, err)
+		contents := make([]string, 0, len(records))
+		for _, record := range records {
+			contents = append(contents, string(record.Value))
+		}
+		slices.Sort(contents)
+		return contents
+	}
+
+	v0, v1, v2, v3 := "v0\n", "v1\n", "v2\n", "v3\n"
+	changes.change(func() {
+		changes.setFile(dir+"/a.go", &v0, &v1, true)
+		changes.setFile(dir+"/b.go", nil, &v1, true)
+	})
+	// a.go moves on; b.go still names v1.
+	changes.change(func() { changes.setFile(dir+"/a.go", &v1, &v2, true) })
+	require.Equal(t, []string{v0, v1, v2}, stored())
+	changes.change(func() {
+		for range 5 {
+			changes.setFile(dir+"/a.go", &v2, &v3, true)
+			changes.setFile(dir+"/a.go", &v3, &v2, true)
+		}
+	})
+	require.Equal(t, []string{v0, v1, v2}, stored(), "versions no file names any more go")
+	changes.sync(map[string]ahpGitChange{dir + "/b.go": {After: &v3}})
+	require.Equal(t, []string{v3}, stored(), "the branch's files replace the reported ones")
+}
+
 func TestAHPChangesFollowTheBranch(t *testing.T) {
 	env := newAHPTestEnv(t)
 	c := env.connect("alice")

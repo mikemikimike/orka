@@ -27,6 +27,52 @@ type ahpChanges struct {
 	principal ahphost.Principal
 	session   ahpSession
 	emit      ahphost.Emitter
+	// released holds the contents files stopped naming during a change.
+	released map[string]bool
+}
+
+// change makes a batch of changes, then deletes the stored contents the batch
+// left no file naming. The session's files share contents, so batches take
+// turns: one cannot delete a content another is about to name.
+func (c *ahpChanges) change(fn func()) {
+	unlock := c.b.lockChanges(c.principal.UserKey)
+	defer unlock()
+	fn()
+	c.dropReleased()
+}
+
+// release notes contents a file may no longer name.
+func (c *ahpChanges) release(nonces ...string) {
+	for _, nonce := range nonces {
+		if nonce == "" {
+			continue
+		}
+		if c.released == nil {
+			c.released = map[string]bool{}
+		}
+		c.released[nonce] = true
+	}
+}
+
+// dropReleased deletes the released contents no file of the session names.
+// When the files cannot be listed, it keeps them.
+func (c *ahpChanges) dropReleased() {
+	released := c.released
+	c.released = nil
+	if len(released) == 0 {
+		return
+	}
+	files, err := c.listFiles()
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		delete(released, file.Before)
+		delete(released, file.After)
+	}
+	for nonce := range released {
+		_ = c.b.store.DeleteAHPRecord(c.ctx, c.principal.UserKey, ahpRecordContent, c.hash()+"/"+nonce)
+	}
 }
 
 func (c *ahpChanges) hash() string { return ahpHash(c.principal.UserKey, c.session.Session) }
@@ -65,6 +111,10 @@ func (c *ahpChanges) setFile(full string, before, after *string, keepBefore bool
 		return
 	}
 	known := err == nil
+	// Whatever this leaves unnamed, including a content stored for a write
+	// that then fails, goes when the change ends.
+	previous := file
+	defer func() { c.release(previous.Before, previous.After, file.Before, file.After) }()
 	if !known || !keepBefore {
 		file.Before = ""
 		if before != nil {
@@ -125,9 +175,14 @@ func (c *ahpChanges) emitFile(file ahpFileContent) {
 
 // files returns the session's changed files by path.
 func (c *ahpChanges) files() map[string]ahpFileContent {
+	files, _ := c.listFiles()
+	return files
+}
+
+func (c *ahpChanges) listFiles() (map[string]ahpFileContent, error) {
 	records, err := c.b.store.ListAHPRecords(c.ctx, c.principal.UserKey, ahpRecordFile)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	files := map[string]ahpFileContent{}
 	for _, record := range records {
@@ -139,7 +194,7 @@ func (c *ahpChanges) files() map[string]ahpFileContent {
 			files[file.Path] = file
 		}
 	}
-	return files
+	return files, nil
 }
 
 // emitCounts updates the chat's change counts from every changed file.
@@ -162,13 +217,16 @@ type ahpGitChange struct {
 
 // sync makes the changeset exactly the given files.
 func (c *ahpChanges) sync(changed map[string]ahpGitChange) {
-	for full := range c.files() {
-		if _, ok := changed[full]; !ok {
-			c.removeFile(full)
+	c.change(func() {
+		for full, file := range c.files() {
+			if _, ok := changed[full]; !ok {
+				c.removeFile(full)
+				c.release(file.Before, file.After)
+			}
 		}
-	}
-	for full, change := range changed {
-		c.setFile(full, change.Before, change.After, false)
-	}
+		for full, change := range changed {
+			c.setFile(full, change.Before, change.After, false)
+		}
+	})
 	c.emitCounts()
 }

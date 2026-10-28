@@ -971,10 +971,12 @@ func (t *ahpTurn) recordDiffs(diffs []harnessv2.ToolCallDiff) {
 	if project == "" {
 		project, _ = ahpURIPath(t.sessionProjectDir())
 	}
-	for _, diff := range diffs {
-		after := diff.NewText
-		changes.setFile(project+path.Clean("/"+diff.Path), diff.OldText, &after, true)
-	}
+	changes.change(func() {
+		for _, diff := range diffs {
+			after := diff.NewText
+			changes.setFile(project+path.Clean("/"+diff.Path), diff.OldText, &after, true)
+		}
+	})
 	changes.emitCounts()
 }
 

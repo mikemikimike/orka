@@ -190,18 +190,30 @@ type ahpBackend struct {
 	// lifecycle serializes, per user, what decides who owns workspace state:
 	// session branch claims, session disposal and terminal creation.
 	lifecycle map[string]*sync.Mutex
+	// changes serializes, per user, changes to session changesets.
+	changes map[string]*sync.Mutex
 }
 
 // lockUser takes the user's lifecycle lock. It is never taken while mu is held.
 func (b *ahpBackend) lockUser(userKey string) func() {
+	return b.lockIn(&b.lifecycle, userKey)
+}
+
+// lockChanges takes the lock on the user's changesets. It is never taken
+// while mu is held.
+func (b *ahpBackend) lockChanges(userKey string) func() {
+	return b.lockIn(&b.changes, userKey)
+}
+
+func (b *ahpBackend) lockIn(locks *map[string]*sync.Mutex, userKey string) func() {
 	b.mu.Lock()
-	if b.lifecycle == nil {
-		b.lifecycle = map[string]*sync.Mutex{}
+	if *locks == nil {
+		*locks = map[string]*sync.Mutex{}
 	}
-	lock := b.lifecycle[userKey]
+	lock := (*locks)[userKey]
 	if lock == nil {
 		lock = &sync.Mutex{}
-		b.lifecycle[userKey] = lock
+		(*locks)[userKey] = lock
 	}
 	b.mu.Unlock()
 	lock.Lock()
