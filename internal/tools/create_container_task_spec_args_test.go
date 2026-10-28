@@ -138,6 +138,7 @@ func TestCreateContainerTaskTool_RejectsInvalidSpecArgs(t *testing.T) {
 		{name: "env duplicate", fragment: `"env":[{"name":"A","value":"1"},{"name":"A","value":"2"}]`, mention: "duplicated"},
 		{name: "env too many", fragment: `"env":[` + strings.Join(manyEnv, ",") + `]`, mention: "at most 64"},
 		{name: "env value too long", fragment: `"env":[{"name":"A","value":"` + strings.Repeat("x", maxContainerTaskEnvValueBytes+1) + `"}]`, mention: "env[0].value"},
+		{name: "env value with NUL", fragment: `"env":[{"name":"A","value":"before\u0000after"}]`, mention: "NUL"},
 		{name: "env null item", fragment: `"env":[null]`, mention: "env[0]"},
 		{name: "malformed quantity", fragment: `"resources":{"limits":{"cpu":"two"}}`, mention: "resources.limits.cpu"},
 		{name: "empty quantity", fragment: `"resources":{"limits":{"cpu":"","memory":"2Gi"}}`, mention: "resources.limits.cpu"},

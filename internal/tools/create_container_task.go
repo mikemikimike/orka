@@ -581,6 +581,10 @@ func parseContainerTaskEnvArg(a map[string]any) ([]corev1.EnvVar, string, bool) 
 			r := containerTaskArgError(fmt.Sprintf("env[%d].value is %d bytes; at most %d are allowed", i, len(value), maxContainerTaskEnvValueBytes), "Write large inputs to a file in the image or workspace instead")
 			return nil, r, false
 		}
+		if strings.ContainsRune(value, 0) {
+			r := containerTaskArgError(fmt.Sprintf("env[%d].value contains a NUL byte", i), "Environment values cannot hold NUL; encode binary data, for example with base64")
+			return nil, r, false
+		}
 		if total += len(value); total > maxContainerTaskEnvTotalBytes {
 			r := containerTaskArgError(fmt.Sprintf("env is more than %d bytes in total", maxContainerTaskEnvTotalBytes), "Pass less through env: read large inputs from a file in the image or workspace")
 			return nil, r, false
