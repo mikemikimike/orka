@@ -133,6 +133,7 @@ func TestCreateContainerTaskTool_RejectsInvalidSpecArgs(t *testing.T) {
 		{name: "env unknown field", fragment: `"env":[{"name":"A","value":"b","from":"c"}]`, mention: `"from"`},
 		{name: "env missing name", fragment: `"env":[{"value":"b"}]`, mention: "env[0].name is required"},
 		{name: "env invalid name", fragment: `"env":[{"name":"1BAD","value":"b"}]`, mention: "not a valid environment variable name"},
+		{name: "env name too long", fragment: `"env":[{"name":"` + strings.Repeat("A", maxContainerTaskEnvNameBytes+1) + `","value":"b"}]`, mention: "env[0].name"},
 		{name: "env reserved ORKA name", fragment: `"env":[{"name":"ORKA_RESULT_ENDPOINT","value":"http://evil"}]`, errorType: "reserved_env_name", mention: "ORKA_RESULT_ENDPOINT"},
 		{name: "env reserved telemetry name", fragment: `"env":[{"name":"OTEL_EXPORTER_OTLP_ENDPOINT","value":"http://evil"}]`, errorType: "reserved_env_name", mention: "OTEL_EXPORTER_OTLP_ENDPOINT"},
 		{name: "env duplicate", fragment: `"env":[{"name":"A","value":"1"},{"name":"A","value":"2"}]`, mention: "duplicated"},

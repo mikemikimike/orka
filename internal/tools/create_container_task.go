@@ -65,7 +65,7 @@ func (t *CreateContainerTaskTool) Parameters() json.RawMessage {
 			itemsField: map[string]any{
 				jsonSchemaTypeField: jsonSchemaTypeObject,
 				jsonSchemaPropertiesField: map[string]any{
-					nameField:  map[string]any{jsonSchemaTypeField: jsonSchemaTypeString},
+					nameField:  map[string]any{jsonSchemaTypeField: jsonSchemaTypeString, jsonSchemaMaxLengthField: maxContainerTaskEnvNameBytes},
 					valueField: map[string]any{jsonSchemaTypeField: jsonSchemaTypeString, jsonSchemaMaxLengthField: maxContainerTaskEnvValueBytes},
 				},
 				jsonSchemaRequiredField:        []string{nameField},
@@ -472,6 +472,9 @@ const (
 
 	maxContainerTaskEnvVars       = 64
 	maxContainerTaskEnvValueBytes = 32 << 10
+	// maxContainerTaskEnvNameBytes keeps every NAME=value entry far below
+	// Linux's 128 KiB limit on a single environment string.
+	maxContainerTaskEnvNameBytes = 1 << 10
 	// maxContainerTaskEnvTotalBytes keeps the Task object well inside the
 	// API server's request limit (1.5 MiB by default on etcd).
 	maxContainerTaskEnvTotalBytes     = 256 << 10
@@ -557,6 +560,10 @@ func parseContainerTaskEnvArg(a map[string]any) ([]corev1.EnvVar, string, bool) 
 		name, _ := entry[nameField].(string)
 		if name == "" {
 			r := containerTaskArgError(fmt.Sprintf("env[%d].name is required", i), "Give every env entry a name")
+			return nil, r, false
+		}
+		if len(name) > maxContainerTaskEnvNameBytes {
+			r := containerTaskArgError(fmt.Sprintf("env[%d].name is %d bytes; at most %d are allowed", i, len(name), maxContainerTaskEnvNameBytes), "Use a shorter variable name")
 			return nil, r, false
 		}
 		if errs := validation.IsEnvVarName(name); len(errs) > 0 {
