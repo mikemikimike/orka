@@ -550,6 +550,39 @@ func TestFinalizeResult_GitRepoWithChanges(t *testing.T) {
 	}
 }
 
+func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
+	dir := t.TempDir()
+	runGitWS(t, dir, "init")
+	runGitWS(t, dir, "config", "user.email", "test@test.com")
+	runGitWS(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(dir+"/initial.txt", []byte("init\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitWS(t, dir, "add", ".")
+	runGitWS(t, dir, "commit", "-m", "initial")
+	if err := os.WriteFile(dir+"/shot.txt", []byte("shot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	printed := `{"version":1,"outcome":"blocked","summary":"captcha on checkout","data":{"step":"checkout"},` +
+		`"artifacts":[{"filename":"page.png","contentType":"image/png"}]}` + "\n"
+	data, err := FinalizeResult(dir, printed)
+	if err != nil {
+		t.Fatalf("FinalizeResult failed: %v", err)
+	}
+	var sr StructuredResult
+	if err := json.Unmarshal(data, &sr); err != nil {
+		t.Fatalf("expected JSON result, got: %s", string(data))
+	}
+	if sr.Outcome != "blocked" || sr.Summary != "captcha on checkout" || sr.Data["step"] != "checkout" ||
+		len(sr.Artifacts) != 1 || sr.Artifacts[0].Filename != "page.png" {
+		t.Fatalf("the printed structured result was not kept: %s", string(data))
+	}
+	if sr.BaseSHA == "" || sr.HeadSHA == "" || sr.Diff == "" || len(sr.Files) != 1 {
+		t.Fatalf("workspace fields were not added: %s", string(data))
+	}
+}
+
 func TestFinalizeResult_GitRepoNoChanges(t *testing.T) {
 	dir := t.TempDir()
 	runGitWS(t, dir, "init")
