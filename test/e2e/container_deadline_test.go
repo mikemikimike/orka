@@ -39,6 +39,8 @@ func applyContainerDeadlineTask(name, timeout string) {
 			"command": []string{"sh", "-c"},
 			"args":    []string{containerDeadlineScript},
 			"timeout": timeout,
+			// A soft-deadline stop is the timeout, so this budget must stay unused.
+			"retryPolicy": map[string]any{"maxRetries": 2},
 		},
 	})
 	Expect(err).NotTo(HaveOccurred())
@@ -83,6 +85,14 @@ var _ = Describe("Container task deadline delivery", Ordered, func() {
 	It("delivers partial output and artifacts when the command outlives its timeout", func() {
 		applyContainerDeadlineTask(deadlineTask, "30s")
 		Expect(waitForTaskCompletion(deadlineTask, 3*time.Minute)).To(Equal("Failed"))
+		message, err := utils.Run(exec.Command("kubectl", "get", "task", deadlineTask, "-n", namespace,
+			"-o", "jsonpath={.status.message}"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(message).To(ContainSubstring("soft deadline"), "the controller must classify the stop as the timeout")
+		attempts, err := utils.Run(exec.Command("kubectl", "get", "task", deadlineTask, "-n", namespace,
+			"-o", "jsonpath={.status.attempts}"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(attempts).To(Equal("1"), "a run with an unknown outcome must not be retried")
 
 		raw := fetchTaskResultViaAPI(apiBaseURL, token, deadlineTask)
 		var result struct {

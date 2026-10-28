@@ -965,6 +965,7 @@ func (b *JobBuilder) buildEnvVarsWithOptions(ctx context.Context, task *corev1al
 	if task.Spec.Type == corev1alpha1.TaskTypeContainer {
 		envVars = b.addWorkspaceEnvVars(envVars, task)
 		envVars = setControllerEnv(envVars, workerenv.TimeoutSeconds, containerWorkerTimeoutSeconds(task, opts))
+		envVars = setControllerEnv(envVars, workerenv.Deadline, containerWorkerDeadline(task, opts, time.Now()))
 	}
 	envVars = setControllerEnvValue(envVars, workerenv.ResolvedApprovals, opts.ResolvedApprovalsJSON)
 	frozenBindings := ""
@@ -1096,6 +1097,17 @@ func containerWorkerTimeoutSeconds(task *corev1alpha1.Task, opts JobBuildOptions
 		return strconv.FormatInt(seconds, 10)
 	}
 	return ""
+}
+
+// containerWorkerDeadline is when the Job deadline ends if the Job starts now.
+// The Job and the Task's own timeout start no earlier than this, so the worker
+// measuring its soft deadline from it is at worst slightly early, and the
+// image pull and clone before the worker ran count against the timeout.
+func containerWorkerDeadline(task *corev1alpha1.Task, opts JobBuildOptions, now time.Time) string {
+	if containerWorkerTimeoutSeconds(task, opts) == "" {
+		return ""
+	}
+	return now.Add(task.Spec.Timeout.Duration).UTC().Format(time.RFC3339)
 }
 
 func appendTaskEnvVars(envVars []corev1.EnvVar, task *corev1alpha1.Task) []corev1.EnvVar {

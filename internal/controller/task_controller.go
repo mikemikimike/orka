@@ -1970,6 +1970,16 @@ func (r *TaskReconciler) handleRunning(ctx context.Context, task *corev1alpha1.T
 			}
 			return r.completeExecutedTask(ctx, task, corev1alpha1.TaskPhaseFailed, timedOutTaskMessage(task))
 		}
+		if task.Spec.Timeout != nil && r.jobStoppedAtSoftDeadline(ctx, task) {
+			// The worker stopped the command itself, shortly before the Job
+			// deadline, to deliver partial output. That is the timeout, and a
+			// run with an unknown outcome is not retried.
+			msg := softDeadlineTaskMessage(task)
+			if !validationCommandFailed {
+				return r.completeTask(ctx, task, corev1alpha1.TaskPhaseFailed, msg)
+			}
+			return r.completeExecutedTask(ctx, task, corev1alpha1.TaskPhaseFailed, msg)
+		}
 		// Job failed, check retry policy
 		if r.shouldRetry(task) {
 			failure := r.diagnoseFailedJob(ctx, task)
@@ -2099,6 +2109,38 @@ func timedOutTaskMessage(task *corev1alpha1.Task) string {
 		return "task timed out; " + task.Status.Message
 	}
 	return "task timed out"
+}
+
+func softDeadlineTaskMessage(task *corev1alpha1.Task) string {
+	return timedOutTaskMessage(task) + "; the worker stopped the command at the soft deadline to deliver its partial output"
+}
+
+// jobStoppedAtSoftDeadline reports a worker that stopped its command at the
+// Task's soft deadline and said so in its termination message. The exit code
+// alone cannot tell, since the command's own timeout(1) exits 124 too. A Pod
+// listing failure counts as no, and the generic failure path applies.
+func (r *TaskReconciler) jobStoppedAtSoftDeadline(ctx context.Context, task *corev1alpha1.Task) bool {
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(task.Namespace),
+		client.MatchingLabels{labels.LabelTask: labels.SelectorValue(task.Name)}); err != nil {
+		return false
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if task.Status.JobName != "" && !podBelongsToJob(pod, task.Status.JobName) {
+			continue
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
+			term := cs.State.Terminated
+			if term == nil {
+				term = cs.LastTerminationState.Terminated
+			}
+			if term != nil && strings.Contains(term.Message, workerenv.SoftDeadlineTerminationMessage) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func podWaitingForMountInitialization(pod *corev1.Pod) bool {

@@ -122,6 +122,7 @@ func run() (err error) {
 	var stdout, stderr bytes.Buffer
 
 	timeout := taskTimeout(os.Getenv)
+	start = taskStart(os.Getenv, start, timeout)
 	runCtx, stopRun := startSoftDeadline(ctx, start, timeout)
 	defer stopRun()
 	cmd := exec.Command(command[0], command[1:]...)
@@ -152,9 +153,7 @@ func run() (err error) {
 	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if submitErr := submitResult(ctx, workDir, output); submitErr == nil {
-				recordGeneralResultSubmitted(ctx, eventRecorder, taskName, len(output))
-			}
+			_ = deliver(ctx, eventRecorder, taskName, workDir, output)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
@@ -168,10 +167,9 @@ func run() (err error) {
 		return err
 	}
 
-	if err := submitResult(ctx, workDir, output); err != nil {
+	if err := deliver(ctx, eventRecorder, taskName, workDir, output); err != nil {
 		return err
 	}
-	recordGeneralResultSubmitted(ctx, eventRecorder, taskName, len(output))
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -288,25 +286,44 @@ func workspaceRoot() string {
 	return workspaceDir
 }
 
-func submitResult(ctx context.Context, workDir, output string) error {
+// deliver posts the result and uploads the artifacts, and records the
+// submission event when a result was posted.
+func deliver(ctx context.Context, recorder common.EventRecorder, taskName, workDir, output string) error {
+	submitted, err := submitResult(ctx, workDir, output)
+	if submitted && err == nil {
+		recordGeneralResultSubmitted(ctx, recorder, taskName, len(output))
+	}
+	return err
+}
+
+// submitResult posts the result and uploads the artifacts, and reports whether
+// a result was posted. A command that printed nothing has no result to post;
+// the controller keeps the Pod log instead, and the artifacts are still
+// uploaded. The two deliveries are independent, so one failing does not skip
+// the other.
+func submitResult(ctx context.Context, workDir, output string) (bool, error) {
 	if os.Getenv(workerenv.ResultEndpoint) == "" && os.Getenv(workerenv.ControllerURL) == "" {
-		return nil
+		return false, nil
 	}
 	resultDir := ""
 	if workDir != "" {
 		resultDir = workspaceDir
 		if err := configurePublicationRemote(resultDir); err != nil {
-			return err
+			return false, err
 		}
 	}
 	resultBytes, err := common.FinalizeResult(resultDir, output)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := common.SubmitResultContext(ctx, resultBytes); err != nil {
-		return err
+	var submitErr error
+	submitted := len(bytes.TrimSpace(resultBytes)) > 0
+	if submitted {
+		submitErr = common.SubmitResultContext(ctx, resultBytes)
+	} else {
+		fmt.Fprintln(os.Stderr, "note: the command printed nothing, so the Pod log is kept as the result")
 	}
-	return common.UploadArtifactsContext(ctx)
+	return submitted && submitErr == nil, errors.Join(submitErr, common.UploadArtifactsContext(ctx))
 }
 
 func configurePublicationRemote(workDir string) error {
@@ -380,7 +397,8 @@ func runSecurityMapper(ctx context.Context) error {
 	}
 	output := fmt.Sprintf("security mapper wrote %d review slices\n", len(slices))
 	fmt.Print(output)
-	return submitResult(ctx, workDir, output)
+	_, err = submitResult(ctx, workDir, output)
+	return err
 }
 
 func changedFilesForSecurityScan(

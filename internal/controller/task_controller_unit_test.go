@@ -8870,3 +8870,39 @@ func TestRequestedTaskCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestJobStoppedAtSoftDeadline(t *testing.T) {
+	task := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "deadline", Namespace: "default"},
+		Spec:       corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeContainer, Timeout: &metav1.Duration{Duration: time.Minute}},
+		Status:     corev1alpha1.TaskStatus{JobName: "deadline-job"},
+	}
+	pod := func(name, jobName, message string, exitCode int32) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: map[string]string{
+				labels.LabelTask: labels.SelectorValue(task.Name), batchv1.JobNameLabel: jobName,
+			}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  workerContainerName,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: exitCode, Message: message}},
+			}}},
+		}
+	}
+	for _, tt := range []struct {
+		name string
+		pod  *corev1.Pod
+		want bool
+	}{
+		{name: "the worker marked a soft-deadline stop", pod: pod("p1", task.Status.JobName, workerenv.SoftDeadlineTerminationMessage+"\n", 124), want: true},
+		{name: "exit 124 without the marker is the command's own timeout", pod: pod("p2", task.Status.JobName, "", 124)},
+		{name: "another failure", pod: pod("p3", task.Status.JobName, "boom", 1)},
+		{name: "another Job's Pod does not count", pod: pod("p4", "earlier-job", workerenv.SoftDeadlineTerminationMessage, 124)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newUnitReconciler(newTestScheme(), task, tt.pod)
+			if got := r.jobStoppedAtSoftDeadline(context.Background(), task); got != tt.want {
+				t.Fatalf("jobStoppedAtSoftDeadline() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

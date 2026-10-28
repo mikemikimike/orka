@@ -131,6 +131,7 @@ func TestRun_SoftDeadlineDeliversPartialOutputAndArtifacts(t *testing.T) {
 	// the process group must release it well inside the margin.
 	os.Args = []string{"worker", "sh", "-c",
 		`printf partial-output; printf shot > "$ORKA_ARTIFACTS_DIR/shot.png"; (sleep 60) & sleep 60`}
+	termination := captureTerminationMessage(t)
 
 	started := time.Now()
 	err := run()
@@ -164,6 +165,97 @@ func TestRun_SoftDeadlineDeliversPartialOutputAndArtifacts(t *testing.T) {
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Filename != "shot.png" ||
 		result.Artifacts[0].ContentType != "image/png" {
 		t.Fatalf("result artifacts = %#v", result.Artifacts)
+	}
+	if got, _ := os.ReadFile(termination); !strings.Contains(string(got), workerenv.SoftDeadlineTerminationMessage) {
+		t.Fatalf("termination message = %q, want the soft-deadline marker so the controller does not retry", got)
+	}
+}
+
+// captureTerminationMessage points the worker's termination message at a
+// file the test can read.
+func captureTerminationMessage(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "termination-log")
+	previous := terminationMessagePath
+	terminationMessagePath = path
+	t.Cleanup(func() { terminationMessagePath = previous })
+	return path
+}
+
+func TestTaskStart(t *testing.T) {
+	workerStart := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	timeout := 10 * time.Minute
+	for _, tt := range []struct {
+		name     string
+		deadline string
+		timeout  time.Duration
+		want     time.Time
+	}{
+		{name: "no deadline", timeout: timeout, want: workerStart},
+		{name: "malformed deadline", deadline: "soon", timeout: timeout, want: workerStart},
+		{name: "no timeout", deadline: workerStart.Add(timeout).Format(time.RFC3339), want: workerStart},
+		// The Pod spent 90s pulling its image before the worker ran; that counts.
+		{
+			name:     "startup counts",
+			deadline: workerStart.Add(timeout - 90*time.Second).Format(time.RFC3339),
+			timeout:  timeout,
+			want:     workerStart.Add(-90 * time.Second),
+		},
+		// A deadline that puts the start in the future means the clocks disagree; never extend the budget.
+		{
+			name:     "future start",
+			deadline: workerStart.Add(timeout + time.Minute).Format(time.RFC3339),
+			timeout:  timeout,
+			want:     workerStart,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			getenv := func(name string) string {
+				if name == workerenv.Deadline {
+					return tt.deadline
+				}
+				return ""
+			}
+			if got := taskStart(getenv, workerStart, tt.timeout); !got.Equal(tt.want) {
+				t.Fatalf("taskStart() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRun_BlankOutputStillUploadsArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the command is a shell script")
+	}
+	const taskName = "quiet-task"
+	controller := &softDeadlineController{}
+	server := controller.serve(t, taskName)
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifacts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(workerenv.ControllerURL, server.URL)
+	t.Setenv(workerenv.ResultEndpoint, "")
+	t.Setenv(workerenv.TaskName, taskName)
+	t.Setenv(workerenv.TaskNamespace, "default")
+	t.Setenv(workerenv.TimeoutSeconds, "")
+	t.Setenv("ORKA_ARTIFACTS_DIR", artifacts)
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	// A screenshot tool that prints nothing must still get its file uploaded.
+	os.Args = []string{"worker", "sh", "-c", `printf shot > "$ORKA_ARTIFACTS_DIR/shot.png"`}
+
+	if err := run(); err != nil {
+		t.Fatalf("run() error = %v, want a quiet command to succeed", err)
+	}
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if string(controller.artifacts["shot.png"]) != "shot" {
+		t.Fatalf("artifacts = %v, want shot.png uploaded", controller.artifacts)
+	}
+	if len(controller.results) != 0 {
+		t.Fatalf("posted %d results, want none so the controller keeps the Pod log", len(controller.results))
 	}
 }
 

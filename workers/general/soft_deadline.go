@@ -36,6 +36,10 @@ const (
 
 var errSoftDeadline = errors.New("command stopped at the Task's soft deadline")
 
+// terminationMessagePath is where the worker tells the controller that it
+// stopped the command at the soft deadline; tests point it elsewhere.
+var terminationMessagePath = workerenv.TerminationMessagePath
+
 // softDeadlineMargin is the time reserved before the Job deadline to stop the
 // command and deliver what it produced: a tenth of the timeout, from 20 s to
 // 2 min, and never more than half of a very short timeout.
@@ -52,6 +56,36 @@ func taskTimeout(getenv func(string) string) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// taskStart is when the Task's timeout began. The job builder passes the
+// absolute Job deadline, so the timeout began that long before it: the image
+// pull and clone before the worker ran count, as they do for the Job. Without
+// it, or if the clocks disagree so that start would be after the worker's own
+// start, the worker's start is used.
+func taskStart(getenv func(string) string, workerStart time.Time, timeout time.Duration) time.Time {
+	if timeout <= 0 {
+		return workerStart
+	}
+	deadline, err := time.Parse(time.RFC3339, strings.TrimSpace(getenv(workerenv.Deadline)))
+	if err != nil {
+		return workerStart
+	}
+	if start := deadline.Add(-timeout); start.Before(workerStart) {
+		return start
+	}
+	return workerStart
+}
+
+// markSoftDeadlineStop tells the controller, through the Pod's termination
+// message, that the worker itself stopped the command at the soft deadline.
+// The controller then ends the Task as timed out instead of retrying a run
+// whose outcome is unknown. Best effort: the file is the kubelet's.
+func markSoftDeadlineStop() {
+	message := []byte(workerenv.SoftDeadlineTerminationMessage + "\n")
+	if err := os.WriteFile(terminationMessagePath, message, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "soft deadline: cannot write the termination message: %v\n", err)
+	}
 }
 
 // startSoftDeadline ends the returned context with errSoftDeadline once the
@@ -82,6 +116,7 @@ func stoppedAtSoftDeadline(ctx, runCtx context.Context) bool {
 // the margin on a fresh deadline, but a SIGTERM still stops it: after the Job
 // deadline or a cancellation the controller no longer accepts delivery.
 func deliverAtSoftDeadline(ctx context.Context, start time.Time, timeout time.Duration, output string) error {
+	markSoftDeadlineStop()
 	elapsed := time.Since(start).Round(time.Second)
 	fmt.Fprintf(os.Stderr, "soft deadline: stopped the command after %s of the %s timeout\n", elapsed, timeout)
 	delivery, upload := softDeadlineDelivery(start, timeout, time.Now())
