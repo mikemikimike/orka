@@ -32,18 +32,28 @@ const customImageCurlImage = "curlimages/curl:8.17.0"
 // the Pod's callback token, after probing what the token must not reach. The
 // probe status codes travel in the result so the spec can assert them.
 const customImageContractScript = `set -eu
-TOKEN="$(cat "$ORKA_SA_TOKEN_PATH")"
-AUTH="Authorization: Bearer $TOKEN"
 ARTIFACTS="$ORKA_CONTROLLER_URL/internal/v1/artifacts/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME"
-code() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
+# The token is read per request, as the contract asks, and only transient
+# answers are retried: a fast Pod can post before the controller has recorded
+# its Job, which answers 503 until it has.
+auth() { printf 'Authorization: Bearer %s' "$(cat "$ORKA_SA_TOKEN_PATH")"; }
+code() {
+  status=000
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    status=$(curl -s -o /dev/null -w '%{http_code}' -H "$(auth)" "$@" || echo 000)
+    case "$status" in 000|502|503|504) sleep 1 ;; *) break ;; esac
+  done
+  echo "$status"
+}
+must() { status=$(code "$@"); case "$status" in 2*) ;; *) echo "POST $* failed with HTTP $status" >&2; exit 1 ;; esac; }
 head -c 11534336 /dev/zero > /tmp/oversize.bin
-NESTED=$(code -X POST -H "$AUTH" --data-binary proof "$ARTIFACTS/nested/proof.txt")
-OVERSIZE=$(code -X POST -H "$AUTH" --data-binary @/tmp/oversize.bin "$ARTIFACTS/oversize.bin")
-KUBE=$(code -k -H "$AUTH" "https://kubernetes.default.svc/api/v1/namespaces/$ORKA_TASK_NAMESPACE/pods")
-PLANS=$(code -H "$AUTH" "$ORKA_CONTROLLER_URL/internal/v1/plans/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME")
+NESTED=$(code -X POST --data-binary proof "$ARTIFACTS/nested/proof.txt")
+OVERSIZE=$(code -X POST --data-binary @/tmp/oversize.bin "$ARTIFACTS/oversize.bin")
+KUBE=$(code -k "https://kubernetes.default.svc/api/v1/namespaces/$ORKA_TASK_NAMESPACE/pods")
+PLANS=$(code "$ORKA_CONTROLLER_URL/internal/v1/plans/$ORKA_TASK_NAMESPACE/$ORKA_TASK_NAME")
 printf 'custom-image-proof' > /tmp/proof.txt
-curl -fsS -X POST -H "$AUTH" -H 'Content-Type: text/plain' --data-binary @/tmp/proof.txt "$ARTIFACTS/proof.txt"
-curl -fsS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+must -X POST -H 'Content-Type: text/plain' --data-binary @/tmp/proof.txt "$ARTIFACTS/proof.txt"
+must -X POST -H 'Content-Type: application/json' \
   --data "{\"version\":1,\"outcome\":\"completed\",\"summary\":\"custom image posted its own result\",\"data\":{\"nested\":$NESTED,\"oversize\":$OVERSIZE,\"kubernetesAPI\":$KUBE,\"plans\":$PLANS}}" \
   "$ORKA_RESULT_ENDPOINT"
 echo custom-image-stdout`
