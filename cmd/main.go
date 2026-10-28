@@ -482,7 +482,8 @@ func main() {
 	flag.BoolVar(&connectorsEnabled, "connectors-enabled", envBool("ORKA_CONNECTORS_ENABLED"),
 		"Enable per-user connector reconciliation (ConnectorProvider and Connection).")
 	flag.BoolVar(&ahpAPIEnabled, "enable-ahp-api", envBool("ORKA_ENABLE_AHP_API"),
-		"Serve the Agent Host Protocol at /ahp and the AHP connection token routes, offering Orka's built-in runtimes as AHP agents.")
+		"Serve the Agent Host Protocol at /ahp and the AHP connection token routes, offering Orka's built-in runtimes as AHP agents. "+
+			"Requires Task provenance admission (--task-provenance-admission-enabled or --task-provenance-admission-external).")
 	flag.DurationVar(&ahpTokenMaxTTL, "ahp-token-max-ttl", ahphost.DefaultMaxTokenTTL,
 		"Longest lifetime an AHP connection token may be minted with.")
 	flag.StringVar(&ahpBackendConfig.GitCredentialSecret, "ahp-git-credential-secret", os.Getenv("ORKA_AHP_GIT_CREDENTIAL_SECRET"),
@@ -2107,6 +2108,10 @@ func main() {
 	var ahpHost *ahphost.Host
 	if ahpAPIEnabled {
 		if err := validateAHPSignIn(oidcConfig); err != nil {
+			setupLog.Error(err, "invalid AHP configuration")
+			os.Exit(1)
+		}
+		if err := validateAHPProvenance(taskProvenanceProtected); err != nil {
 			setupLog.Error(err, "invalid AHP configuration")
 			os.Exit(1)
 		}

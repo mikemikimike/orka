@@ -46,11 +46,16 @@ Optional values:
 | `controller.ahp.workspaceImage` | `""` | Digest-pinned image with `sh`, `git` and `sleep` that turns on [workspaces and terminals](#workspaces-and-terminals). |
 | `controller.ahp.workspaceNamespace` | `orka-ahp-workspaces` | Namespace the chart creates for workspace Pods when `workspaceImage` is set. |
 
-Without Helm, start the controller with the equivalent flags:
+Without Helm, start the controller with the equivalent flags. The chart always turns on
+Task provenance admission; without it, give the controller one of the two provenance flags
+below, or it refuses to start. Which person may read an AHP session is decided from the
+requester its turns' Tasks record, and provenance admission keeps direct Task writers from
+setting it.
 
 ```text
 --enable-ahp-api
 --oidc-issuer=<issuer> --oidc-audience=<audience> --oidc-allowed-subjects=<patterns> --oidc-namespace=<namespace>
+--task-provenance-admission-enabled   # or --task-provenance-admission-external with a separate webhook
 --ahp-git-credential-secret=<secret name>   # optional
 --ahp-workspace-class=<class name>          # optional
 ```

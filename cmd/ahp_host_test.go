@@ -31,6 +31,15 @@ func TestValidateAHPSignInRequiresOIDC(t *testing.T) {
 	}
 }
 
+func TestValidateAHPProvenance(t *testing.T) {
+	if validateAHPProvenance(false) == nil {
+		t.Error("an AHP endpoint whose Task requesters could be forged started")
+	}
+	if err := validateAHPProvenance(true); err != nil {
+		t.Errorf("provenance-protected AHP endpoint refused: %v", err)
+	}
+}
+
 func TestValidateAHPWorkspace(t *testing.T) {
 	digest := "ghcr.io/example/git@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for _, test := range []struct {

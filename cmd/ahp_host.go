@@ -68,6 +68,19 @@ func validateAHPSignIn(oidc api.OIDCConfig) error {
 	return nil
 }
 
+// validateAHPProvenance refuses an AHP endpoint whose privacy could be
+// forged: which person may read an AHP session is decided from the requester
+// its turns' Tasks record, which only Task provenance admission keeps direct
+// Task writers from setting.
+func validateAHPProvenance(provenanceProtected bool) error {
+	if !provenanceProtected {
+		return errors.New("--enable-ahp-api requires Task provenance admission (--task-provenance-admission-enabled or " +
+			"--task-provenance-admission-external): whose AHP sessions a person may read is decided from Task requesters, " +
+			"which direct Task writers could otherwise forge")
+	}
+	return nil
+}
+
 var ahpWorkspaceImageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[a-f0-9]{64}$`)
 
 // validateAHPWorkspace checks the workspace settings before anything starts.
