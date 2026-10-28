@@ -48,6 +48,17 @@ func softDeadlineMargin(timeout time.Duration) time.Duration {
 	return min(margin, timeout/2)
 }
 
+// commandWaitDelayFor bounds how long processes that escaped the group kill
+// may hold a stopped command's output open. Normally commandWaitDelay; with
+// a short timeout it stays inside a quarter of the soft-deadline margin, so
+// delivery still fits before the Job deadline.
+func commandWaitDelayFor(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return commandWaitDelay
+	}
+	return min(commandWaitDelay, softDeadlineMargin(timeout)/4)
+}
+
 // taskTimeout reads the Task timeout the job builder passes to container
 // workers. Zero, missing, or malformed values mean no soft deadline.
 func taskTimeout(getenv func(string) string) time.Duration {

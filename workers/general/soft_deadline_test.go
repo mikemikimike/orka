@@ -527,3 +527,62 @@ func TestRun_SoftDeadlineKeepsTimeForTheResultWhenUploadsStall(t *testing.T) {
 		t.Fatalf("result = %#v (%v), want the upload failure recorded and no artifacts", result, err)
 	}
 }
+
+func TestCommandWaitDelayFor(t *testing.T) {
+	for _, tt := range []struct {
+		timeout, want time.Duration
+	}{
+		{timeout: 0, want: commandWaitDelay},
+		{timeout: 60 * time.Second, want: commandWaitDelay},
+		{timeout: 10 * time.Second, want: 1250 * time.Millisecond},
+		{timeout: 2 * time.Second, want: 250 * time.Millisecond},
+	} {
+		if got := commandWaitDelayFor(tt.timeout); got != tt.want {
+			t.Errorf("commandWaitDelayFor(%s) = %s, want %s", tt.timeout, got, tt.want)
+		}
+	}
+}
+
+// A descendant that put itself in another process group survives the group
+// kill and keeps stdout open; a short Task must still deliver before its
+// Job deadline instead of waiting the full 5 s for that pipe.
+func TestRun_ShortTimeoutDeliversDespiteADetachedDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is Unix-specific")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is needed to detach a descendant from the process group")
+	}
+	const taskName = "detached-task"
+	const detached = "import os, time; os.setpgrp(); time.sleep(60)"
+	t.Cleanup(func() { _ = exec.Command("pkill", "-f", detached).Run() })
+	controller := &softDeadlineController{}
+	server := controller.serve(t, taskName)
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifacts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(workerenv.ControllerURL, server.URL)
+	t.Setenv(workerenv.ResultEndpoint, "")
+	t.Setenv(workerenv.TaskName, taskName)
+	t.Setenv(workerenv.TaskNamespace, "default")
+	t.Setenv(workerenv.TimeoutSeconds, "2")
+	t.Setenv("ORKA_ARTIFACTS_DIR", artifacts)
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"worker", "sh", "-c", `printf partial; python3 -c '` + detached + `' & sleep 60`}
+
+	started := time.Now()
+	err := run()
+	if elapsed := time.Since(started); elapsed > 1900*time.Millisecond {
+		t.Fatalf("run() took %s, want delivery inside the 2s timeout despite the detached descendant", elapsed)
+	}
+	if !errors.Is(err, errSoftDeadline) {
+		t.Fatalf("run() error = %v, want the soft deadline", err)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if len(controller.results) != 1 || !strings.Contains(string(controller.results[0]), "unknown_outcome") {
+		t.Fatalf("results = %q, want one soft-deadline account", controller.results)
+	}
+}

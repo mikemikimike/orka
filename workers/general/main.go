@@ -129,7 +129,7 @@ func run() (err error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.Env = os.Environ()
-	cmd.WaitDelay = commandWaitDelay
+	cmd.WaitDelay = commandWaitDelayFor(timeout)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
