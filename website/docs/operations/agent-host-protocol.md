@@ -305,14 +305,18 @@ on their own machine. Agents never run in the workspace.
 ### Lifetime
 
 The Pod's files are ephemeral: Orka rebuilds the checkouts when it starts again. It
-removes the Pod with the person's last session unless a terminal is open, and, with
-`--ahp-workspace-idle-timeout` (default `4h`, `0` turns it off), after that long without
-use. An idle Pod is removed only while no shell or turn of its person runs and nothing in
+removes the Pod with the person's last session, and, with `--ahp-workspace-idle-timeout`
+(default `4h`, `0` turns it off), after that long without use. Either way the Pod is
+removed only while no shell of its person runs (and, when idle, no turn) and nothing in
 it exists only there: no uncommitted or untracked files, no commits that any local ref
 or worktree reaches and no remote-tracking branch has (stashes and tags included), no
 files git was told not to check, no submodules and no files outside the checkouts. When
 git warns or a check fails, the Pod stays. Shell history, files git ignores inside a
 checkout and commits only the reflog keeps are not kept.
+
+Deleting a session removes its worktree only when no terminal of its person is open and
+git finds the worktree clean; its branch stays in the checkout, and a new session on the
+same branch picks it up.
 
 For the same reason the chart does not keep the namespace: unsetting `workspaceImage` or
 uninstalling the release deletes it with its Pods. A namespace created earlier with

@@ -8,6 +8,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,4 +95,27 @@ func TestAHPResolveSessionConfig(t *testing.T) {
 
 	_, err = env.backend.ResolveSessionConfig(ahpCtx(t), alice, ahptypes.ResolveSessionConfigParams{Config: map[string]json.RawMessage{"approvalMode": json.RawMessage(`"yolo"`)}})
 	require.Error(t, err)
+}
+
+// A changeset whose files together exceed one read shows the rest as too
+// large instead of failing.
+func TestAHPSelectBlobsBoundsTheTotalRead(t *testing.T) {
+	objects := make([]string, 0, 62)
+	objects = append(objects, "huge", "missing")
+	sizes := map[string]int{"huge": ahpChangeContentMax + 1}
+	for i := range 60 {
+		name := fmt.Sprintf("file-%d", i)
+		objects = append(objects, name)
+		sizes[name] = ahpChangeContentMax
+	}
+	small, large := ahpSelectBlobs(objects, sizes)
+	total := 0
+	for _, object := range small {
+		total += sizes[object]
+	}
+	require.LessOrEqual(t, total, ahpChangesContentTotal)
+	require.Len(t, small, ahpChangesContentTotal/ahpChangeContentMax)
+	require.Contains(t, large, "huge")
+	require.NotContains(t, append(small, large...), "missing", "an object that is not a blob has no entry")
+	require.Len(t, large, len(objects)-1-len(small))
 }

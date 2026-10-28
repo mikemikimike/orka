@@ -67,6 +67,25 @@ func TestAHPTerminalOutputKeepsWhatTheJournalRefused(t *testing.T) {
 	}, time.Second, 5*time.Millisecond, "the refused output arrives once the journal takes it")
 }
 
+// A terminal's last output the journal refuses as it ends is tried again
+// before the terminal is reported exited, instead of being dropped.
+func TestAHPTerminalOutputRetriesItsLastFlush(t *testing.T) {
+	emit := &ahpRecordingEmitter{refuse: true}
+	out := newAHPTerminalOutput(context.Background(), emit, "ahp-terminal:/t", nil)
+	_, err := out.Write([]byte("last words"))
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(10 * ahpTerminalFlushEvery)
+		emit.mu.Lock()
+		emit.refuse = false
+		emit.mu.Unlock()
+	}()
+	out.close()
+	emit.mu.Lock()
+	defer emit.mu.Unlock()
+	require.Equal(t, "last words", strings.Join(emit.data, ""))
+}
+
 // Past the hold bound the shell's output waits for the journal, and the wait
 // ends with the terminal.
 func TestAHPTerminalOutputHoldsOnlySoMuch(t *testing.T) {

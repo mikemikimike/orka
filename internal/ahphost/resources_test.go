@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -266,4 +267,62 @@ func TestIdleConnectionsArePinged(t *testing.T) {
 	// A client that answers pings stays connected well past several of them.
 	time.Sleep(300 * time.Millisecond)
 	require.NoError(t, client.Request(ctx, "ping", map[string]any{}, nil))
+}
+
+// gatedChannelListStore holds the first listing of terminal channels until
+// released, so a sweep can be caught while it runs.
+type gatedChannelListStore struct {
+	store.AHPStore
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (s *gatedChannelListStore) ListAHPChannels(ctx context.Context, userKey, prefix string) ([]string, error) {
+	if prefix == terminalScheme {
+		first := false
+		s.once.Do(func() { first = true })
+		if first {
+			close(s.entered)
+			<-s.release
+		}
+	}
+	return s.AHPStore.ListAHPChannels(ctx, userKey, prefix)
+}
+
+// A connection that arrives while another's sweep runs waits for it, so it
+// never sees a channel the sweep is about to remove.
+func TestAConnectionWaitsForTheSweepInProgress(t *testing.T) {
+	env, _ := newExtendedEnv(t)
+	gated := &gatedChannelListStore{AHPStore: env.host.cfg.Store, entered: make(chan struct{}), release: make(chan struct{})}
+	env.host.cfg.Store = gated
+	minted := env.mint("alice")
+	userKey := ahpUserKey(t, env, minted.Token)
+	ctx := ctx5(t)
+	state := ahptypes.TerminalState{Content: []ahptypes.TerminalContentPart{}}
+	require.NoError(t, env.host.storeChannels(ctx, userKey, map[string]storedChannel{
+		"ahp-terminal:/gone": {Backend: "fake", State: ahptypes.SnapshotState{Terminal: &state}},
+	}))
+
+	first, second := env.connect(minted.Token), env.connect(minted.Token)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := first.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+		firstDone <- err
+	}()
+	<-gated.entered
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := second.Initialize(ctx, "client-b", ahptypes.SupportedProtocolVersions(), nil)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("the second connection initialized while the sweep ran: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(gated.release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+	_, err := env.store.GetAHPChannelState(ctx, userKey, "ahp-terminal:/gone")
+	require.ErrorIs(t, err, store.ErrNotFound)
 }

@@ -177,27 +177,39 @@ func (c *conn) run(ctx context.Context) {
 	expiry := time.AfterFunc(expires, func() { c.closeWith(closeTokenInvalid, "the connection token expired") })
 	defer expiry.Stop()
 
-	go c.writeLoop(ctx)
+	// Commands, writes and pings stop as soon as the connection closes. The
+	// read does not: cancelling it would drop the connection before the close
+	// frame, which tells the client why, is written. It ends with the close
+	// handshake.
+	work, stopWork := context.WithCancel(ctx)
+	defer stopWork()
+	go func() {
+		<-c.done
+		stopWork()
+	}()
+	go c.writeLoop(work)
 	go c.handleLoop()
-	go c.pingLoop(ctx)
+	go c.pingLoop(work)
 	// Only the read loop below queues actions; closing after it stops lets
 	// the worker drain them.
 	defer close(c.handled)
-	go func() {
-		<-c.done
-		cancel()
-	}()
 	for {
 		kind, data, err := c.ws.Read(ctx)
 		if err != nil {
 			c.closeWith(websocket.StatusNormalClosure, "")
 			return
 		}
+		select {
+		case <-c.done:
+			// A closing connection handles nothing more.
+			return
+		default:
+		}
 		if kind != websocket.MessageText {
 			c.closeWith(websocket.StatusUnsupportedData, "AHP messages are text frames")
 			return
 		}
-		c.handle(ctx, data)
+		c.handle(work, data)
 		select {
 		case <-c.done:
 			return

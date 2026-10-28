@@ -2,8 +2,10 @@
 {{- if include "orka.ahpWorkspacesEnabled" . }}
 {{- $namespace := include "orka.ahpWorkspaceNamespace" . }}
 # Each AHP user gets one workspace Pod here: git checkouts of their projects
-# and sessions, and their terminals. The Pods hold no credentials and their
-# files are rebuilt when a Pod starts again, so the namespace is not kept when
+# and sessions, and their terminals. With a workspace connector provider, a
+# Pod also holds its person's own GitHub token in /tmp/orka-git/github-token,
+# readable by them and by anyone who can exec into the Pod. Its files are
+# rebuilt when a Pod starts again, so the namespace is not kept when
 # workspaces are turned off or the release is removed.
 apiVersion: v1
 kind: Namespace

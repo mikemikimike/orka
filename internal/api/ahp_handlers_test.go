@@ -130,6 +130,28 @@ func TestAHPTokenRoutesMintListAndRevoke(t *testing.T) {
 	require.NotNil(t, list.Items[0].RevokedAt)
 }
 
+// A token for a namespace other than the one a sign-in gets could never
+// connect, so it is not minted.
+func TestAHPTokenRoutesRefuseANamespaceConnectionsCannotUse(t *testing.T) {
+	h := newAHPTestHarness(t, ContextTokenAuthorizationConfig{})
+	handlers := NewHandlers(HandlersConfig{AHP: h.host, WatchNamespace: "team"})
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Username: "alice", Subject: "alice",
+			Issuer: ahpTestIssuer, Namespace: "orka-system"})
+		return c.Next()
+	})
+	app.Post("/api/v1/ahp-tokens", handlers.CreateAHPToken)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ahp-tokens", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	raw, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(raw))
+	require.Contains(t, string(raw), "--oidc-namespace")
+}
+
 func TestAHPTokenRoutesRefuseNonHumanIdentities(t *testing.T) {
 	h := newAHPTestHarness(t, ContextTokenAuthorizationConfig{})
 	for name, identity := range map[string]*UserInfo{

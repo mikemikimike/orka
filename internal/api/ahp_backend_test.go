@@ -2098,6 +2098,25 @@ func TestAHPBackendGivesARecreatedSessionItsOwnOrkaSession(t *testing.T) {
 	require.NotEqual(t, first, send("second"))
 }
 
+func TestAHPCanonicalRepository(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/octo/widgets":      "https://github.com/octo/widgets",
+		"https://GitHub.com/octo/widgets.git/": "https://github.com/octo/widgets",
+	} {
+		repo, _, _, err := ahpCanonicalRepository(raw)
+		require.NoError(t, err, raw)
+		require.Equal(t, want, repo, raw)
+	}
+	for _, raw := range []string{
+		"http://github.com/octo/widgets", "https://github.com/octo", "https://user@github.com/octo/widgets",
+		"https://github.com/octo/widgets?x=1", "https://github.com/octo/wid%3Fgets", "https://github.com/octo/wid%23gets",
+		"https://github.com/oc%20to/widgets", "https://github.com/octo/..",
+	} {
+		_, _, _, err := ahpCanonicalRepository(raw)
+		require.Error(t, err, raw)
+	}
+}
+
 // The namespace's repository credential goes to github.com projects only; a
 // project on another host, which the user names freely, is cloned anonymously.
 func TestAHPBackendSendsTheGitCredentialToGitHubOnly(t *testing.T) {

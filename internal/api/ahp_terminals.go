@@ -29,7 +29,10 @@ import (
 const (
 	ahpTerminalScheme     = "ahp-terminal:"
 	ahpTerminalFlushEvery = 20 * time.Millisecond
-	ahpTerminalChunkMax   = 32 << 10
+	// ahpTerminalCloseFlushTries bounds the tries of a terminal's last output:
+	// together a little over ten seconds.
+	ahpTerminalCloseFlushTries = 16
+	ahpTerminalChunkMax        = 32 << 10
 	// ahpTerminalHoldMax bounds the output kept while the journal cannot
 	// take it; past it the shell's output waits.
 	ahpTerminalHoldMax  = 8 * ahpTerminalChunkMax
@@ -159,6 +162,9 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 		}
 		b.mu.Unlock()
 		cancel()
+		if errors.Is(err, errAHPNoSuchDirectory) {
+			return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: "the terminal's directory does not exist in the workspace"}
+		}
 		log.Error(err, "prepare an AHP terminal's directory", "directory", cwd)
 		return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: "the terminal's directory could not be set up; try again"}
 	}
@@ -705,6 +711,9 @@ func (o *ahpTerminalOutput) keepRecent(data string, tokens []string) {
 	}
 }
 
+// close sends what is pending before the terminal is reported exited. A final
+// flush the journal refuses is tried again for a while, since nothing would
+// schedule it once the output is closed; a terminal being ended stops trying.
 func (o *ahpTerminalOutput) close() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -713,5 +722,15 @@ func (o *ahpTerminalOutput) close() {
 		o.timer = nil
 	}
 	o.closed = true
-	o.flushLocked()
+	wait := ahpTerminalFlushEvery
+	for attempt := 0; ; attempt++ {
+		o.flushLocked()
+		if len(o.pending) == 0 || attempt == ahpTerminalCloseFlushTries || o.ctx.Err() != nil {
+			return
+		}
+		o.mu.Unlock()
+		time.Sleep(wait)
+		wait = min(2*wait, time.Second)
+		o.mu.Lock()
+	}
 }

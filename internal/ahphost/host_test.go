@@ -520,11 +520,9 @@ func TestInitializePingAndVersionNegotiation(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &response))
 	require.NotNil(t, response.Error, string(raw))
 	require.Equal(t, ahptypes.ErrorCodeUnsupportedProtocolVersion, response.Error.Code)
-	// The connection then ends, with or without a close frame: the host does
-	// not wait out the close handshake.
+	// The connection then closes with a close frame, which tells the client why.
 	_, err = future.Recv(ctx)
-	require.Error(t, err, "the connection must close after an unsupported version")
-	require.NotErrorIs(t, err, context.DeadlineExceeded, "the connection must close after an unsupported version")
+	require.ErrorIs(t, err, ahp.ErrClosed, "the connection must close after an unsupported version")
 
 	early := env.connect(minted.Token)
 	_, _, err = early.Subscribe(ctx, rootChannel)

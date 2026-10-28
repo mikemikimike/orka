@@ -63,8 +63,10 @@ type Host struct {
 	hubs    map[string]*userHub
 	byToken map[string]map[*conn]struct{}
 	stopped bool
-	// swept records the users whose leftover channels this process dropped.
-	swept map[string]bool
+	// swept records the users whose leftover channels this process dropped,
+	// and sweeping the users whose sweep runs, closed when it ends.
+	swept    map[string]bool
+	sweeping map[string]chan struct{}
 	// creating are the channel URIs, per user, whose creation as a session or
 	// terminal is under way.
 	creating map[string]*channelCreation

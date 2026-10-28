@@ -9,6 +9,7 @@ package api
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -61,6 +62,14 @@ func (h *Handlers) ahpTokenIdentity(c fiber.Ctx) (*UserInfo, string, error) {
 	namespace, err := h.resolveNamespace(c, c.Query(toolNamespaceArg, ""))
 	if err != nil {
 		return nil, "", err
+	}
+	// A connection acts in the namespace the person's sign-in gets, which the
+	// host checks on every connection: a token for another namespace could
+	// never connect.
+	if ui.Namespace != "" && namespace != ui.Namespace {
+		return nil, "", fiber.NewError(fiber.StatusConflict, fmt.Sprintf(
+			"AHP connections act in the namespace an OIDC sign-in gets, %q, but this request resolves to %q; "+
+				"set --oidc-namespace to the namespace AHP sessions run in", ui.Namespace, namespace))
 	}
 	return ui, namespace, nil
 }

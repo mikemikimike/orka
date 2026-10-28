@@ -401,8 +401,22 @@ func (w *ahpWorkspaces) prepare(ctx context.Context, principal ahphost.Principal
 			}
 		}
 	}
+	if dir == ahpWorkspaceRoot {
+		return nil
+	}
+	// Any other directory must already be there: the shell would otherwise
+	// start somewhere the client was not told about.
+	var exit interface{ ExitStatus() int }
+	if err := w.run(ctx, pod, "test", "-d", dir); errors.As(err, &exit) && exit.ExitStatus() == 1 {
+		return errAHPNoSuchDirectory
+	} else if err != nil {
+		return err
+	}
 	return nil
 }
+
+// errAHPNoSuchDirectory is a terminal directory the workspace does not have.
+var errAHPNoSuchDirectory = errors.New("the directory does not exist in the workspace")
 
 // withGit runs change under the user's git lock. The change runs to the end
 // with its own deadline even when ctx ends first, so no clone or worktree is
@@ -600,7 +614,9 @@ git merge --quiet --ff-only "origin/$2"`, "sh", ahpWorktreePath(project, record.
 	changes.sync(changed)
 }
 
-// dropWorktree removes a disposed session's worktree from a running workspace.
+// dropWorktree removes a session's worktree from a running workspace when it
+// is clean: without --force, git keeps a worktree with changes or untracked
+// files, and its branch stays in the checkout either way.
 func (w *ahpWorkspaces) dropWorktree(ctx context.Context, principal ahphost.Principal, project ahpProject, branch string) {
 	if !w.enabled() || branch == "" {
 		return
@@ -610,8 +626,25 @@ func (w *ahpWorkspaces) dropWorktree(ctx context.Context, principal ahphost.Prin
 		return
 	}
 	_ = w.withGit(ctx, principal, func(ctx context.Context) error {
-		return w.run(ctx, pod, "git", "-C", project.Path, "worktree", "remove", "--force", ahpWorktreePath(project, branch))
+		return w.run(ctx, pod, ahpWorktreeRemoveArgs(project.Path, ahpWorktreePath(project, branch))...)
 	})
+}
+
+// ahpWorktreeRemoveArgs removes the worktree from the checkout at dir
+// only when it is clean.
+func ahpWorktreeRemoveArgs(dir, worktree string) []string {
+	return []string{"git", "-C", dir, "worktree", "remove", worktree}
+}
+
+// removeUnlessHoldsWork deletes the user's workspace Pod unless something in
+// it exists nowhere else, and reports whether it did. A Pod that is not
+// running has nothing to check and goes.
+func (w *ahpWorkspaces) removeUnlessHoldsWork(ctx context.Context, principal ahphost.Principal) bool {
+	if pod, running := w.running(ctx, principal); running && w.holdsWork(ctx, pod) {
+		return false
+	}
+	w.remove(ctx, principal)
+	return true
 }
 
 // running returns the user's workspace Pod if it is running; it never creates one.

@@ -213,24 +213,39 @@ func randomID() string {
 
 // sweepOnce drops, once per user in this process, the channels an earlier
 // process left behind: resource watches, which never outlive their
-// connection, and terminals whose shells are gone. A sweep that fails is tried
-// again by the user's next initialize or reconnect.
+// connection, and terminals whose shells are gone. A connection arriving while
+// the user's sweep runs waits for it, so it never reads a channel about to go.
+// A sweep that fails is tried again by the user's next initialize or
+// reconnect.
 func (h *Host) sweepOnce(ctx context.Context, principal Principal) {
 	h.mu.Lock()
 	if h.swept == nil {
 		h.swept = map[string]bool{}
+		h.sweeping = map[string]chan struct{}{}
 	}
 	if h.swept[principal.UserKey] {
 		h.mu.Unlock()
 		return
 	}
-	h.swept[principal.UserKey] = true
-	h.mu.Unlock()
-	if err := h.sweep(ctx, principal); err != nil {
-		h.mu.Lock()
-		delete(h.swept, principal.UserKey)
+	if running := h.sweeping[principal.UserKey]; running != nil {
 		h.mu.Unlock()
+		select {
+		case <-running:
+		case <-ctx.Done():
+		}
+		return
 	}
+	done := make(chan struct{})
+	h.sweeping[principal.UserKey] = done
+	h.mu.Unlock()
+	err := h.sweep(ctx, principal)
+	h.mu.Lock()
+	if err == nil {
+		h.swept[principal.UserKey] = true
+	}
+	delete(h.sweeping, principal.UserKey)
+	h.mu.Unlock()
+	close(done)
 }
 
 func (h *Host) sweep(ctx context.Context, principal Principal) error {

@@ -322,9 +322,12 @@ const (
 	// ahpChangeContentMax the content shown for one side of a file.
 	ahpChangesMax       = 300
 	ahpChangeContentMax = 1 << 20
-	ahpChangeTooLarge   = "This file is too large to show.\n"
-	ahpChangeBinary     = "This file is binary.\n"
-	ahpGitProgram       = "git"
+	// ahpChangesContentTotal bounds the content read for one changeset, well
+	// within the read's own bound, which also carries a header per object.
+	ahpChangesContentTotal = 48 << 20
+	ahpChangeTooLarge      = "This file is too large to show.\n"
+	ahpChangeBinary        = "This file is binary.\n"
+	ahpGitProgram          = "git"
 	// ahpShell runs the workspace's commands.
 	ahpShell = "/bin/sh"
 )
@@ -401,17 +404,10 @@ func (w *ahpWorkspaces) blobs(ctx context.Context, pod *corev1.Pod, worktree str
 	if err != nil {
 		return nil, err
 	}
-	var small []string
-	for _, object := range objects {
-		size, ok := sizes[object]
-		switch {
-		case !ok:
-		case size > ahpChangeContentMax:
-			note := ahpChangeTooLarge
-			contents[object] = &note
-		default:
-			small = append(small, object)
-		}
+	small, large := ahpSelectBlobs(objects, sizes)
+	for _, object := range large {
+		note := ahpChangeTooLarge
+		contents[object] = &note
 	}
 	if len(small) == 0 {
 		return contents, nil
@@ -457,6 +453,24 @@ func (w *ahpWorkspaces) blobs(ctx context.Context, pod *corev1.Pod, worktree str
 		contents[object] = &text
 	}
 	return contents, nil
+}
+
+// ahpSelectBlobs splits the objects that are blobs into those read in full
+// and those shown as too large: alone, or past what one read returns in all.
+func ahpSelectBlobs(objects []string, sizes map[string]int) (small, large []string) {
+	budget := ahpChangesContentTotal
+	for _, object := range objects {
+		size, ok := sizes[object]
+		switch {
+		case !ok:
+		case size > ahpChangeContentMax || size > budget:
+			large = append(large, object)
+		default:
+			budget -= size
+			small = append(small, object)
+		}
+	}
+	return small, large
 }
 
 // blobSizes returns the size of each object that is a blob.

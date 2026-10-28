@@ -731,7 +731,9 @@ func ahpCanonicalRepository(raw string) (repo, owner, name string, err error) {
 	}
 	owner, name = segments[0], strings.TrimSuffix(segments[1], ".git")
 	for _, part := range []string{owner, name} {
-		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, `\ `) {
+		// An escaped ? or # decodes into the path; written back, git would read
+		// it as a query or fragment.
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, `\ ?#`) {
 			return "", "", "", errors.New("the repository URL is not valid")
 		}
 	}
@@ -945,12 +947,13 @@ func (b *ahpBackend) DisposeSession(ctx context.Context, principal ahphost.Princ
 	if b.workspaces.enabled() {
 		// Remove the worktree while the session still holds its branch, so a
 		// new session cannot claim the branch and lose its files to this.
-		// Terminals are the user's own and outlive sessions: the workspace
-		// itself goes only with the last session and no terminal running.
+		// Nothing goes that holds work found nowhere else. Terminals are the
+		// user's own and outlive sessions: while one runs, the worktree it may
+		// be in stays, and the workspace goes only with the last session.
 		sessions, err := b.store.ListAHPRecords(ctx, principal.UserKey, ahpRecordSession)
-		if err == nil && len(sessions) <= 1 && !b.hasTerminals(principal.UserKey) {
-			b.workspaces.remove(ctx, principal)
-		} else {
+		terminals := b.hasTerminals(principal.UserKey)
+		removed := err == nil && len(sessions) <= 1 && !terminals && b.workspaces.removeUnlessHoldsWork(ctx, principal)
+		if !removed && !terminals {
 			var project ahpProject
 			if b.getRecord(ctx, principal.UserKey, ahpRecordProject, record.ProjectID, &project) == nil {
 				dropCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

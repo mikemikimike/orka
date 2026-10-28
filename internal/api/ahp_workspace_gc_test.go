@@ -159,6 +159,16 @@ func TestAHPCloneAndWorktreeScripts(t *testing.T) {
 	out, err = script(ahpWorktreeScript, checkout, worktree, "feature", "main")
 	require.NoError(t, err, out)
 	require.Equal(t, kept, git(worktree, "rev-parse", "HEAD"), "the unpublished branch is reused as it was")
+
+	// Removing a session's worktree keeps one with uncommitted work.
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "draft.txt"), []byte("draft\n"), 0o600))
+	remove := ahpWorktreeRemoveArgs(checkout, worktree)
+	require.Error(t, exec.Command(remove[0], remove[1:]...).Run(), "a worktree with an untracked file was removed")
+	require.FileExists(t, filepath.Join(worktree, "draft.txt"))
+	require.NoError(t, os.Remove(filepath.Join(worktree, "draft.txt")))
+	require.NoError(t, exec.Command(remove[0], remove[1:]...).Run(), "a clean worktree is removed")
+	require.NoDirExists(t, worktree)
+	require.Equal(t, kept, git(checkout, "rev-parse", "feature"), "its branch stays")
 }
 
 // The script runs in the workspace; run it here against real repositories.
