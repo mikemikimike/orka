@@ -215,6 +215,11 @@ token. The same operations are available over the API; see the
   until they are deleted. The workspace checks a project out at `/workspace/src/<owner>/<name>`
   and does not reuse a checkout of another repository there, such as one of the same owner
   and name on another host: remove it in a terminal first.
+- **Privacy.** A person's turns are theirs. The Tasks AHP turns create, and the Orka
+  Sessions they continue, are shown through Orka's API, CLI and dashboard only to the
+  person who sent them: everyone else signed in to the namespace gets `404` for them,
+  does not see them in lists or usage, and cannot continue them with a Task of their own.
+  ServiceAccounts keep the access RBAC grants them.
 - **Sessions.** A session runs in an Orka Session, which is bound to one runtime profile.
   When the person picks another model, the session moves to a new Orka Session that
   starts with the conversation so far as context. A branch a turn already published

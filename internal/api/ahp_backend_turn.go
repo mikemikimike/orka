@@ -29,6 +29,7 @@ import (
 	"github.com/orka-agents/orka/internal/ahphost"
 	executionevents "github.com/orka-agents/orka/internal/events"
 	harnessv2 "github.com/orka-agents/orka/internal/harness/v2"
+	"github.com/orka-agents/orka/internal/labels"
 	"github.com/orka-agents/orka/internal/liveevents"
 	"github.com/orka-agents/orka/internal/store"
 )
@@ -332,7 +333,7 @@ func (b *ahpBackend) turnTask(ctx context.Context, principal ahphost.Principal, 
 		}
 	}
 	task := &corev1alpha1.Task{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: principal.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: principal.Namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
 		Spec: corev1alpha1.TaskSpec{
 			Type: corev1alpha1.TaskTypeAgent, AgentRef: &corev1alpha1.AgentReference{Name: choice.Agent},
 			Prompt:     prompt,

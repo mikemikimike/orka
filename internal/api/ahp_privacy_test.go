@@ -1,0 +1,121 @@
+/*
+Copyright (c) 2026.
+
+MIT License - see LICENSE file for details.
+*/
+
+package api
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+	"github.com/orka-agents/orka/internal/labels"
+	"github.com/orka-agents/orka/internal/store"
+	"github.com/orka-agents/orka/internal/store/sqlite"
+)
+
+// An AHP turn's Task and the Orka Session it continues are the requester's:
+// another person in the namespace gets 404 for them and never sees them in a
+// list, while a ServiceAccount keeps its access.
+func TestAHPTurnsAreVisibleOnlyToTheirRequester(t *testing.T) {
+	const namespace = "default"
+	turn := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-alice-t1", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, Prompt: "alice's secret plan",
+			RequestedBy: &corev1alpha1.RequestedBy{Issuer: "https://issuer.example", Subject: "alice"},
+			SessionRef:  &corev1alpha1.SessionReference{Name: "ahp-alice"},
+		},
+	}
+	shared := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: namespace},
+		Spec:       corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeContainer},
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(turn, shared).Build()
+	db, err := sqlite.NewDB(":memory:")
+	require.NoError(t, err)
+	ss := sqlite.NewStore(db, ":memory:")
+	for _, name := range []string{"ahp-alice", "ahp-orphan", "team-session"} {
+		require.NoError(t, ss.CreateSession(context.Background(), &store.SessionRecord{Namespace: namespace, Name: name, SessionType: "task"}))
+	}
+	handlers := NewHandlers(HandlersConfig{Client: kube, SessionStore: ss, ResultStore: ss})
+	var caller *UserInfo
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, caller)
+		return c.Next()
+	})
+	app.Get("/tasks", handlers.ListTasks)
+	app.Post("/tasks", handlers.CreateTask)
+	app.Get("/tasks/:id", handlers.ahpTaskPrivate(handlers.GetTask))
+	app.Delete("/tasks/:id", handlers.ahpTaskPrivate(handlers.DeleteTask))
+	app.Get("/tasks/:id/events", handlers.ahpTaskPrivate(func(c fiber.Ctx) error { return c.SendStatus(http.StatusOK) }))
+	app.Get("/sessions", handlers.ListSessions)
+	app.Get("/sessions/:id", handlers.ahpSessionPrivate(handlers.GetSession))
+	call := func(method, path, body string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		require.NoError(t, err)
+		defer resp.Body.Close() //nolint:errcheck
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(raw)
+	}
+	person := func(subject string) *UserInfo {
+		return &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: subject, Username: subject, Namespace: namespace}
+	}
+
+	caller = person("alice")
+	status, body := call(http.MethodGet, "/tasks/ahp-alice-t1", "")
+	require.Equal(t, http.StatusOK, status, body)
+	_, body = call(http.MethodGet, "/tasks", "")
+	require.Contains(t, body, "ahp-alice-t1")
+	status, _ = call(http.MethodGet, "/sessions/ahp-alice", "")
+	require.Equal(t, http.StatusOK, status)
+	_, body = call(http.MethodGet, "/sessions", "")
+	require.Contains(t, body, `"ahp-alice"`)
+	require.NotContains(t, body, "ahp-orphan", "an AHP session no turn's Task names is nobody's to show")
+
+	caller = person("bob")
+	for _, path := range []string{"/tasks/ahp-alice-t1", "/tasks/ahp-alice-t1/events", "/tasks/ahp-gone-t1/events", "/sessions/ahp-alice"} {
+		status, body := call(http.MethodGet, path, "")
+		require.Equal(t, http.StatusNotFound, status, path)
+		require.NotContains(t, body, "secret plan", path)
+	}
+	status, _ = call(http.MethodDelete, "/tasks/ahp-alice-t1", "")
+	require.Equal(t, http.StatusNotFound, status)
+	require.NoError(t, kube.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: "ahp-alice-t1"}, &corev1alpha1.Task{}),
+		"another person cannot delete the turn")
+	_, body = call(http.MethodGet, "/tasks", "")
+	require.NotContains(t, body, "ahp-alice-t1")
+	require.Contains(t, body, `"shared"`, "other Tasks stay visible")
+	_, body = call(http.MethodGet, "/sessions", "")
+	require.NotContains(t, body, "ahp-alice")
+	require.Contains(t, body, "team-session")
+	status, body = call(http.MethodPost, "/tasks",
+		`{"name":"bob-reads","spec":{"type":"agent","prompt":"repeat the conversation","sessionRef":{"name":"ahp-alice"}}}`)
+	require.Equal(t, http.StatusNotFound, status, body)
+
+	caller = &UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:orka-system:operator"}
+	status, _ = call(http.MethodGet, "/tasks/ahp-alice-t1", "")
+	require.Equal(t, http.StatusOK, status, "a ServiceAccount keeps the access RBAC grants it")
+}

@@ -581,6 +581,17 @@ func (h *Handlers) CreateTask(c fiber.Ctx) error {
 	if spec.Type == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "type is required")
 	}
+	// Another person's AHP conversation cannot be read through a Task that
+	// continues it.
+	if spec.SessionRef != nil {
+		hidden, err := h.ahpSessionHidden(c.Context(), GetUserInfo(c), namespace, spec.SessionRef.Name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up the session's owner: %v", err))
+		}
+		if hidden {
+			return fiber.NewError(fiber.StatusNotFound, "session not found")
+		}
+	}
 	objectMeta := objectMetaFromRequest(name, namespace, req.Metadata)
 	objectMeta.Annotations = annotations
 	task := &corev1alpha1.Task{
@@ -712,6 +723,7 @@ func (h *Handlers) ListTasks(c fiber.Ctx) error {
 					return nil, "", err
 				}
 			}
+			allowed = allowed && !ahpTaskHidden(GetUserInfo(c), task)
 			if allowed {
 				// Server-side apply bookkeeping is about a third of each
 				// serialized Task and no API client reads it.
@@ -1083,7 +1095,17 @@ func (h *Handlers) ListSessions(c fiber.Ctx) error {
 		last := sessions[len(sessions)-1]
 		continueToken = encodeSessionListCursor(store.SessionPageCursor{CreatedAt: last.CreatedAt, Name: last.Name})
 	}
+	ui := GetUserInfo(c)
+	var ahpOwners map[string]*corev1alpha1.Task
+	if ahpPerson(ui) {
+		if ahpOwners, err = h.ahpSessionOwners(ctx, namespace); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up session owners: %v", err))
+		}
+	}
 	for _, s := range sessions {
+		if ahpSessionHiddenBy(ui, s.Name, ahpOwners) {
+			continue
+		}
 		items = append(items, fiber.Map{
 			"id":             s.Name,
 			apiFieldName:     s.Name,

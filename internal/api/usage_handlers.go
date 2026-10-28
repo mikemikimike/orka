@@ -236,9 +236,30 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 		key := prKey{link.Namespace, link.NamespaceUID, usageRepositoryFoldKey(link.Repository), link.Number}
 		linkedWorks[key] = append(linkedWorks[key], link.WorkID)
 	}
+	ui := GetUserInfo(c)
+	ahpOwners := map[string]map[string]*corev1alpha1.Task{}
 	for _, task := range data.Tasks {
 		key := task.Namespace + "/" + task.TaskUID
 		known[key] = true
+		// Another person's AHP turns stay out of the report, as from the
+		// Task API.
+		if ahpPerson(ui) && strings.HasPrefix(task.SessionName, ahpNamePrefix) {
+			owners, ok := ahpOwners[task.Namespace]
+			if !ok {
+				var err error
+				if owners, err = h.ahpSessionOwners(c.Context(), task.Namespace); err != nil {
+					return err
+				}
+				ahpOwners[task.Namespace] = owners
+			}
+			if ahpSessionHiddenBy(ui, task.SessionName, owners) {
+				data.HiddenTasks[key] = true
+				if task.WorkID != "" {
+					hiddenWorks[task.WorkID] = true
+				}
+				continue
+			}
+		}
 		owner := task.GatewayOwner
 		if owner == nil {
 			continue

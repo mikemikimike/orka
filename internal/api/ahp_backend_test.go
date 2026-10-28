@@ -332,6 +332,7 @@ func TestAHPBackendRunsATurnAsATask(t *testing.T) {
 	require.Equal(t, "git-token", task.Spec.Workspace.PublicationCredentialRef.Name)
 	require.Equal(t, "alice", task.Spec.RequestedBy.Subject, "the Task is the person's")
 	require.Equal(t, labels.RequestedBySourceAPI, task.Annotations[labels.AnnotationRequestedBySource])
+	require.Equal(t, labels.LabelAHPTurnValue, task.Labels[labels.LabelAHPTurn], "the API shows a turn's Task only to its requester")
 	require.Equal(t, corev1alpha1.PermissionDecisionsRequester, task.Spec.AgentRuntime.PermissionDecisions,
 		"manual approvals hold permission requests for the person")
 
