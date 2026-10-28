@@ -148,8 +148,11 @@ Without Node, `chromium-headless` covers simple jobs:
 chromium-headless --screenshot=/tmp/artifacts/page.png --window-size=1280,800 https://example.com
 ```
 
-Chromium prints D-Bus connection errors on stderr in a Pod. They are harmless, and the
-worker keeps them in the result after the command's stdout.
+Chromium prints D-Bus connection errors on stderr in a Pod. They are harmless, but the
+worker keeps them in the result after the command's stdout, and a structured result has to
+be the JSON alone. Redirect them when the script prints one, for example with
+`chromium-headless ... 2>/tmp/artifacts/chromium.log`. Playwright keeps the browser's
+stderr out of the script's own output, so the Node example above is unaffected.
 
 ## Deadlines and stop conditions
 
@@ -248,6 +251,12 @@ spec:
     - |
       set -eu
       export HOME=/tmp npm_config_cache=/tmp/npm-cache npm_config_update_notifier=false
+      # Wait for the Pod's IPv6 link-local address to settle; see "What a Task Pod does to Chromium".
+      i=0; while [ "$i" -lt 100 ]; do
+        tentative=0
+        while read -r _ _ _ _ flags _; do [ "$(( 0x$flags & 0x40 ))" -ne 0 ] && tentative=1; done < /proc/net/if_inet6
+        [ "$tentative" -eq 0 ] && break; i=$((i + 1)); sleep 0.05
+      done
       npx -y playwright@1.64.1 screenshot --browser=chromium https://example.com /tmp/example.png
       node -e '
         const fs = require("fs");
@@ -277,6 +286,5 @@ spec:
 ```
 
 This image is about 1 GB compressed and installs Playwright on every run, which needs
-access to the npm registry. The Orka image avoids both. Installing takes long enough
-that the Pod's network has settled before the browser starts; a script that launches
-Chromium at once should wait for that (see the table above).
+access to the npm registry. The Orka image avoids both, and its entrypoint does the
+network wait for you.
