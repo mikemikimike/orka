@@ -1237,7 +1237,7 @@ func TestToolEvalSchemaLimitsEnforced(t *testing.T) {
 				limits := make([]string, 0, 16)
 				for _, label := range []string{"chat", "worker"} {
 					for _, limit := range []string{
-						".env maxItems=64", ".env[] additionalProperties=false", ".env[].name required", ".env[].value maxLength=32768",
+						".env maxItems=64", ".env[] additionalProperties=false", ".env[].name maxLength=1024", ".env[].name required", ".env[].value maxLength=32768",
 						".retryPolicy.backoffMultiplier maximum=10", ".retryPolicy.backoffMultiplier minimum=1",
 						".retryPolicy.maxRetries maximum=5", ".retryPolicy.maxRetries minimum=0",
 					} {
@@ -1274,6 +1274,10 @@ func TestToolEvalSchemaLimitsEnforced(t *testing.T) {
 						func() (bool, string) {
 							value := func(n int) string { return `"env":[{"name":"A","value":"` + long(n) + `"}]` }
 							return evalRejectsChange(call, args(value(32768)), args(value(32769)), "value")
+						},
+						func() (bool, string) {
+							name := func(n int) string { return `"env":[{"name":"` + long(n) + `","value":"b"}]` }
+							return evalRejectsChange(call, args(name(1024)), args(name(1025)), "name")
 						},
 						func() (bool, string) {
 							return evalRejectsChange(call, args(retry("backoffMultiplier", "10")), args(retry("backoffMultiplier", "10.5")), "backoffMultiplier")
