@@ -590,6 +590,8 @@ func TestRun_ShortTimeoutDeliversDespiteADetachedDescendant(t *testing.T) {
 
 // A leader that moves itself out of the process group must still be stopped
 // at the soft deadline, or Wait blocks until the Job deadline cancels delivery.
+// The leader already heads its own group, so it joins this process's group
+// instead; the group kill then reaches nothing and only the PID kill stops it.
 func TestRun_SoftDeadlineStopsALeaderThatChangedProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process-group cleanup is Unix-specific")
@@ -598,7 +600,7 @@ func TestRun_SoftDeadlineStopsALeaderThatChangedProcessGroup(t *testing.T) {
 		t.Skip("python3 is needed to move the leader to another process group")
 	}
 	const taskName = "regrouped-leader-task"
-	const leader = "import os, sys, time; orka_test_regrouped_leader = 1; os.setpgrp(); " +
+	const leader = "import os, sys, time; orka_test_regrouped_leader = 1; os.setpgid(0, os.getpgid(os.getppid())); " +
 		"print('regrouped', flush=True); time.sleep(60)"
 	t.Cleanup(func() { _ = exec.Command("pkill", "-f", "orka_test_regrouped_leader").Run() })
 	controller := &softDeadlineController{}
