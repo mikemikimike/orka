@@ -376,6 +376,71 @@ func TestADisposalThatFailsPartwayCanBeFinished(t *testing.T) {
 	}
 }
 
+// pausingSessionStore holds the first catalog read after it is armed, once the
+// read is done, until released: a summary sync slow to write its update.
+type pausingSessionStore struct {
+	store.AHPStore
+	armed   atomic.Bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (s *pausingSessionStore) GetAHPSession(ctx context.Context, userKey, session string) (store.AHPSession, error) {
+	record, err := s.AHPStore.GetAHPSession(ctx, userKey, session)
+	if s.armed.CompareAndSwap(true, false) {
+		close(s.reached)
+		<-s.release
+	}
+	return record, err
+}
+
+// A session disposed of while an action on it is still writing its summary
+// stays gone: the summary is not written back, so the URI can be used again.
+func TestADisposalWaitsForTheSummaryBeingWritten(t *testing.T) {
+	s, err := sqlite.OpenLockedStore(filepath.Join(t.TempDir(), "orka.db"))
+	require.NoError(t, err)
+	pausing := &pausingSessionStore{AHPStore: s, reached: make(chan struct{}), release: make(chan struct{})}
+	tokens := &TokenService{Store: s}
+	backend := &fakeBackend{}
+	registry, err := NewRegistry(backend)
+	require.NoError(t, err)
+	host, err := New(Config{Store: pausing, Tokens: tokens, Backends: registry, Logger: logr.Discard()})
+	require.NoError(t, err)
+	server := httptest.NewServer(host)
+	t.Cleanup(server.Close)
+	env := &testEnv{t: t, host: host, tokens: tokens, store: s, backend: backend, server: server}
+	client := env.connect(env.mint("alice").Token)
+	ctx := ctx5(t)
+	_, err = client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	createSession(t, client, "ahp-session:/one")
+	userKey := UserKey("https://issuer.example", "alice")
+
+	pausing.armed.Store(true)
+	applied := make(chan error, 1)
+	go func() {
+		applied <- emitter{host: host, principal: Principal{UserKey: userKey}}.Emit(ctx, "ahp-session:/one",
+			ahptypes.StateAction{Value: &ahptypes.SessionTitleChangedAction{Type: ahptypes.ActionTypeSessionTitleChanged, Title: "late"}})
+	}()
+	<-pausing.reached
+	disposed := make(chan error, 1)
+	go func() {
+		disposed <- client.Request(ctx, "disposeSession", ahptypes.DisposeSessionParams{Channel: "ahp-session:/one"}, nil)
+	}()
+	select {
+	case err := <-disposed:
+		disposed <- err
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(pausing.release)
+	require.NoError(t, <-applied)
+	require.NoError(t, <-disposed)
+
+	_, err = s.GetAHPSession(ctx, userKey, "ahp-session:/one")
+	require.ErrorIs(t, err, store.ErrNotFound, "the summary was not written back")
+	createSession(t, client, "ahp-session:/one")
+}
+
 // An action stays applied once it is journaled: a catalog summary that cannot
 // be written then neither rejects it nor keeps its side effects from running.
 func TestAnActionIsAppliedThoughItsSummaryCannotBeWritten(t *testing.T) {
