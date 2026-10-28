@@ -409,7 +409,7 @@ func detectContentType(filename string, data []byte) string {
 		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	case ".zip":
 		return "application/zip"
-	case ".json":
+	case ".json", ".har":
 		return "application/json"
 	case ".csv":
 		return "text/csv"
