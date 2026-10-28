@@ -565,7 +565,8 @@ func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
 	}
 
 	// Printed workspace and publication fields are the worker's to compute.
-	printed := `{"version":1,"outcome":"blocked","summary":"captcha on checkout","data":{"step":"checkout"},` +
+	printed := `{"version":1,"outcome":"blocked","summary":"captcha on checkout",` +
+		`"data":{"step":"checkout","orderID":9007199254740993},` +
 		`"artifacts":[{"filename":"page.png","contentType":"image/png"}],` +
 		`"diff":"fake","files":["ghost.txt"],"pushBranch":"fake","pushError":"fake","baseSHA":"fake","headSHA":"fake"}` + "\n"
 	data, err := FinalizeResult(dir, printed)
@@ -579,6 +580,10 @@ func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
 	if sr.Outcome != "blocked" || sr.Summary != "captcha on checkout" || sr.Data["step"] != "checkout" ||
 		len(sr.Artifacts) != 1 || sr.Artifacts[0].Filename != "page.png" {
 		t.Fatalf("the printed structured result was not kept: %s", string(data))
+	}
+	// A large integer must come back as written, not rounded through float64.
+	if !strings.Contains(string(data), `"orderID":9007199254740993`) {
+		t.Fatalf("the printed number lost precision: %s", string(data))
 	}
 	if sr.BaseSHA == "" || sr.BaseSHA == "fake" || sr.HeadSHA == "" || sr.HeadSHA == "fake" ||
 		sr.Diff == "" || sr.Diff == "fake" || len(sr.Files) != 1 || sr.Files[0] == "ghost.txt" ||

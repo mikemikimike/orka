@@ -410,7 +410,11 @@ func FinalizeResult(workDir string, agentOutput string) ([]byte, error) {
 	// here, so printed values for them are dropped rather than trusted.
 	sr := &StructuredResult{Summary: TruncateStructuredSummary(agentOutput)}
 	var printed StructuredResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(agentOutput)), &printed); err == nil && printed.Version != 0 {
+	// UseNumber keeps the command's numbers as written, so a large integer in
+	// data survives the round trip instead of becoming a float64.
+	printedDecoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(agentOutput)))
+	printedDecoder.UseNumber()
+	if err := printedDecoder.Decode(&printed); err == nil && printed.Version != 0 {
 		printed.Summary = TruncateStructuredSummary(printed.Summary)
 		printed.BaseSHA, printed.HeadSHA, printed.Diff, printed.Files = "", "", "", nil
 		printed.PushBranch, printed.PushError = "", ""
