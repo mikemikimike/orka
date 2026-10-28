@@ -592,6 +592,34 @@ func TestFinalizeResult_KeepsPrintedStructuredResult(t *testing.T) {
 	}
 }
 
+func TestFinalizeResult_KeepsTextAfterAPrintedResult(t *testing.T) {
+	dir := t.TempDir()
+	runGitWS(t, dir, "init")
+	runGitWS(t, dir, "config", "user.email", "test@test.com")
+	runGitWS(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(dir+"/initial.txt", []byte("init\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitWS(t, dir, "add", ".")
+	runGitWS(t, dir, "commit", "-m", "initial")
+
+	// The worker appends the command's stderr to its stdout, so a printed
+	// result followed by an error is not a structured result: both are kept.
+	output := `{"version":1,"outcome":"completed","summary":"checked the page"}` + "\nError: page crashed\n"
+	data, err := FinalizeResult(dir, output)
+	if err != nil {
+		t.Fatalf("FinalizeResult failed: %v", err)
+	}
+	var sr StructuredResult
+	if err := json.Unmarshal(data, &sr); err != nil {
+		t.Fatalf("expected JSON result, got: %s", string(data))
+	}
+	if sr.Outcome != "" || !strings.Contains(sr.Summary, `"outcome":"completed"`) ||
+		!strings.Contains(sr.Summary, "Error: page crashed") {
+		t.Fatalf("the error after the printed result was dropped: %s", string(data))
+	}
+}
+
 func TestFinalizeResult_GitRepoNoChanges(t *testing.T) {
 	dir := t.TempDir()
 	runGitWS(t, dir, "init")

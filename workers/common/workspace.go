@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -367,6 +368,12 @@ func validatePriorTaskDiffDigest(diff string) error {
 	return nil
 }
 
+// decoderAtEOF reports whether dec has consumed its whole input.
+func decoderAtEOF(dec *json.Decoder) bool {
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
+}
+
 // FinalizeResult builds a structured result from the agent output and any
 // uncommitted changes in workDir. If workDir is empty, it returns the raw
 // agent output as plain text bytes.
@@ -411,10 +418,13 @@ func FinalizeResult(workDir string, agentOutput string) ([]byte, error) {
 	sr := &StructuredResult{Summary: TruncateStructuredSummary(agentOutput)}
 	var printed StructuredResult
 	// UseNumber keeps the command's numbers as written, so a large integer in
-	// data survives the round trip instead of becoming a float64.
+	// data survives the round trip instead of becoming a float64. The result
+	// has to be the whole output: a command that printed one and then an error
+	// keeps both as text, so the error is not dropped with the rest.
 	printedDecoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(agentOutput)))
 	printedDecoder.UseNumber()
-	if err := printedDecoder.Decode(&printed); err == nil && printed.Version != 0 {
+	if err := printedDecoder.Decode(&printed); err == nil && printed.Version != 0 &&
+		decoderAtEOF(printedDecoder) {
 		printed.Summary = TruncateStructuredSummary(printed.Summary)
 		printed.BaseSHA, printed.HeadSHA, printed.Diff, printed.Files = "", "", "", nil
 		printed.PushBranch, printed.PushError = "", ""
