@@ -192,8 +192,20 @@ func (d *ACPDispatcher) runPermissionHold(ctx context.Context, send acpPermissio
 	defer deadline.Stop()
 	ticker := time.NewTicker(d.permissionPollInterval())
 	defer ticker.Stop()
-	expired := false
+	// Past the deadline, the expiry is recorded until it is, or another
+	// outcome won. The runtime is answered only with an outcome read back
+	// from the store, never one inferred from the timer.
+	expiring, expiryRecorded := false, false
 	for {
+		if expiring && !expiryRecorded {
+			err := d.appendPermissionApprovalEvent(ctx, hold, events.ExecutionEventTypeApprovalExpired, "expired",
+				"Permission request expired", hold.terminalPayload("nobody answered before the request expired"))
+			if err == nil || errors.Is(err, store.ErrConflict) {
+				expiryRecorded = true
+			} else {
+				log.Error(err, "record expired permission request")
+			}
+		}
 		status, err := d.permissionApprovalStatus(ctx, hold)
 		if err != nil && ctx.Err() == nil {
 			log.Error(err, "read held permission request")
@@ -202,22 +214,12 @@ func (d *ACPDispatcher) runPermissionHold(ctx context.Context, send acpPermissio
 			d.answerPermissionHold(ctx, send, hold, status)
 			return
 		}
-		if expired {
-			// The expiry append failed for a reason other than a decision winning.
-			d.answerPermissionHold(ctx, send, hold, approvals.StatusExpired)
-			return
-		}
 		select {
 		case <-ctx.Done():
 			d.cancelPermissionHold(ctx, hold)
 			return
 		case <-deadline.C:
-			expired = true
-			err := d.appendPermissionApprovalEvent(ctx, hold, events.ExecutionEventTypeApprovalExpired, "expired",
-				"Permission request expired", hold.terminalPayload("nobody answered before the request expired"))
-			if err != nil && !errors.Is(err, store.ErrConflict) {
-				log.Error(err, "record expired permission request")
-			}
+			expiring = true
 		case <-ticker.C:
 		}
 	}

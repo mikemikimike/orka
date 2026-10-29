@@ -303,6 +303,73 @@ func TestPermissionHoldRecordsACancellationTheStoreRefusedAtFirst(t *testing.T) 
 	})
 }
 
+// refusingExpiryStore fails the first expiries it is asked to record.
+type refusingExpiryStore struct {
+	*storetest.FakeExecutionEventStore
+	mu      sync.Mutex
+	refuse  int
+	refused int
+}
+
+func (s *refusingExpiryStore) AppendExecutionEventIfAbsent(
+	ctx context.Context, event *store.ExecutionEvent, dedupeKey string,
+) (*store.ExecutionEvent, bool, error) {
+	s.mu.Lock()
+	if event.Type == events.ExecutionEventTypeApprovalExpired && s.refused < s.refuse {
+		s.refused++
+		s.mu.Unlock()
+		return nil, false, errors.New("the store refused the write")
+	}
+	s.mu.Unlock()
+	return s.FakeExecutionEventStore.AppendExecutionEventIfAbsent(ctx, event, dedupeKey)
+}
+
+// The runtime hears an expiry only once the store records it, so its answer
+// matches what the approvals API reports, also when a decision lands while
+// the store refuses the expiry.
+func TestPermissionHoldAnswersOnlyARecordedOutcome(t *testing.T) {
+	t.Run("expiry recorded late", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := newPermissionHoldFixture(t)
+			refusing := &refusingExpiryStore{FakeExecutionEventStore: f.events, refuse: 2}
+			f.dispatcher.EventStore = refusing
+			f.resolve(t, context.Background(), context.Background())
+			f.dispatcher.permissionHoldWG.Wait()
+			refusing.mu.Lock()
+			refused := refusing.refused
+			refusing.mu.Unlock()
+			if refused != 2 {
+				t.Fatalf("refused %d expiries, want 2", refused)
+			}
+			if got := f.answered(); len(got) != 1 || got[0] != optionDecision("reject-once") {
+				t.Fatalf("answers = %v, want one reject", got)
+			}
+			if status := f.approval(t).Status; status != approvals.StatusExpired {
+				t.Fatalf("approval status = %s, want expired", status)
+			}
+		})
+	})
+	t.Run("decision while the expiry is refused", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := newPermissionHoldFixture(t)
+			f.dispatcher.EventStore = &refusingExpiryStore{FakeExecutionEventStore: f.events, refuse: 1 << 20}
+			f.resolve(t, context.Background(), context.Background())
+			time.Sleep(5 * time.Minute)
+			synctest.Wait()
+			if got := f.answered(); len(got) != 0 {
+				t.Fatalf("answers = %v before any outcome was recorded", got)
+			}
+			if err := f.decide(t, f.approval(t).ID, events.ExecutionEventTypeApprovalApproved); err != nil {
+				t.Fatal(err)
+			}
+			f.dispatcher.permissionHoldWG.Wait()
+			if got := f.answered(); len(got) != 1 || got[0] != optionDecision("allow-once") {
+				t.Fatalf("answers = %v, want the approval", got)
+			}
+		})
+	})
+}
+
 func TestPermissionHoldDecisionThatWinsTheExpiryRaceIsHonoured(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newPermissionHoldFixture(t)
