@@ -127,6 +127,10 @@ type RepositoryScanReconciler struct {
 	ArtifactStore    store.ArtifactStore
 	ResultStore      store.ResultStore
 	PublicationStore store.PublicationStore
+	// ACPDispatchMaxConcurrentTasks is the controller's ACP dispatch
+	// capacity; it sizes each run's review Task window. Zero uses the
+	// default window.
+	ACPDispatchMaxConcurrentTasks int
 	// APIReader reads uncached Secrets and verifies RepositoryScan identity
 	// before run admission or cleanup; nil falls back to Client.
 	APIReader client.Reader
@@ -1112,7 +1116,7 @@ func (r *RepositoryScanReconciler) createReviewTasks(ctx context.Context, scan *
 		if err != nil {
 			return err
 		}
-		available := max(maxOutstandingReviewTasks-outstandingReviewTasks(existing.Items, run.ID), 0)
+		available := max(r.reviewTaskWindow()-outstandingReviewTasks(existing.Items, run.ID), 0)
 		reviewSlices = reviewSlices[:min(len(reviewSlices), available)]
 	}
 	for _, reviewSlice := range reviewSlices {
@@ -1342,7 +1346,7 @@ func (r *RepositoryScanReconciler) topUpReviewTasks(ctx context.Context, scan *c
 			return nil
 		}
 	}
-	if outstandingReviewTasks(tasks.Items, scanID) >= maxOutstandingReviewTasks {
+	if outstandingReviewTasks(tasks.Items, scanID) >= r.reviewTaskWindow() {
 		return nil
 	}
 	run, err := r.SecurityStore.GetScanRun(ctx, scan.Namespace, scanID)
@@ -1356,8 +1360,19 @@ func (r *RepositoryScanReconciler) topUpReviewTasks(ctx context.Context, scan *c
 	return err
 }
 
-// maxOutstandingReviewTasks bounds a run's queued and running review Tasks.
+// maxOutstandingReviewTasks bounds a run's queued and running review Tasks
+// at the default ACP dispatch capacity of 4.
 const maxOutstandingReviewTasks = 16
+
+// reviewTaskWindow bounds a run's queued and running review Tasks at four
+// per ACP dispatch place. Task deadlines include time spent waiting for a
+// runtime, so a low dispatch capacity gets a smaller window.
+func (r *RepositoryScanReconciler) reviewTaskWindow() int {
+	if r.ACPDispatchMaxConcurrentTasks <= 0 {
+		return maxOutstandingReviewTasks
+	}
+	return maxOutstandingReviewTasks / DefaultACPDispatchWorkers * r.ACPDispatchMaxConcurrentTasks
+}
 
 func outstandingReviewTasks(tasks []corev1alpha1.Task, runID string) int {
 	count := 0

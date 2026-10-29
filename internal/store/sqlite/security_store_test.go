@@ -1272,3 +1272,33 @@ func TestListFindingsFiltersByScanRun(t *testing.T) {
 		t.Fatalf("findings = %#v, want only the run's finding", got)
 	}
 }
+
+func TestUpsertFindingKeepsVerdictsOverValidationErrors(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestStore(t)
+	for _, prior := range []string{"failed", "skipped", "pending"} {
+		finding := &store.Finding{
+			ID: "fnd_" + prior, Namespace: "ns", RepositoryScan: "repo", ScanRunID: "run", Fingerprint: "fp_" + prior,
+			ValidationStatus: prior, ValidationJSON: `{"status":"` + prior + `"}`,
+		}
+		if err := s.UpsertFinding(ctx, finding); err != nil {
+			t.Fatalf("UpsertFinding(%s) error = %v", prior, err)
+		}
+		errored := *finding
+		errored.ValidationStatus, errored.ValidationJSON = "error", `{"status":"error"}`
+		if err := s.UpsertFinding(ctx, &errored); err != nil {
+			t.Fatalf("UpsertFinding(%s -> error) error = %v", prior, err)
+		}
+		got, err := s.GetFinding(ctx, "ns", finding.ID)
+		if err != nil {
+			t.Fatalf("GetFinding(%s) error = %v", prior, err)
+		}
+		want := prior
+		if prior == "pending" {
+			want = "error"
+		}
+		if got.ValidationStatus != want || got.ValidationJSON != `{"status":"`+want+`"}` {
+			t.Fatalf("%s then error = %q %s, want %q", prior, got.ValidationStatus, got.ValidationJSON, want)
+		}
+	}
+}

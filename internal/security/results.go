@@ -83,6 +83,46 @@ func MarshalReviewContext(manifest ReviewContextManifest) ([]byte, error) {
 	return json.Marshal(manifest)
 }
 
+// MaxReviewContextsBytes bounds the review contexts one mapper run
+// publishes together, below the worker's 50 MiB artifact upload limit.
+const MaxReviewContextsBytes = 40 << 20
+
+// MarshalReviewContexts encodes a mapper run's review contexts within
+// MaxReviewContextsBytes in total. While they do not fit, the longest
+// reference listing is halved, keeping its most relevant entries.
+func MarshalReviewContexts(manifests []ReviewContextManifest) ([][]byte, error) {
+	encoded := make([][]byte, len(manifests))
+	total := 0
+	for i := range manifests {
+		data, err := MarshalReviewContext(manifests[i])
+		if err != nil {
+			return nil, err
+		}
+		encoded[i] = data
+		total += len(data)
+	}
+	for total > MaxReviewContextsBytes {
+		longest := -1
+		for i := range manifests {
+			if len(manifests[i].ReferenceFiles) > 0 && (longest < 0 || len(manifests[i].ReferenceFiles) > len(manifests[longest].ReferenceFiles)) {
+				longest = i
+			}
+		}
+		if longest < 0 {
+			break
+		}
+		references := manifests[longest].ReferenceFiles
+		manifests[longest].ReferenceFiles = references[:len(references)/2]
+		data, err := MarshalReviewContext(manifests[longest])
+		if err != nil {
+			return nil, err
+		}
+		total += len(data) - len(encoded[longest])
+		encoded[longest] = data
+	}
+	return encoded, nil
+}
+
 // ParseTrustedReviewContextManifest validates the mapper-owned context used as
 // an evidence boundary for a review Task.
 func ParseTrustedReviewContextManifest(data []byte) (*ReviewContextManifest, string, error) {

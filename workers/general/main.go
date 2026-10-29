@@ -342,6 +342,7 @@ func runSecurityMapper(ctx context.Context) error {
 	if headCommit == "" {
 		headCommit = resolvedHeadCommit
 	}
+	manifests := make([]security.ReviewContextManifest, 0, len(slices))
 	for i := range slices {
 		contextSlice := slices[i]
 		contextSlice.ChangedFiles = append([]string(nil), changedFiles...)
@@ -351,11 +352,14 @@ func runSecurityMapper(ctx context.Context) error {
 			return fmt.Errorf("build security review context for %s: %w", contextSlice.ID, err)
 		}
 		manifest.ReferenceFiles = references[contextSlice.ID]
-		manifestData, err := security.MarshalReviewContext(manifest)
-		if err != nil {
-			return fmt.Errorf("marshal security review context for %s: %w", contextSlice.ID, err)
-		}
-		if err := common.WriteArtifactFile(security.ReviewContextArtifactName(contextSlice.ID), manifestData); err != nil {
+		manifests = append(manifests, manifest)
+	}
+	encoded, err := security.MarshalReviewContexts(manifests)
+	if err != nil {
+		return fmt.Errorf("marshal security review contexts: %w", err)
+	}
+	for i := range slices {
+		if err := common.WriteArtifactFile(security.ReviewContextArtifactName(slices[i].ID), encoded[i]); err != nil {
 			return err
 		}
 	}

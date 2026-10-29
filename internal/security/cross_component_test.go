@@ -299,3 +299,31 @@ func TestFindingsV2ScanAcceptsASingleResolvedQuestion(t *testing.T) {
 		}
 	}
 }
+
+func TestMarshalReviewContextsKeepsTheRunWithinTheUploadBound(t *testing.T) {
+	long := strings.Repeat("d/", 100)
+	manifests := make([]ReviewContextManifest, 50)
+	for i := range manifests {
+		manifests[i] = ReviewContextManifest{SchemaVersion: SchemaVersionReviewContext, SliceID: fmt.Sprintf("slice_%02d", i)}
+		for j := range 4000 {
+			manifests[i].ReferenceFiles = append(manifests[i].ReferenceFiles, ReviewContextReferenceFile{
+				Path: fmt.Sprintf("%sfile%04d.go", long, j), Lines: 10, Relation: ReferenceRelationRepository,
+			})
+		}
+	}
+	encoded, err := MarshalReviewContexts(manifests)
+	if err != nil {
+		t.Fatalf("MarshalReviewContexts() error = %v", err)
+	}
+	total := 0
+	for i, data := range encoded {
+		total += len(data)
+		var got ReviewContextManifest
+		if err := json.Unmarshal(data, &got); err != nil || got.SliceID != manifests[i].SliceID || len(got.ReferenceFiles) == 0 {
+			t.Fatalf("context %d = %d references (%v), want its own trimmed listing", i, len(got.ReferenceFiles), err)
+		}
+	}
+	if total > MaxReviewContextsBytes {
+		t.Fatalf("contexts total %d bytes, want at most %d", total, MaxReviewContextsBytes)
+	}
+}

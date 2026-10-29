@@ -7639,3 +7639,12 @@ func TestUnreviewableFirstBatchKeepsRunForPendingSlices(t *testing.T) {
 		t.Fatalf("run = %s %q, want it running for the pending slice", run.Phase, run.Summary)
 	}
 }
+
+func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
+	for capacity, want := range map[int]int{0: maxOutstandingReviewTasks, 1: 4, 4: 16, 8: 32} {
+		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: capacity}
+		if got := reconciler.reviewTaskWindow(); got != want {
+			t.Fatalf("reviewTaskWindow(capacity %d) = %d, want %d", capacity, got, want)
+		}
+	}
+}
