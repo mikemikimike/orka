@@ -170,6 +170,9 @@ func (c *conn) createResourceWatch(ctx context.Context, raw json.RawMessage) (an
 		if errors.Is(err, ErrResourceNotFound) {
 			return nil, notFound
 		}
+		if rejection, ok := errors.AsType[*Rejection](err); ok {
+			return nil, rpcErr(ahptypes.ErrorCodeInvalidParams, "%s", rejection.Reason)
+		}
 		return nil, fmt.Errorf("start the resource watch: %w", err)
 	}
 	return ahptypes.CreateResourceWatchResult{Channel: channel}, nil

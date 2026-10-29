@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -117,26 +118,35 @@ func (w *ahpWorkspaces) stamps(ctx context.Context, pod *corev1.Pod, root string
 		depth = "64"
 	}
 	raw, err := w.output(ctx, pod, 4<<20, ahpShell, "-c",
-		ahpInWorkspace+`[ -e "$p" ] || exit 3; find "$1" -maxdepth "$2" -name .git -prune -o -type f -print | head -n "$3" | while IFS= read -r f; do stat -c '%Y %s %n' -- "$f"; done`,
+		ahpInWorkspace+`[ -e "$p" ] || exit 3; find "$1" -maxdepth "$2" -name .git -prune -o -type f -print | head -n "$3" | while IFS= read -r f; do stat -c '%s/%y/%n' -- "$f"; done`,
 		"sh", root, depth, strconv.Itoa(ahpWatchFilesMax))
 	if err != nil {
 		return nil, err
 	}
+	return ahpParseStamps(raw), nil
+}
+
+// ahpParseStamps reads stat's "size/mtime/name" lines into each file's stamp.
+// The modification time is stat's %y, with fractional seconds where the
+// filesystem keeps them, so a file rewritten at the same size within a
+// second still changes its stamp. Neither the size nor the time holds a
+// slash, and the name, last, keeps its own.
+func ahpParseStamps(raw []byte) map[string]string {
 	stamps := map[string]string{}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 64<<10), 64<<10)
 	for scanner.Scan() {
-		mtime, rest, ok := strings.Cut(scanner.Text(), " ")
+		size, rest, ok := strings.Cut(scanner.Text(), "/")
 		if !ok {
 			continue
 		}
-		size, name, ok := strings.Cut(rest, " ")
-		if !ok {
+		mtime, name, ok := strings.Cut(rest, "/")
+		if !ok || name == "" {
 			continue
 		}
-		stamps[name] = mtime + " " + size
+		stamps[name] = size + " " + mtime
 	}
-	return stamps, nil
+	return stamps
 }
 
 // ahpLimitedBuffer keeps at most limit bytes and notes when more arrived.
@@ -214,6 +224,11 @@ func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Princ
 		return ahphost.ErrResourceNotFound
 	}
 	includes, excludes := ahpWatchPatterns(params.Includes), ahpWatchPatterns(params.Excludes)
+	// Every poll matches each file against every pattern, so they are bounded.
+	patterns := slices.Concat(includes, excludes)
+	if len(patterns) > ahpWatchPatternsMax || slices.ContainsFunc(patterns, func(p string) bool { return len(p) > ahpWatchPatternMax }) {
+		return &ahphost.Rejection{Reason: fmt.Sprintf("a watch takes at most %d patterns of up to %d bytes", ahpWatchPatternsMax, ahpWatchPatternMax)}
+	}
 	recursive := params.Recursive != nil && *params.Recursive
 	matches := func(file string) bool {
 		rel := strings.TrimPrefix(strings.TrimPrefix(file, root), "/")
@@ -274,6 +289,13 @@ func (b *ahpBackend) WatchResources(ctx context.Context, principal ahphost.Princ
 		}
 	}
 }
+
+// ahpWatchPatternsMax and ahpWatchPatternMax bound a watch's include and
+// exclude patterns: their number and each one's length in bytes.
+const (
+	ahpWatchPatternsMax = 64
+	ahpWatchPatternMax  = 256
+)
 
 // ahpWatchPatterns reads a watch's { items } pattern list.
 func ahpWatchPatterns(raw *json.RawMessage) []string {

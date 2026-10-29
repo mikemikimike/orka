@@ -8,6 +8,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -439,6 +441,37 @@ func TestAHPTerminalNameIsBoundedAsTitlesAre(t *testing.T) {
 	require.ErrorAs(t, err, &rejection)
 	require.Contains(t, rejection.Reason, "too long")
 	require.Nil(t, env.backend.terminal(alice.UserKey, "ahp-terminal:/a"))
+}
+
+// A watch's include and exclude patterns are bounded in number and length:
+// every poll matches each file against every one.
+func TestAHPWatchPatternsAreBounded(t *testing.T) {
+	env := newAHPTestEnv(t)
+	unreachable := &rest.Config{Host: "http://127.0.0.1:1"}
+	clientset, err := kubernetes.NewForConfig(unreachable)
+	require.NoError(t, err)
+	env.backend.workspaces = &ahpWorkspaces{b: env.backend, clientset: clientset, rest: unreachable, namespace: "orka-ahp-workspaces",
+		image: "example.com/git@sha256:" + ahpHash("x")}
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	items := func(patterns ...string) *json.RawMessage {
+		raw, err := json.Marshal(map[string][]string{"items": patterns})
+		require.NoError(t, err)
+		message := json.RawMessage(raw)
+		return &message
+	}
+	many := make([]string, ahpWatchPatternsMax+1)
+	for i := range many {
+		many[i] = fmt.Sprint("dir", i)
+	}
+	for name, params := range map[string]ahptypes.CreateResourceWatchParams{
+		"too many includes": {Uri: "file:///workspace", Includes: items(many...)},
+		"too many in all":   {Uri: "file:///workspace", Includes: items(many[:40]...), Excludes: items(many[40:]...)},
+		"too long":          {Uri: "file:///workspace", Excludes: items(strings.Repeat("x", ahpWatchPatternMax+1))},
+	} {
+		err := env.backend.WatchResources(context.Background(), alice, params, func([]ahptypes.ResourceChange) error { return nil })
+		var rejection *ahphost.Rejection
+		require.ErrorAs(t, err, &rejection, name)
+	}
 }
 
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {

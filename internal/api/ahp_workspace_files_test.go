@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-host-protocol/clients/go/ahptypes"
 	"github.com/stretchr/testify/require"
@@ -118,4 +120,44 @@ func TestAHPSelectBlobsBoundsTheTotalRead(t *testing.T) {
 	require.Contains(t, large, "huge")
 	require.NotContains(t, append(small, large...), "missing", "an object that is not a blob has no entry")
 	require.Len(t, large, len(objects)-1-len(small))
+}
+
+// Watch stamps keep stat's sub-second modification time, so a file rewritten
+// at the same size within a second still changes; names keep their spaces
+// and slashes.
+func TestAHPParseStamps(t *testing.T) {
+	raw := strings.Join([]string{
+		"12/2026-10-28 12:00:00.123456789 +0000//workspace/src/a b.go",
+		"12/2026-10-28 12:00:00.987654321 +0000//workspace/src/c.go",
+		"7/2026-10-28 12:00:01.000000000 +0000//workspace/src/d.go",
+		"malformed",
+		"3/no-name/",
+	}, "\n")
+	require.Equal(t, map[string]string{
+		"/workspace/src/a b.go": "12 2026-10-28 12:00:00.123456789 +0000",
+		"/workspace/src/c.go":   "12 2026-10-28 12:00:00.987654321 +0000",
+		"/workspace/src/d.go":   "7 2026-10-28 12:00:01.000000000 +0000",
+	}, ahpParseStamps([]byte(raw)))
+}
+
+// Where stat takes -c, as in workspace images, a same-size rewrite within one
+// second changes the file's stamp.
+func TestAHPStampsSeeASameSecondRewrite(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "a b.txt")
+	stamp := func() string {
+		out, err := exec.Command("stat", "-c", "%s/%y/%n", "--", file).Output()
+		if err != nil {
+			t.Skip("stat does not take -c here")
+		}
+		stamps := ahpParseStamps(out)
+		require.Contains(t, stamps, file)
+		return stamps[file]
+	}
+	require.NoError(t, os.WriteFile(file, []byte("one"), 0o600))
+	second := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(file, second, second.Add(100*time.Millisecond)))
+	first := stamp()
+	require.NoError(t, os.WriteFile(file, []byte("two"), 0o600))
+	require.NoError(t, os.Chtimes(file, second, second.Add(500*time.Millisecond)))
+	require.NotEqual(t, first, stamp())
 }

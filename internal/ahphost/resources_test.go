@@ -37,6 +37,9 @@ func (b *resourceBackend) ListResource(_ context.Context, _ Principal, uri strin
 }
 
 func (b *resourceBackend) WatchResources(ctx context.Context, _ Principal, params ahptypes.CreateResourceWatchParams, changed func([]ahptypes.ResourceChange) error) error {
+	if params.Uri == "file:///refused" {
+		return &Rejection{Reason: "too many patterns"}
+	}
 	if params.Uri != "file:///work" {
 		return ErrResourceNotFound
 	}
@@ -294,6 +297,27 @@ func TestAWatchChannelLeftBehindIsSweptLater(t *testing.T) {
 	require.NoError(t, err)
 	_, err = env.store.GetAHPChannelState(ctx, userKey, opened.Channel)
 	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// A watch its backend refuses is refused with the backend's reason, as
+// invalid parameters, and leaves no channel.
+func TestARefusedWatchReportsItsReason(t *testing.T) {
+	env, extended := newExtendedEnv(t)
+	backend := &resourceBackend{extendedBackend: extended, released: make(chan struct{})}
+	env.host.cfg.Backends.mu.Lock()
+	env.host.cfg.Backends.backends = []SessionBackend{backend}
+	env.host.cfg.Backends.mu.Unlock()
+	minted := env.mint("alice")
+	userKey := ahpUserKey(t, env, minted.Token)
+	ctx := ctx5(t)
+	client := env.connect(minted.Token)
+	_, err := client.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	err = client.Request(ctx, "createResourceWatch", ahptypes.CreateResourceWatchParams{Channel: rootChannel, Uri: "file:///refused"}, nil)
+	require.ErrorContains(t, err, "too many patterns")
+	channels, err := env.store.ListAHPChannels(ctx, userKey, resourceWatchScheme)
+	require.NoError(t, err)
+	require.Empty(t, channels)
 }
 
 func TestIdleConnectionsArePinged(t *testing.T) {
