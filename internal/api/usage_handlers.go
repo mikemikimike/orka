@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -282,18 +283,91 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 	}
 	// The controller registers Tasks before dispatch. An observation with no
 	// retained Task identity has no verifiable access boundary yet.
+	placeholders := map[string]int{}
 	for _, observation := range data.Observations {
 		key := observation.Namespace + "/" + observation.TaskUID
 		if observation.TaskUID != "" && !known[key] {
 			data.HiddenTasks[key] = true
 		}
+		_, ahp := ahpSessionName(observation.SessionName)
+		if !ahp || !ahpPerson(ui) {
+			continue
+		}
 		// Usage with no Task, such as a chat's in an AHP session, names no
 		// requester, so it is no person's.
-		if _, ahp := ahpSessionName(observation.SessionName); observation.TaskUID == "" && ahp && ahpPerson(ui) {
+		if observation.TaskUID == "" {
 			data.HiddenTasks[usage.ObservationTaskKey(observation)] = true
+		}
+		// Neither such usage nor one whose Task's row is gone, as retention
+		// may leave it, tells how much it used of its session's counter: it
+		// joins the report as a hidden row of the session, so the session's
+		// counters credit nothing to a person's turns.
+		taskKey := usage.ObservationTaskKey(observation)
+		if i, added := placeholders[taskKey]; added {
+			data.Tasks[i].StartedAt = minTime(data.Tasks[i].StartedAt, observation.ObservedAt)
+		} else if !known[taskKey] {
+			placeholders[taskKey] = len(data.Tasks)
+			data.Tasks = append(data.Tasks, store.UsageTask{Namespace: observation.Namespace, NamespaceUID: observation.NamespaceUID,
+				TaskUID: strings.TrimPrefix(taskKey, observation.Namespace+"/"), TaskName: observation.TaskName,
+				SessionName: observation.SessionName, StartedAt: observation.ObservedAt})
+		}
+	}
+	if ahpPerson(ui) {
+		if err := h.addHiddenAHPSessionTasks(c, ui, data); err != nil {
+			return err
 		}
 	}
 	data.Works = slices.DeleteFunc(data.Works, func(work store.UsageWorkRequest) bool { return hiddenWorks[work.ID] })
+	return nil
+}
+
+// addHiddenAHPSessionTasks adds, hidden, the rows of Tasks in the report's AHP
+// sessions that the report did not select and the person may not see, such
+// as an operator's turn from before the report's period. A session's usage
+// counter spans its turns, so the report then credits nothing on it to a
+// visible Task: a gain on it may be such a Task's.
+func (h *Handlers) addHiddenAHPSessionTasks(c fiber.Ctx, ui *UserInfo, data *store.UsageData) error {
+	backend, ok := h.executionEventStore.(store.UsageStore)
+	if !ok {
+		return nil
+	}
+	sessions := map[string]map[string]bool{}
+	note := func(namespace, name string) {
+		if session, ahp := ahpSessionName(name); ahp {
+			if sessions[namespace] == nil {
+				sessions[namespace] = map[string]bool{}
+			}
+			sessions[namespace][session] = true
+		}
+	}
+	known := map[string]bool{}
+	for _, task := range data.Tasks {
+		known[task.Namespace+"/"+task.TaskUID] = true
+		note(task.Namespace, task.SessionName)
+	}
+	for _, observation := range data.Observations {
+		if observation.Scope == store.UsageScopeSession {
+			note(observation.Namespace, observation.SessionName)
+		}
+	}
+	for namespace, names := range sessions {
+		rows, err := backend.UsageTasksInSessions(c.Context(), namespace, slices.Sorted(maps.Keys(names)), usageMaxRecords)
+		if errors.Is(err, store.ErrUsageSelectionTooLarge) {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "usage selection exceeds 20000 retained records; narrow the date, team, repository, model, or asOf filters")
+		}
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to load usage report")
+		}
+		for _, row := range rows {
+			key := row.Namespace + "/" + row.TaskUID
+			if known[key] || !ahpUsageHidden(ui, row.Requester) {
+				continue
+			}
+			known[key] = true
+			data.Tasks = append(data.Tasks, row)
+			data.HiddenTasks[key] = true
+		}
+	}
 	return nil
 }
 
@@ -321,4 +395,11 @@ func usageDate(raw string, fallback time.Time) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fiber.NewError(fiber.StatusBadRequest, "report dates must be YYYY-MM-DD or RFC3339 timestamps")
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }

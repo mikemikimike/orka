@@ -494,3 +494,107 @@ func TestAHPUsageLooksUpNoSessionOwners(t *testing.T) {
 	require.Equal(t, map[string]bool{"default/one": true, "default/two": true, "default/call-chat": true}, data.HiddenTasks)
 	require.Zero(t, lists.Load())
 }
+
+// A turn of an AHP session from outside the report's period, such as an
+// operator's from before it, may have used the session's counter too: the
+// report credits nothing on that counter to the person's turns.
+func TestAHPUsageCountsHiddenTurnsOutsideTheReport(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.NewDB(":memory:")
+	require.NoError(t, err)
+	ss := sqlite.NewStore(db, ":memory:")
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	alice := &store.UsageRequester{Issuer: "https://issuer.example", Subject: "alice"}
+	for _, task := range []store.UsageTask{
+		{Namespace: "default", TaskUID: "operator", TaskName: "operator", SessionName: " ahp-alice\t", Phase: "Succeeded", StartedAt: start.Add(-48 * time.Hour)},
+		// Padded with space SQL's TRIM does not know.
+		{Namespace: "default", TaskUID: "operator-2", TaskName: "operator-2", SessionName: "\u00a0ahp-alice\u2003", Phase: "Succeeded",
+			StartedAt: start.Add(-47 * time.Hour)},
+		// Holding the name without being it.
+		{Namespace: "default", TaskUID: "other", TaskName: "other", SessionName: "ahp-alice-2", Phase: "Succeeded", StartedAt: start.Add(-46 * time.Hour)},
+		{Namespace: "default", TaskUID: "alice", TaskName: "alice", SessionName: "ahp-alice", Phase: "Succeeded", StartedAt: start, Requester: alice},
+		{Namespace: "default", TaskUID: "elsewhere", TaskName: "elsewhere", SessionName: "ahp-elsewhere", Phase: "Succeeded", StartedAt: start.Add(-48 * time.Hour)},
+	} {
+		require.NoError(t, ss.RegisterUsageTask(ctx, task))
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	handlers := NewHandlers(HandlersConfig{Client: fake.NewClientBuilder().WithScheme(scheme).Build(), ExecutionEventStore: ss})
+	tokens := int64(250)
+	data := store.UsageData{
+		Tasks: []store.UsageTask{{Namespace: "default", TaskUID: "alice", TaskName: "alice", SessionName: "ahp-alice", Phase: "Succeeded",
+			StartedAt: start, Requester: alice}},
+		Observations: []store.UsageObservation{{ID: "alice", Namespace: "default", TaskUID: "alice", SessionName: "ahp-alice", CounterID: "session",
+			Scope: store.UsageScopeSession, Source: store.UsageSourceAgent, Status: store.UsageStatusCompleted, InputTokens: &tokens,
+			ObservedAt: start.Add(time.Minute)}},
+	}
+	app := fiber.New()
+	app.Get("/", func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"})
+		return handlers.filterUsageTaskAccess(c, &data, start.Add(time.Hour))
+	})
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, map[string]bool{"default/operator": true, "default/operator-2": true}, data.HiddenTasks,
+		"the earlier turns join the report, hidden")
+	filter := store.UsageFilter{Namespaces: []string{"default"}, From: start.Add(-time.Hour), Until: start.Add(time.Hour), AsOf: start.Add(time.Hour)}
+	report, err := usage.Build(data, filter)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(report)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), `"inputTokens":250`)
+	require.NotContains(t, string(encoded), "operator")
+}
+
+// A hidden reporter whose Task's row retention pruned, or which reported no
+// counts, cannot show how much of its session's counter it used: a person's
+// turns are credited nothing on that counter. A ServiceAccount, which sees
+// all AHP usage, keeps the counter's gains attributed.
+func TestAHPUsageCounterWithRowlessHiddenUsage(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	handlers := NewHandlers(HandlersConfig{Client: fake.NewClientBuilder().WithScheme(scheme).Build()})
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	alice := &store.UsageRequester{Issuer: "https://issuer.example", Subject: "alice"}
+	count := func(n int64) *int64 { return &n }
+	build := func(caller *UserInfo) string {
+		t.Helper()
+		turn := func(uid string, at time.Time) store.UsageTask {
+			return store.UsageTask{Namespace: "default", TaskUID: uid, TaskName: uid, SessionName: "ahp-alice", Phase: "Succeeded",
+				StartedAt: at, Requester: alice}
+		}
+		report := func(id, uid string, input *int64, at time.Duration) store.UsageObservation {
+			return store.UsageObservation{ID: id, Namespace: "default", TaskUID: uid, SessionName: "ahp-alice", CounterID: "session",
+				Scope: store.UsageScopeSession, Source: store.UsageSourceAgent, Status: store.UsageStatusCompleted, InputTokens: input,
+				ObservedAt: start.Add(at)}
+		}
+		data := store.UsageData{
+			Tasks: []store.UsageTask{turn("first", start), turn("second", start.Add(2*time.Minute))},
+			// The pruned turn ran between Alice's, and reported no counts.
+			Observations: []store.UsageObservation{report("a", "first", count(100), time.Minute),
+				report("b", "pruned", nil, 90*time.Second), report("c", "second", count(250), 3*time.Minute)},
+		}
+		app := fiber.New()
+		app.Get("/", func(c fiber.Ctx) error {
+			c.Locals(UserInfoContextKey, caller)
+			return handlers.filterUsageTaskAccess(c, &data, start.Add(time.Hour))
+		})
+		response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+		require.NoError(t, err)
+		require.NoError(t, response.Body.Close())
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		built, err := usage.Build(data, store.UsageFilter{Namespaces: []string{"default"}, From: start.Add(-time.Hour), Until: start.Add(time.Hour),
+			AsOf: start.Add(time.Hour)})
+		require.NoError(t, err)
+		encoded, err := json.Marshal(built)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	person := build(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"})
+	require.NotContains(t, person, `"inputTokens":150`, "the pruned turn's usage reaches no turn of Alice's")
+	require.NotContains(t, person, "pruned")
+	operator := build(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"})
+	require.Contains(t, operator, `"inputTokens":150`, "a ServiceAccount's report keeps the gain attributed")
+}

@@ -204,6 +204,10 @@ func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
 			{"first", store.UsageStatusCompleted, count(500)}}},
 		{name: "hidden turn in another session", hiddenSession: "elsewhere", visible: 250, reports: append(slices.Clone(first),
 			report{"second", store.UsageStatusCompleted, count(250)})},
+		// Retention pruned the reporter's row but kept its usage: its own
+		// usage stays hidden, and the later turn's gain is the later turn's.
+		{name: "pruned reporter", hiddenSession: "elsewhere", visible: 150, reports: []report{
+			{"pruned", store.UsageStatusCompleted, count(100)}, {"second", store.UsageStatusCompleted, count(250)}}},
 		{name: "no hidden turn keeps the baseline", hiddenSession: "elsewhere", visible: 600, reports: []report{
 			{"first", store.UsageStatusCompleted, count(500)}, {"second", store.UsageStatusCompleted, count(600)}}},
 	} {
@@ -215,7 +219,7 @@ func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
 					StartedAt: filter.From},
 				{Namespace: "team", TaskUID: "second", TaskName: "second", WorkID: "work", Phase: "Succeeded", SessionName: "shared", StartedAt: filter.From},
 			}
-			data.HiddenTasks = map[string]bool{"team/hidden": true}
+			data.HiddenTasks = map[string]bool{"team/hidden": true, "team/pruned": true}
 			for i, r := range tc.reports {
 				data.Observations = append(data.Observations, store.UsageObservation{Namespace: "team", TaskUID: r.task, ID: fmt.Sprint("report-", i),
 					SessionName: "shared", CounterID: "shared", Scope: store.UsageScopeSession, Source: store.UsageSourceAgent, Status: r.status,
@@ -237,13 +241,15 @@ func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
 					if task.TaskUID != "first" || len(task.Measurements) == 0 {
 						continue
 					}
-					last := tc.reports[0].status
+					last := ""
 					for _, r := range tc.reports {
 						if r.task == "first" {
 							last = r.status
 						}
 					}
-					require.Equal(t, last, task.Measurements[0].Status)
+					if last != "" {
+						require.Equal(t, last, task.Measurements[0].Status)
+					}
 				}
 			}
 		})
