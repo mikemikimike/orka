@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,6 +311,7 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "live view is not enabled")
 	}
 	if length := c.Request().Header.ContentLength(); length > maxLiveViewFrameBytes {
+		c.RequestCtx().SetConnectionClose()
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
 	// The token is checked on every request; only the proof that its Pod is
@@ -332,11 +334,23 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 	if contentType := string(c.Request().Header.ContentType()); contentType != liveViewContentType {
 		return fiber.NewError(fiber.StatusUnsupportedMediaType, "a live view frame must be "+liveViewContentType)
 	}
-	data := c.Body()
+	// The server streams request bodies, so the server-wide body limit does
+	// not apply to a chunked upload: read at most one byte past the limit.
+	var data []byte
+	if stream := c.Request().BodyStream(); stream != nil {
+		var err error
+		if data, err = io.ReadAll(io.LimitReader(stream, maxLiveViewFrameBytes+1)); err != nil {
+			c.RequestCtx().SetConnectionClose()
+			return fiber.NewError(fiber.StatusBadRequest, "failed to read the live view frame")
+		}
+	} else {
+		data = c.BodyRaw()
+	}
 	if len(data) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "empty request body")
 	}
 	if len(data) > maxLiveViewFrameBytes {
+		c.RequestCtx().SetConnectionClose()
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
 	h.liveViewFrames.put(namespace, task.Name, task.UID, data)

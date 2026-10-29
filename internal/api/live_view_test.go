@@ -38,6 +38,9 @@ type liveViewFixture struct {
 	frames *LiveViewFrames
 	client client.Client
 	reads  *countingReader
+	// body, when set, replaces a frame post's body with a stream of length
+	// bytes; -1 sends it chunked.
+	body func(c fiber.Ctx)
 }
 
 // countingReader counts the reads the worker proof makes.
@@ -77,17 +80,21 @@ func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
 		Client: k8sClient, APIReader: reads, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage,
 	})
 	public := NewHandlers(HandlersConfig{Client: k8sClient, APIReader: k8sClient, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage})
-	app := fiber.New()
+	f := &liveViewFixture{frames: frames, client: k8sClient, reads: reads}
+	f.app = fiber.New()
 	// X-Test-Pod names the worker Pod a frame post comes from.
-	app.Use(func(c fiber.Ctx) error {
+	f.app.Use(func(c fiber.Ctx) error {
 		if pod := c.Get("X-Test-Pod"); pod != "" {
 			c.Locals(UserInfoContextKey, internalCallerAuthWorkerUser(pod, pod+"-uid"))
 		}
+		if f.body != nil {
+			f.body(c)
+		}
 		return c.Next()
 	})
-	app.Post("/internal/v1/live/:namespace/:taskName", internal.SubmitLiveViewFrame)
-	app.Get("/api/v1/tasks/:id/live", public.GetTaskLiveView)
-	return &liveViewFixture{app: app, frames: frames, client: k8sClient, reads: reads}
+	f.app.Post("/internal/v1/live/:namespace/:taskName", internal.SubmitLiveViewFrame)
+	f.app.Get("/api/v1/tasks/:id/live", public.GetTaskLiveView)
+	return f
 }
 
 func (f *liveViewFixture) post(t *testing.T, task, pod, contentType string, body []byte) *http.Response {
@@ -241,6 +248,54 @@ func TestLiveViewFrameUploadsAreBounded(t *testing.T) {
 		require.Equal(t, maxLiveViewFrameBytes, config.MaxRequestBodySize, target)
 		require.Equal(t, liveViewReadTimeout, config.ReadTimeout, target)
 	}
+}
+
+// The server streams request bodies, and fasthttp's body limit does not cover
+// a streamed chunked body, so the handler bounds its own read.
+func TestLiveViewBoundsAStreamedFrame(t *testing.T) {
+	for _, chunked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("chunked=%t", chunked), func(t *testing.T) {
+			f := newLiveViewFixture(t, true)
+			stream := &liveViewCountingStream{Reader: bytes.NewReader(bytes.Repeat([]byte("x"), 4*maxLiveViewFrameBytes))}
+			f.body = func(c fiber.Ctx) {
+				length := 4 * maxLiveViewFrameBytes
+				if chunked {
+					length = -1
+				}
+				c.Request().SetBodyStream(stream, length)
+			}
+			resp := f.post(t, "shop", "shop-pod", "image/jpeg", nil)
+			require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+			if chunked {
+				require.Equal(t, maxLiveViewFrameBytes+1, stream.read, "the handler read past the frame limit")
+			} else {
+				require.Zero(t, stream.read, "a declared oversized frame was read")
+			}
+			require.Equal(t, http.StatusNoContent, f.get(t, "shop").StatusCode, "an oversized frame was stored")
+		})
+	}
+
+	f := newLiveViewFixture(t, true)
+	stream := &liveViewCountingStream{Reader: bytes.NewReader([]byte("chunked-frame"))}
+	f.body = func(c fiber.Ctx) { c.Request().SetBodyStream(stream, -1) }
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", nil).StatusCode)
+	f.body = nil
+	resp := f.get(t, "shop")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "chunked-frame", string(body))
+}
+
+type liveViewCountingStream struct {
+	io.Reader
+	read int
+}
+
+func (s *liveViewCountingStream) Read(p []byte) (int, error) {
+	n, err := s.Reader.Read(p)
+	s.read += n
+	return n, err
 }
 
 func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
