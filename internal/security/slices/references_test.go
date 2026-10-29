@@ -151,3 +151,38 @@ func TestGoImportGraphParsesOnlyIndexedFiles(t *testing.T) {
 		t.Fatalf("imports(a) = %v, want none for an unindexed file", got)
 	}
 }
+
+// Large packages are split into bounded parts; no file is left unreviewed.
+func TestMapRepositoryCoversEveryFileOfLargePackages(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "backend/package.json", `{"name":"backend"}`)
+	var want []string
+	for i := range 2*maxReviewSliceOwnedFiles + 5 {
+		path := "backend/src/services/s" + strconv.Itoa(100+i) + ".ts"
+		writeFile(t, root, path, "export const x = 1\n")
+		want = append(want, path)
+	}
+	for i := range maxReviewSliceOwnedFiles + 3 {
+		path := "tools/t" + strconv.Itoa(100+i) + ".sh"
+		writeFile(t, root, path, "echo hi\n")
+		want = append(want, path)
+	}
+	slices, err := MapRepository(root, MapperOptions{RepositoryScan: "repo"})
+	if err != nil {
+		t.Fatalf("MapRepository() error = %v", err)
+	}
+	owned := map[string]struct{}{}
+	for _, slice := range slices {
+		if len(slice.OwnedFiles) > maxReviewSliceOwnedFiles {
+			t.Fatalf("slice %q owns %d files, want at most %d", slice.Title, len(slice.OwnedFiles), maxReviewSliceOwnedFiles)
+		}
+		for _, file := range slice.OwnedFiles {
+			owned[file.Path] = struct{}{}
+		}
+	}
+	for _, path := range want {
+		if _, ok := owned[path]; !ok {
+			t.Fatalf("%s is not owned by any slice", path)
+		}
+	}
+}

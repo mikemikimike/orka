@@ -485,9 +485,6 @@ func nodeFilesForDir(dir string, files []repoFile) []repoFile {
 			out = append(out, file)
 		}
 	}
-	if len(out) > 24 {
-		out = out[:24]
-	}
 	return out
 }
 
@@ -652,9 +649,6 @@ func addGenericFallbackSlices(builder *sliceBuilder, files []repoFile) {
 	for top, topFiles := range byTop {
 		if len(topFiles) == 0 {
 			continue
-		}
-		if len(topFiles) > 24 {
-			topFiles = topFiles[:24]
 		}
 		owned := make([]store.ReviewSliceFile, 0, len(topFiles))
 		for _, file := range topFiles {
