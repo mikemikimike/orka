@@ -98,6 +98,13 @@ controller:
     claudeImage: ghcr.io/orka-agents/orka/acp-claude-runtime:0.0.0-dev
     copilotImage: ghcr.io/orka-agents/orka/acp-copilot-runtime:0.0.0-dev
     opencodeImage: ghcr.io/orka-agents/orka/acp-opencode-runtime:0.0.0-dev
+    # Concurrency of each new built-in runtime RuntimePool. Raise
+    # maxRunningPrompts to run more Tasks for the same Agent at once, such as
+    # repository scan review slices. maxRunningPrompts cannot exceed
+    # maxResidentSessions; both accept 1-1000.
+    pool:
+      maxRunningPrompts: 4
+      maxResidentSessions: 10
     # Planned controller upgrades use a same-binary preStop child to call a
     # loopback-only coordinator. Keep terminationGracePeriodSeconds greater
     # than timeout and triggerTimeout so SIGTERM shutdown still has headroom.

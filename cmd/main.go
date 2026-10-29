@@ -301,6 +301,7 @@ func main() {
 	var acpRuntimeNamespace string
 	var acpProviderProxyNamespace string
 	var acpProviderProxyBaseURL string
+	var acpRuntimePoolMaxRunningPrompts, acpRuntimePoolMaxResidentSessions int
 	var acpProviderProxyPodLabels string
 	var acpProviderProxyTokenFile string
 	var acpE2EPromptWriteAmbiguityMarker string
@@ -545,6 +546,10 @@ func main() {
 		"Namespace containing the approved credential-injecting provider proxy.")
 	flag.StringVar(&acpProviderProxyBaseURL, "acp-provider-proxy-base-url", os.Getenv("ORKA_ACP_PROVIDER_PROXY_BASE_URL"),
 		"Cluster-local base URL of the authenticated provider proxy boundary.")
+	flag.IntVar(&acpRuntimePoolMaxRunningPrompts, "acp-runtime-pool-max-running-prompts", int(corev1alpha1.DefaultRuntimePoolMaxRunningPrompts),
+		"Concurrent prompts each new built-in runtime RuntimePool runs (1-1000, at most --acp-runtime-pool-max-resident-sessions).")
+	flag.IntVar(&acpRuntimePoolMaxResidentSessions, "acp-runtime-pool-max-resident-sessions", int(corev1alpha1.DefaultRuntimePoolMaxResidentSessions),
+		"Resident RuntimeSessions each new built-in runtime RuntimePool keeps (1-1000).")
 	flag.StringVar(&acpProviderProxyPodLabels, "acp-provider-proxy-pod-labels", envutil.String("ORKA_ACP_PROVIDER_PROXY_POD_LABELS", "orka.ai/network-role=provider-auth-proxy"),
 		"Comma-separated exact Pod labels selected by RuntimePool provider-proxy egress policy.")
 	flag.StringVar(&acpProviderProxyTokenFile, "acp-provider-proxy-token-file", os.Getenv("ORKA_ACP_PROVIDER_PROXY_TOKEN_FILE"),
@@ -1620,7 +1625,17 @@ func main() {
 	}
 
 	// Setup Task controller with helper components.
+	if acpRuntimePoolMaxResidentSessions < 1 || acpRuntimePoolMaxResidentSessions > 1000 ||
+		acpRuntimePoolMaxRunningPrompts < 1 || acpRuntimePoolMaxRunningPrompts > acpRuntimePoolMaxResidentSessions {
+		setupLog.Error(nil, "invalid RuntimePool capacity: prompts must be between 1 and resident sessions, which must be between 1 and 1000",
+			"maxRunningPrompts", acpRuntimePoolMaxRunningPrompts, "maxResidentSessions", acpRuntimePoolMaxResidentSessions)
+		os.Exit(1)
+	}
 	taskReconciler := &controller.TaskReconciler{
+		ACPRuntimePoolCapacity: corev1alpha1.RuntimePoolCapacitySpec{
+			MaxRunningPrompts:   int32(acpRuntimePoolMaxRunningPrompts),
+			MaxResidentSessions: int32(acpRuntimePoolMaxResidentSessions),
+		},
 		Client:                       mgr.GetClient(),
 		APIReader:                    mgr.GetAPIReader(),
 		Scheme:                       mgr.GetScheme(),

@@ -796,9 +796,9 @@ spec:
 | `timeZone` | string | No | IANA time zone used by `schedule`. |
 | `historyDays` | int32 | No | How far back the initial scan should inspect repository history. |
 | `validationMode` | string | No | Validation aggressiveness: `off`, `light`, or `full`. Defaults to `light`. |
-| `validationMaxFindingsPerRun` | int32 | No | Maximum automatic validation tasks to enqueue per scan run in `light` mode. |
-| `validationMinSeverity` | string | No | Minimum severity eligible for automatic validation. Defaults are mode-dependent. |
-| `validationMinConfidence` | string | No | Minimum confidence eligible for automatic validation. Defaults are mode-dependent. |
+| `validationMaxFindingsPerRun` | int32 | No | Maximum automatic validation tasks to enqueue per scan run in `light` mode. Defaults to 10. |
+| `validationMinSeverity` | string | No | Minimum severity eligible for automatic validation. Defaults to `medium` in `light` mode and `low` in `full` mode. |
+| `validationMinConfidence` | string | No | Minimum confidence eligible for automatic validation. Defaults to `medium` in `light` mode and `low` in `full` mode. |
 | `customScanInstructionsRef` | PolicyConfigMapKeyRef | No | Same-namespace ConfigMap key containing additive scanner instructions. The ConfigMap must opt in with `orka.ai/security-policy: "true"` as a label or annotation. |
 | `falsePositivePolicyRef` | PolicyConfigMapKeyRef | No | Same-namespace ConfigMap key containing additive false-positive policy text. The ConfigMap must opt in with `orka.ai/security-policy: "true"` as a label or annotation. |
 | `analysisAgentRef` | AgentReference | Yes | Agent used for repository scan runs and threat model generation. |
