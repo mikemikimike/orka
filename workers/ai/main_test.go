@@ -386,7 +386,7 @@ func TestAutoEnableMemoryTools_WhenControllerConfigPresent(t *testing.T) {
 	t.Setenv("ORKA_TASK_NAMESPACE", "default")
 	t.Setenv("ORKA_TASK_NAME", "task-1")
 
-	got := autoEnableMemoryTools([]string{"web_search", "recall_memory", " web_search "})
+	got := autoEnableMemoryTools([]string{"web_search", "recall_memory", " web_search "}, true)
 	want := []string{"web_search", "recall_memory", "remember", "propose_memory", "search_transcript"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("autoEnableMemoryTools() = %#v, want %#v", got, want)
@@ -398,7 +398,7 @@ func TestAutoEnableMemoryTools_NoControllerConfigDoesNotMutateTools(t *testing.T
 	t.Setenv("ORKA_TASK_NAMESPACE", "default")
 	t.Setenv("ORKA_TASK_NAME", "task-1")
 
-	got := autoEnableMemoryTools([]string{"web_search"})
+	got := autoEnableMemoryTools([]string{"web_search"}, true)
 	want := []string{"web_search"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("autoEnableMemoryTools() = %#v, want %#v", got, want)
@@ -407,6 +407,18 @@ func TestAutoEnableMemoryTools_NoControllerConfigDoesNotMutateTools(t *testing.T
 		if containsTool(got, toolName) {
 			t.Fatalf("autoEnableMemoryTools() added memory tool %q without controller config: %#v", toolName, got)
 		}
+	}
+}
+
+func TestAutoEnableMemoryTools_WithoutCoordinationKeepsExplicitOnly(t *testing.T) {
+	t.Setenv("ORKA_CONTROLLER_URL", "http://controller.example")
+	t.Setenv("ORKA_TASK_NAMESPACE", "default")
+	t.Setenv("ORKA_TASK_NAME", "task-1")
+
+	got := autoEnableMemoryTools([]string{"web_search", "recall_memory"}, false)
+	want := []string{"web_search", "recall_memory"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("autoEnableMemoryTools() = %#v, want %#v", got, want)
 	}
 }
 

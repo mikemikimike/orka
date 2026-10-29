@@ -257,7 +257,7 @@ func run(transcriptPath string) (err error) {
 	// independently of coordination mode. Auto-enable them when the controller
 	// context needed to execute them is present.
 	registerMemoryTools()
-	enabledTools = autoEnableMemoryTools(enabledTools)
+	enabledTools = autoEnableMemoryTools(enabledTools, coordinationEnv.Enabled)
 
 	// Load custom Tool CRDs
 	customTools, err := loadCustomTools(ctx, k8sClient, taskNamespace, enabledTools)
@@ -811,9 +811,9 @@ func memoryControllerConfigPresent() bool {
 		strings.TrimSpace(os.Getenv(workerenv.TaskName)) != ""
 }
 
-func autoEnableMemoryTools(enabled []string) []string {
+func autoEnableMemoryTools(enabled []string, coordinationEnabled bool) []string {
 	normalized := normalizeEnabledTools(enabled)
-	if !memoryControllerConfigPresent() {
+	if !coordinationEnabled || !memoryControllerConfigPresent() {
 		return normalized
 	}
 

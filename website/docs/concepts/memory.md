@@ -47,7 +47,8 @@ Tags: release, testing
 
 When an AI worker can reach the controller internal API, it loads reviewed durable memories before invoking the model. The durable memory section is appended to the system prompt as background project context, separate from the current session transcript.
 
-Every native `type: ai` Task also receives the memory tools ([parameters](../reference/built-in-tools.md#memory-tools)):
+Native `type: ai` Tasks receive memory tools when their Agent enables coordination or when
+the Agent or Task selects them explicitly ([parameters](../reference/built-in-tools.md#memory-tools)):
 
 | Tool | Purpose |
 |------|---------|
