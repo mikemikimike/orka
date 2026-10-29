@@ -1104,7 +1104,9 @@ func (r *RepositoryScanReconciler) createReviewTasks(ctx context.Context, scan *
 		return err
 	}
 	if r.Client != nil {
-		existing, err := r.listCurrentScanTasks(ctx, scan, "")
+		// Count past the informer cache, which can miss a retry created
+		// earlier in this reconcile.
+		existing, err := r.listCurrentScanTasksFrom(ctx, uncachedReader(r.APIReader, r.Client), scan, "")
 		if err != nil {
 			return err
 		}

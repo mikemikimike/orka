@@ -7245,6 +7245,39 @@ func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
 	if got := len(listReviews()); got != maxOutstandingReviewTasks+3 {
 		t.Fatalf("review tasks after top-up = %d, want %d", got, maxOutstandingReviewTasks+3)
 	}
+
+	// The cache can miss a retry created earlier in the same reconcile, so
+	// the bound is counted from an authoritative read.
+	var outstanding []corev1alpha1.Task
+	for _, task := range listReviews() {
+		if task.Status.Phase != corev1alpha1.TaskPhaseSucceeded {
+			outstanding = append(outstanding, task)
+		}
+	}
+	finished := outstanding[0]
+	finished.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	if err := cl.Update(ctx, &finished); err != nil {
+		t.Fatalf("Update(finished review) error = %v", err)
+	}
+	authoritative := repositoryScanTestObjects(scan, threatTask, mapperTask, repositoryScanTestAgent(scan.Spec.AnalysisAgentRef.Name))
+	for _, task := range listReviews() {
+		authoritative = append(authoritative, task.DeepCopy())
+	}
+	retryTask := outstanding[1].DeepCopy()
+	retryTask.Name += "-retry"
+	retryTask.UID = ""
+	authoritative = append(authoritative, retryTask)
+	for _, object := range authoritative {
+		object.SetResourceVersion("")
+	}
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritative...).Build()
+	before := len(listReviews())
+	if err := reconciler.topUpReviewTasks(ctx, scan); err != nil {
+		t.Fatalf("topUpReviewTasks(stale cache) error = %v", err)
+	}
+	if got := len(listReviews()); got != before {
+		t.Fatalf("review tasks with an uncached retry = %d, want %d: the retry fills the freed place", got, before)
+	}
 }
 
 func TestIngestReviewTaskStoresRepeatedControlAsDuplicateOutsideCap(t *testing.T) {
