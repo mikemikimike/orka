@@ -150,6 +150,12 @@ type userHub struct {
 	seq    int64
 	loaded bool
 	conns  map[*conn]struct{}
+	// rootNotified is the sequence at the user's latest root notification,
+	// or, until one in this process, the sequence the hub first loaded at.
+	// Root notifications are not journaled, so a client that last saw no
+	// later sequence may have missed one.
+	rootNotified int64
+	rootKnown    bool
 }
 
 // storedChannel is how a channel's state is stored: the reduced state plus
@@ -389,6 +395,9 @@ func (h *Host) loadLocked(ctx context.Context, hub *userHub) error {
 		return err
 	}
 	hub.seq, hub.loaded = seq, true
+	if !hub.rootKnown {
+		hub.rootNotified, hub.rootKnown = seq, true
+	}
 	return nil
 }
 
@@ -688,6 +697,7 @@ func (h *Host) notifyRoot(userKey, method string, params any) {
 	hub := h.hub(userKey)
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	hub.rootNotified, hub.rootKnown = hub.seq, true
 	for c := range hub.conns {
 		c.deliverNotification(rootChannel, method, raw)
 	}

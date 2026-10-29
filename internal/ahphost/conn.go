@@ -687,6 +687,12 @@ func (c *conn) reconnectResult(
 	if err != nil {
 		return nil, nil, err
 	}
+	// Root notifications, such as a session added, are not journaled, so a
+	// replay cannot carry one the client may have missed: it gets snapshots,
+	// the protocol's durable recovery path, and lists its sessions again.
+	if slices.Contains(allowed, rootChannel) && c.host.hub(c.principal.UserKey).rootNotified >= params.LastSeenServerSeq {
+		complete = false
+	}
 	if complete {
 		wanted := map[string]bool{}
 		for _, channel := range allowed {

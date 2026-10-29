@@ -804,12 +804,20 @@ func TestReconnectRules(t *testing.T) {
 
 	// A known client resumes with its negotiated version and gets what it missed.
 	again := env.connect(alice.Token)
-	result, err := again.Reconnect(ctx, "laptop", seq, []string{rootChannel, "ahp-session:/one", "ahp-session:/gone"})
+	result, err := again.Reconnect(ctx, "laptop", seq, []string{"ahp-session:/one", "ahp-session:/gone"})
 	require.NoError(t, err)
 	replay, ok := result.Value.(*ahptypes.ReconnectReplayResult)
 	require.True(t, ok, "a covered gap is replayed: %T", result.Value)
 	require.NotEmpty(t, replay.Actions)
 	require.Equal(t, []string{"ahp-session:/gone"}, replay.Missing)
+	// The session's addition went out as a root notification, which no
+	// replay carries: a client following the root gets snapshots instead.
+	rooted := env.connect(alice.Token)
+	result, err = rooted.Reconnect(ctx, "laptop", seq, []string{rootChannel, "ahp-session:/one"})
+	require.NoError(t, err)
+	missed, ok := result.Value.(*ahptypes.ReconnectSnapshotResult)
+	require.True(t, ok, "a gap with a root notification in it falls back to snapshots: %T", result.Value)
+	require.Len(t, missed.Snapshots, 2)
 
 	// An unknown client, or another user's client, must initialize again.
 	unknown := env.connect(alice.Token)
