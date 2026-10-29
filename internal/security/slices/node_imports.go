@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -39,12 +40,16 @@ func newNodeImportGraph(root string, files []repoFile, lines map[string]int) *no
 	graph := &nodeImportGraph{edges: map[string]map[string]struct{}{}, reverse: map[string]map[string]struct{}{}}
 	known := make(map[string]struct{}, len(files))
 	var packages []nodePackage
+	aliases := map[string][]nodePathAlias{}
 	for _, file := range files {
 		known[file.Path] = struct{}{}
 		if file.Name == packageJSONFile {
 			if pkg, ok := readNodePackage(filepath.Join(root, filepath.FromSlash(file.Path)), file.Dir); ok {
 				packages = append(packages, pkg)
 			}
+		}
+		if strings.HasPrefix(file.Name, "tsconfig") && path.Ext(file.Name) == ".json" {
+			aliases[file.Dir] = append(aliases[file.Dir], readTSConfigAliases(filepath.Join(root, filepath.FromSlash(file.Path)), file.Dir)...)
 		}
 	}
 	for _, file := range files {
@@ -56,7 +61,7 @@ func newNodeImportGraph(root string, files []repoFile, lines map[string]int) *no
 			continue
 		}
 		for _, match := range nodeImportPattern.FindAllSubmatch(data, -1) {
-			target := resolveNodeImport(file.Dir, string(match[1]), known, packages)
+			target := resolveNodeImport(file.Dir, string(match[1]), known, packages, aliases)
 			if target == "" || target == file.Path {
 				continue
 			}
@@ -70,25 +75,45 @@ func newNodeImportGraph(root string, files []repoFile, lines map[string]int) *no
 func (g *nodeImportGraph) imports(file string) []string   { return sortedKeys(g.edges[file]) }
 func (g *nodeImportGraph) importers(file string) []string { return sortedKeys(g.reverse[file]) }
 
-func resolveNodeImport(fromDir, spec string, known map[string]struct{}, packages []nodePackage) string {
-	var base string
-	switch {
-	case strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../"):
-		base = path.Join(fromDir, spec)
-	default:
-		for _, pkg := range packages {
-			if spec == pkg.name && pkg.main != "" {
-				if _, ok := known[pkg.main]; ok {
-					return pkg.main
+func resolveNodeImport(fromDir, spec string, known map[string]struct{}, packages []nodePackage, aliases map[string][]nodePathAlias) string {
+	if strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../") {
+		return resolveNodeBase(path.Join(fromDir, spec), known)
+	}
+	// The nearest tsconfig with path aliases applies, as for the compiler.
+	for dir := fromDir; ; dir = path.Dir(dir) {
+		if list, ok := aliases[dir]; ok && len(list) > 0 {
+			for _, alias := range list {
+				matched, ok := alias.match(spec)
+				if !ok {
+					continue
+				}
+				for _, target := range alias.targets {
+					if found := resolveNodeBase(strings.Replace(target, "*", matched, 1), known); found != "" {
+						return found
+					}
 				}
 			}
-			if spec == pkg.name || strings.HasPrefix(spec, pkg.name+"/") {
-				base = path.Join(pkg.dir, strings.TrimPrefix(spec, pkg.name))
-				break
-			}
+			break
+		}
+		if dir == "." || dir == "/" {
+			break
 		}
 	}
-	if base == "" || strings.HasPrefix(base, "../") {
+	for _, pkg := range packages {
+		if spec == pkg.name && pkg.main != "" {
+			if _, ok := known[pkg.main]; ok {
+				return pkg.main
+			}
+		}
+		if spec == pkg.name || strings.HasPrefix(spec, pkg.name+"/") {
+			return resolveNodeBase(path.Join(pkg.dir, strings.TrimPrefix(spec, pkg.name)), known)
+		}
+	}
+	return ""
+}
+
+func resolveNodeBase(base string, known map[string]struct{}) string {
+	if base == "" || base == ".." || strings.HasPrefix(base, "../") {
 		return ""
 	}
 	candidates := []string{base}
@@ -110,6 +135,114 @@ func resolveNodeImport(fromDir, spec string, known map[string]struct{}, packages
 		}
 	}
 	return ""
+}
+
+// nodePathAlias is one tsconfig compilerOptions.paths entry, such as
+// "@/*": ["./src/*"], with targets made repository-relative.
+type nodePathAlias struct {
+	pattern string
+	targets []string
+}
+
+func (a nodePathAlias) match(spec string) (string, bool) {
+	prefix, suffix, wildcard := strings.Cut(a.pattern, "*")
+	if !wildcard {
+		return "", spec == a.pattern
+	}
+	if len(spec) < len(prefix)+len(suffix) || !strings.HasPrefix(spec, prefix) || !strings.HasSuffix(spec, suffix) {
+		return "", false
+	}
+	return spec[len(prefix) : len(spec)-len(suffix)], true
+}
+
+func readTSConfigAliases(fullPath, dir string) []nodePathAlias {
+	info, err := os.Lstat(fullPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxPackageJSONBytes {
+		return nil
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil
+	}
+	var config struct {
+		CompilerOptions struct {
+			BaseURL string              `json:"baseUrl"`
+			Paths   map[string][]string `json:"paths"`
+		} `json:"compilerOptions"`
+	}
+	if json.Unmarshal(stripJSONComments(data), &config) != nil {
+		return nil
+	}
+	base := path.Join(dir, config.CompilerOptions.BaseURL)
+	out := make([]nodePathAlias, 0, len(config.CompilerOptions.Paths))
+	for pattern, targets := range config.CompilerOptions.Paths {
+		alias := nodePathAlias{pattern: pattern}
+		for _, target := range targets {
+			alias.targets = append(alias.targets, path.Join(base, target))
+		}
+		out = append(out, alias)
+	}
+	// Longer patterns are more specific.
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].pattern) != len(out[j].pattern) {
+			return len(out[i].pattern) > len(out[j].pattern)
+		}
+		return out[i].pattern < out[j].pattern
+	})
+	return out
+}
+
+// stripJSONComments removes the comments and trailing commas tsconfig files
+// allow, leaving strings intact. The second pass drops commas that preceded
+// a comment the first pass removed.
+func stripJSONComments(data []byte) []byte {
+	return stripJSONCommentsOnce(stripJSONCommentsOnce(data))
+}
+
+func stripJSONCommentsOnce(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	inString := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		switch {
+		case inString:
+			out = append(out, c)
+			if c == '\\' && i+1 < len(data) {
+				i++
+				out = append(out, data[i])
+			} else if c == '"' {
+				inString = false
+			}
+		case c == '"':
+			inString = true
+			out = append(out, c)
+		case c == '/' && i+1 < len(data) && data[i+1] == '/':
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			if i < len(data) {
+				out = append(out, '\n')
+			}
+		case c == '/' && i+1 < len(data) && data[i+1] == '*':
+			i += 2
+			for i+1 < len(data) && (data[i] != '*' || data[i+1] != '/') {
+				i++
+			}
+			i++
+		case c == ',':
+			j := i + 1
+			for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\n' || data[j] == '\r') {
+				j++
+			}
+			if j < len(data) && (data[j] == '}' || data[j] == ']') {
+				continue
+			}
+			out = append(out, c)
+		default:
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func readNodePackage(fullPath, dir string) (nodePackage, bool) {

@@ -823,7 +823,9 @@ func (r *RepositoryScanReconciler) mapperCrossComponentEnv(ctx context.Context, 
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, corev1.EnvVar{Name: security.EnvInvestigations, Value: string(data)})
+		// Kubernetes expands $(VAR) in env values; $$ keeps model-written
+		// question text literal.
+		env = append(env, corev1.EnvVar{Name: security.EnvInvestigations, Value: strings.ReplaceAll(string(data), "$", "$$")})
 	}
 	return env, nil
 }

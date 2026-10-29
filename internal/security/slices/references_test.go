@@ -225,3 +225,30 @@ func TestReferenceFilesFollowTypeScriptImports(t *testing.T) {
 		t.Fatalf("services references = %s, want the route as importer and no test files", services)
 	}
 }
+
+func TestReferenceFilesFollowTSConfigPathAliases(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "frontend/package.json", `{"name":"@app/frontend"}`)
+	writeFile(t, root, "frontend/tsconfig.app.json", `{
+  // Vite templates keep comments in tsconfig.
+  "compilerOptions": {
+    /* Aliases */
+    "paths": { "@/*": ["./src/*"], },
+  },
+}`)
+	writeFile(t, root, "frontend/src/pages/Deploy.tsx", "import { api } from '@/lib/api'\nimport { Button } from \"@/components/ui/button\"\n")
+	writeFile(t, root, "frontend/src/lib/api.ts", "export const api = 1\n")
+	writeFile(t, root, "frontend/src/components/ui/button.tsx", "export const Button = 1\n")
+	refs, err := ReferenceFiles(root, []store.ReviewSlice{
+		{ID: "pages", OwnedFiles: []store.ReviewSliceFile{{Path: "frontend/src/pages/Deploy.tsx"}}},
+	})
+	if err != nil {
+		t.Fatalf("ReferenceFiles() error = %v", err)
+	}
+	got := referenceSummary(refs["pages"])
+	for _, want := range []string{"frontend/src/lib/api.ts=imports", "frontend/src/components/ui/button.tsx=imports"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("references = %s, want %s", got, want)
+		}
+	}
+}

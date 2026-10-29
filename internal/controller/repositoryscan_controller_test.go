@@ -7037,7 +7037,7 @@ func TestMapperCrossComponentEnvAppliesOnlyToFullScans(t *testing.T) {
 	}
 
 	content := security.RenderThreatModelInvestigations("# Threat model\n", []security.SecurityInvestigation{
-		{Title: "Flow", Question: "Does input reach the sink?", Paths: []string{"pkg/flow"}},
+		{Title: "Flow", Question: "Does $(HOME) input reach the sink?", Paths: []string{"pkg/flow"}},
 	})
 	if err := store.SaveThreatModel(ctx, &storepkg.ThreatModel{
 		Namespace: defaultNS, RepositoryScan: scan.Name, Content: content, Source: "generated",
@@ -7051,12 +7051,16 @@ func TestMapperCrossComponentEnvAppliesOnlyToFullScans(t *testing.T) {
 	var investigations []security.SecurityInvestigation
 	for _, item := range env {
 		if item.Name == security.EnvInvestigations {
-			if err := json.Unmarshal([]byte(item.Value), &investigations); err != nil {
+			// The kubelet reduces $$ to $, so the worker reads the text literally.
+			if !strings.Contains(item.Value, "$$(HOME)") {
+				t.Fatalf("investigations env = %q, want $ escaped from Kubernetes expansion", item.Value)
+			}
+			if err := json.Unmarshal([]byte(strings.ReplaceAll(item.Value, "$$", "$")), &investigations); err != nil {
 				t.Fatalf("investigations env = %q: %v", item.Value, err)
 			}
 		}
 	}
-	if len(investigations) != 1 || investigations[0].Question != "Does input reach the sink?" {
+	if len(investigations) != 1 || investigations[0].Question != "Does $(HOME) input reach the sink?" {
 		t.Fatalf("env = %#v, want the threat model's investigation", env)
 	}
 
