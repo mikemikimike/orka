@@ -2466,3 +2466,63 @@ func TestAHPBackendKeepsAWaitingMessageWhoseReplacementFails(t *testing.T) {
 	require.True(t, ok, "the client shows the waiting message again, not %#v", emitter.actions[0].Value)
 	require.Equal(t, "run me", shown.Message.Text)
 }
+
+// A cancel or a tool decision runs after it was admitted. By then its turn
+// may have ended and another started; it must not act on that one.
+func TestAHPBackendDeferredActionsKeepToTheirTurn(t *testing.T) {
+	env := newAHPTestEnv(t)
+	env.backend.cancelBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 1, Steps: 5}
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	_, err := c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-1", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "sleep", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}})
+	require.NoError(t, err)
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	taskName := record.OrkaSession + "-t1"
+	env.waitForTask(taskName)
+	var turn *ahpTurn
+	require.Eventually(t, func() bool {
+		turn = env.backend.activeTurn(alice.UserKey, ahpTestSession)
+		return turn != nil
+	}, 5*time.Second, 20*time.Millisecond)
+
+	// A cancel of an earlier turn stops nothing.
+	env.backend.HandleClientAction(ctx, alice, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnCancelledAction{
+		Type: ahptypes.ActionTypeChatTurnCancelled, TurnId: "turn-0", Duration: 10,
+	}}, &ahpActionsEmitter{})
+	require.Never(t, func() bool {
+		current := &corev1alpha1.Task{}
+		_ = env.kube.Get(context.Background(), types.NamespacedName{Namespace: ahpTestNamespace, Name: taskName}, current)
+		_, ok := current.Annotations[labels.AnnotationCancelRequested]
+		return ok
+	}, 300*time.Millisecond, 20*time.Millisecond, "the running turn's Task is not cancelled")
+
+	// A decision for an earlier turn's tool call decides nothing, even if
+	// the running turn uses the same call ID.
+	var decided atomic.Int32
+	env.backend.decideApproval = func(context.Context, *UserInfo, string, string, string, bool) error {
+		decided.Add(1)
+		return nil
+	}
+	pending := func() {
+		turn.mu.Lock()
+		turn.tools["call-1"] = &ahpToolCall{approval: "approval-1"}
+		turn.mu.Unlock()
+	}
+	confirm := func(turnID string) {
+		env.backend.HandleClientAction(ctx, alice, chat, ahptypes.StateAction{Value: &ahptypes.ChatToolCallConfirmedAction{
+			Type: ahptypes.ActionTypeChatToolCallConfirmed, TurnId: turnID, ToolCallId: "call-1", Approved: true,
+		}}, &ahpActionsEmitter{})
+	}
+	pending()
+	confirm("turn-0")
+	require.Zero(t, decided.Load(), "an earlier turn's decision")
+	confirm("turn-1")
+	require.EqualValues(t, 1, decided.Load(), "the running turn's own decision")
+}

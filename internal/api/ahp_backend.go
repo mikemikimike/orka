@@ -1190,6 +1190,31 @@ func (b *ahpBackend) unqueue(ctx context.Context, record ahpSession, a *ahptypes
 	_ = emit.Emit(ctx, record.Chat, actions...)
 }
 
+// cancelTurn cancels a session's turn a client cancelled. The action runs
+// after it was admitted: the turn may have ended since, and another started,
+// which it must not stop.
+func (b *ahpBackend) cancelTurn(ctx context.Context, principal ahphost.Principal, record ahpSession, turnID string) {
+	if record.ActiveTurn != turnID {
+		return
+	}
+	if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil && turn.id == turnID {
+		turn.markCancelledByClient()
+	}
+	if record.ActiveTask == "" {
+		return
+	}
+	// The client already shows the turn cancelled: keep asking the Task to
+	// stop through a passing failure, off this action queue.
+	go func() {
+		err := retry.OnError(b.cancelBackoff, func(error) bool { return true }, func() error {
+			return b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask)
+		})
+		if err != nil {
+			log.Error(err, "cancel AHP turn Task", "session", record.Session, "task", record.ActiveTask)
+		}
+	}()
+}
+
 // HandleClientAction runs what an admitted client action asks for.
 func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.Principal, channel string, action ahptypes.StateAction, emit ahphost.Emitter) {
 	if strings.HasPrefix(channel, ahpTerminalScheme) {
@@ -1204,23 +1229,10 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 	case *ahptypes.ChatTurnStartedAction:
 		b.startTurn(ctx, principal, record, a, emit)
 	case *ahptypes.ChatTurnCancelledAction:
-		if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil {
-			turn.markCancelledByClient()
-		}
-		if record.ActiveTask != "" {
-			// The client already shows the turn cancelled: keep asking the
-			// Task to stop through a passing failure, off this action queue.
-			go func() {
-				err := retry.OnError(b.cancelBackoff, func(error) bool { return true }, func() error {
-					return b.cancelTask(ctx, principal, record.Namespace, record.ActiveTask)
-				})
-				if err != nil {
-					log.Error(err, "cancel AHP turn Task", "session", record.Session, "task", record.ActiveTask)
-				}
-			}()
-		}
+		b.cancelTurn(ctx, principal, record, a.TurnId)
 	case *ahptypes.ChatToolCallConfirmedAction:
-		if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil {
+		// As for a cancel, the decision is for its own turn only.
+		if turn := b.activeTurn(principal.UserKey, record.Session); turn != nil && turn.id == a.TurnId {
 			turn.confirm(ctx, principal, a.ToolCallId, a.Approved)
 		}
 	case *ahptypes.ChatPendingMessageSetAction:
