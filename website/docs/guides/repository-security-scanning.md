@@ -191,6 +191,12 @@ cite an overlapping `root_control` location (or, without one, an overlapping `si
 repeat is stored as a duplicate of the first finding and does not count toward
 `maxFindingsPerRun`.
 
+Review slices run as concurrent Tasks, up to the smaller of the controller's ACP dispatch
+limit (`controller.acpRuntime.dispatch.maxConcurrentTasks`) and the RuntimePool's
+`maxRunningPrompts`; both default to 4. A run keeps at most 16 review Tasks outstanding and
+starts more as earlier reviews finish, so queued slices do not spend their Task deadline
+waiting for a runtime.
+
 Each review also records coverage: `scan.reviewedFiles` lists the files it read and
 `scan.resolvedQuestions` lists the questions it checked and ruled out. Both appear in the
 review Task's result. Finding evidence can carry a role (`entrypoint`, `source`,

@@ -105,6 +105,11 @@ controller:
     pool:
       maxRunningPrompts: 4
       maxResidentSessions: 10
+    # Agent Tasks the controller runs through ACP runtimes at once, across
+    # all RuntimePools. Each running prompt holds one place, so raise this
+    # with pool.maxRunningPrompts to run more prompts concurrently (1-1000).
+    dispatch:
+      maxConcurrentTasks: 4
     # Planned controller upgrades use a same-binary preStop child to call a
     # loopback-only coordinator. Keep terminationGracePeriodSeconds greater
     # than timeout and triggerTimeout so SIGTERM shutdown still has headroom.

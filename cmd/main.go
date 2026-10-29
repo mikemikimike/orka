@@ -301,7 +301,7 @@ func main() {
 	var acpRuntimeNamespace string
 	var acpProviderProxyNamespace string
 	var acpProviderProxyBaseURL string
-	var acpRuntimePoolMaxRunningPrompts, acpRuntimePoolMaxResidentSessions int
+	var acpRuntimePoolMaxRunningPrompts, acpRuntimePoolMaxResidentSessions, acpDispatchMaxConcurrentTasks int
 	var acpProviderProxyPodLabels string
 	var acpProviderProxyTokenFile string
 	var acpE2EPromptWriteAmbiguityMarker string
@@ -550,6 +550,8 @@ func main() {
 		"Concurrent prompts each new built-in runtime RuntimePool runs (1-1000, at most --acp-runtime-pool-max-resident-sessions).")
 	flag.IntVar(&acpRuntimePoolMaxResidentSessions, "acp-runtime-pool-max-resident-sessions", int(corev1alpha1.DefaultRuntimePoolMaxResidentSessions),
 		"Resident RuntimeSessions each new built-in runtime RuntimePool keeps (1-1000).")
+	flag.IntVar(&acpDispatchMaxConcurrentTasks, "acp-dispatch-max-concurrent-tasks", controller.DefaultACPDispatchWorkers,
+		"Agent Tasks the controller runs through ACP runtimes at once across all RuntimePools (1-1000).")
 	flag.StringVar(&acpProviderProxyPodLabels, "acp-provider-proxy-pod-labels", envutil.String("ORKA_ACP_PROVIDER_PROXY_POD_LABELS", "orka.ai/network-role=provider-auth-proxy"),
 		"Comma-separated exact Pod labels selected by RuntimePool provider-proxy egress policy.")
 	flag.StringVar(&acpProviderProxyTokenFile, "acp-provider-proxy-token-file", os.Getenv("ORKA_ACP_PROVIDER_PROXY_TOKEN_FILE"),
@@ -1631,6 +1633,11 @@ func main() {
 			"maxRunningPrompts", acpRuntimePoolMaxRunningPrompts, "maxResidentSessions", acpRuntimePoolMaxResidentSessions)
 		os.Exit(1)
 	}
+	if acpDispatchMaxConcurrentTasks < 1 || acpDispatchMaxConcurrentTasks > 1000 {
+		setupLog.Error(nil, "invalid --acp-dispatch-max-concurrent-tasks: must be between 1 and 1000",
+			"maxConcurrentTasks", acpDispatchMaxConcurrentTasks)
+		os.Exit(1)
+	}
 	taskReconciler := &controller.TaskReconciler{
 		ACPRuntimePoolCapacity: corev1alpha1.RuntimePoolCapacitySpec{
 			MaxRunningPrompts:   int32(acpRuntimePoolMaxRunningPrompts),
@@ -1710,6 +1717,7 @@ func main() {
 		ArtifactReservations: artifactRetentionWiring.collector,
 		AdmissionGate:        acpAdmissionGate,
 		IdlePoolTTL:          acpIdlePoolTTL,
+		MaxConcurrent:        acpDispatchMaxConcurrentTasks,
 		MCPRegistry:          acpMCPRegistry,
 		PromptLeases:         acpPromptLeases,
 		ACPRuntimeImages: controller.ACPRuntimeImages{
