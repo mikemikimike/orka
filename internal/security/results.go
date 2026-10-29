@@ -109,7 +109,7 @@ func MarshalReviewContexts(manifests []ReviewContextManifest) ([][]byte, error) 
 			}
 		}
 		if longest < 0 {
-			break
+			return nil, fmt.Errorf("review contexts total %d bytes even without reference files, above the %d byte limit", total, MaxReviewContextsBytes)
 		}
 		references := manifests[longest].ReferenceFiles
 		manifests[longest].ReferenceFiles = references[:len(references)/2]

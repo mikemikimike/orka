@@ -1118,7 +1118,7 @@ func (r *RepositoryScanReconciler) createReviewTasks(ctx context.Context, scan *
 		if err != nil {
 			return err
 		}
-		available := max(r.reviewTaskWindow()-outstandingReviewTasks(existing.Items, run.ID), 0)
+		available := max(r.reviewTaskWindow(ctx, existing.Items, run.ID)-outstandingReviewTasks(existing.Items, run.ID), 0)
 		reviewSlices = reviewSlices[:min(len(reviewSlices), available)]
 	}
 	for _, reviewSlice := range reviewSlices {
@@ -1348,7 +1348,7 @@ func (r *RepositoryScanReconciler) topUpReviewTasks(ctx context.Context, scan *c
 			return nil
 		}
 	}
-	if outstandingReviewTasks(tasks.Items, scanID) >= r.reviewTaskWindow() {
+	if outstandingReviewTasks(tasks.Items, scanID) >= r.reviewTaskWindow(ctx, tasks.Items, scanID) {
 		return nil
 	}
 	run, err := r.SecurityStore.GetScanRun(ctx, scan.Namespace, scanID)
@@ -1368,9 +1368,11 @@ const maxOutstandingReviewTasks = 16
 
 // reviewTaskWindow bounds a run's queued and running review Tasks at four
 // per prompt the run can execute at once: the smaller of the ACP dispatch
-// and RuntimePool prompt capacities. Task deadlines include time spent
-// waiting for a runtime, so lower capacity gets a smaller window.
-func (r *RepositoryScanReconciler) reviewTaskWindow() int {
+// capacity and the prompt capacity of the RuntimePool the run's reviews are
+// queued to, or the configured pool capacity before any is queued. Task
+// deadlines include time spent waiting for a runtime, so lower capacity
+// gets a smaller window.
+func (r *RepositoryScanReconciler) reviewTaskWindow(ctx context.Context, tasks []corev1alpha1.Task, runID string) int {
 	dispatch := r.ACPDispatchMaxConcurrentTasks
 	if dispatch <= 0 {
 		dispatch = DefaultACPDispatchWorkers
@@ -1379,7 +1381,41 @@ func (r *RepositoryScanReconciler) reviewTaskWindow() int {
 	if prompts <= 0 {
 		prompts = int(corev1alpha1.DefaultRuntimePoolMaxRunningPrompts)
 	}
+	if live := r.reviewRuntimePoolPrompts(ctx, tasks, runID); live > 0 {
+		prompts = live
+	}
 	return maxOutstandingReviewTasks / DefaultACPDispatchWorkers * min(dispatch, prompts)
+}
+
+// reviewRuntimePoolPrompts returns the prompt capacity of the RuntimePool a
+// run's review Tasks are queued to, or zero before any is queued. An
+// existing pool keeps the capacity it was created with.
+func (r *RepositoryScanReconciler) reviewRuntimePoolPrompts(ctx context.Context, tasks []corev1alpha1.Task, runID string) int {
+	if r.Client == nil {
+		return 0
+	}
+	for i := range tasks {
+		task := &tasks[i]
+		if scanTaskRunID(task) != runID || taskSecurityStage(task) != security.StageReview || task.Status.Execution == nil {
+			continue
+		}
+		name := strings.TrimSpace(task.Status.Execution.RuntimePoolName)
+		if name == "" {
+			continue
+		}
+		pool := &corev1alpha1.RuntimePool{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: name}, pool); err != nil {
+			return 0
+		}
+		if pool.Status.Capacity.MaxRunningPrompts > 0 {
+			return int(pool.Status.Capacity.MaxRunningPrompts)
+		}
+		if pool.Spec.Capacity != nil && pool.Spec.Capacity.MaxRunningPrompts > 0 {
+			return int(pool.Spec.Capacity.MaxRunningPrompts)
+		}
+		return 0
+	}
+	return 0
 }
 
 func outstandingReviewTasks(tasks []corev1alpha1.Task, runID string) int {

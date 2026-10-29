@@ -7649,8 +7649,31 @@ func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
 		{32, 4, 16}, // the pool, not dispatch, is the limit
 	} {
 		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: test.dispatch, ACPRuntimePoolMaxRunningPrompts: test.prompts}
-		if got := reconciler.reviewTaskWindow(); got != test.want {
+		if got := reconciler.reviewTaskWindow(context.Background(), nil, "scan_window"); got != test.want {
 			t.Fatalf("reviewTaskWindow(dispatch %d, prompts %d) = %d, want %d", test.dispatch, test.prompts, got, test.want)
 		}
+	}
+
+	// Once reviews are queued, the pool they run on decides: an existing
+	// pool keeps the capacity it was created with.
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme() error = %v", err)
+	}
+	pool := &corev1alpha1.RuntimePool{ObjectMeta: metav1.ObjectMeta{Name: "acp-codex-old", Namespace: defaultNS}}
+	pool.Status.Capacity.MaxRunningPrompts = 2
+	queued := corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "kaset-review", Namespace: defaultNS, Labels: map[string]string{
+			labels.LabelSecurityStage: security.StageReview, labels.LabelSecurityScanID: "scan_window",
+		}},
+		Status: corev1alpha1.TaskStatus{Execution: &corev1alpha1.TaskExecutionStatus{RuntimePoolName: "acp-codex-old"}},
+	}
+	reconciler := &RepositoryScanReconciler{
+		Client:                          fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).Build(),
+		ACPDispatchMaxConcurrentTasks:   8,
+		ACPRuntimePoolMaxRunningPrompts: 8,
+	}
+	if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != 8 {
+		t.Fatalf("reviewTaskWindow(two-prompt pool) = %d, want 8", got)
 	}
 }

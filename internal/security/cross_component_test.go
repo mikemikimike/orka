@@ -327,3 +327,14 @@ func TestMarshalReviewContextsKeepsTheRunWithinTheUploadBound(t *testing.T) {
 		t.Fatalf("contexts total %d bytes, want at most %d", total, MaxReviewContextsBytes)
 	}
 }
+
+func TestMarshalReviewContextsFailsWhenExcerptsAloneExceedTheBound(t *testing.T) {
+	prompt := strings.Repeat("x", 1<<20)
+	manifests := make([]ReviewContextManifest, MaxReviewContextsBytes/(1<<20)+2)
+	for i := range manifests {
+		manifests[i] = ReviewContextManifest{SchemaVersion: SchemaVersionReviewContext, SliceID: fmt.Sprintf("slice_%02d", i), Prompt: prompt}
+	}
+	if _, err := MarshalReviewContexts(manifests); err == nil {
+		t.Fatal("MarshalReviewContexts() = nil error, want the oversized batch rejected")
+	}
+}
