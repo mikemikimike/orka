@@ -195,10 +195,14 @@ func (f *LiveViewFrames) get(key string) (liveViewFrame, bool) {
 	return frame, ok
 }
 
-func (f *LiveViewFrames) drop(key string) {
+// drop removes the frame numbered seq. A newer frame under the same key, such
+// as a retry's first, stays: a retry keeps the Task's UID.
+func (f *LiveViewFrames) drop(key string, seq uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.frames, key)
+	if frame, ok := f.frames[key]; ok && frame.seq == seq {
+		delete(f.frames, key)
+	}
 }
 
 // liveViewTaskRunning reports whether the Task with this UID is still running.
@@ -211,6 +215,7 @@ func (f *LiveViewFrames) sweep(ctx context.Context, running liveViewTaskRunning)
 	type candidate struct {
 		key, namespace, name string
 		uid                  types.UID
+		seq                  uint64
 	}
 	f.mu.Lock()
 	now := f.now()
@@ -220,12 +225,12 @@ func (f *LiveViewFrames) sweep(ctx context.Context, running liveViewTaskRunning)
 			delete(f.frames, key)
 			continue
 		}
-		candidates = append(candidates, candidate{key, frame.namespace, frame.name, frame.uid})
+		candidates = append(candidates, candidate{key, frame.namespace, frame.name, frame.uid, frame.seq})
 	}
 	f.mu.Unlock()
 	for _, c := range candidates {
 		if !running(ctx, c.namespace, c.name, c.uid) {
-			f.drop(c.key)
+			f.drop(c.key, c.seq)
 		}
 	}
 }
@@ -283,7 +288,11 @@ func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	}
 	key := liveViewKey(namespace, task.Name, task.UID)
 	if task.Status.Phase != corev1alpha1.TaskPhaseRunning {
-		h.liveViewFrames.drop(key)
+		// Only this Job's frame goes: a Task between attempts has no Job, and
+		// its next attempt may have posted since this read.
+		if frame, ok := h.liveViewFrames.get(key); ok && frame.job == task.Status.JobUID {
+			h.liveViewFrames.drop(key, frame.seq)
+		}
 		return fiber.NewError(fiber.StatusNotFound, "the Task is not running")
 	}
 	c.Set(fiber.HeaderCacheControl, "no-store")
@@ -358,7 +367,9 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 		c.RequestCtx().SetConnectionClose()
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
-	h.liveViewFrames.put(namespace, task.Name, task.UID, task.Status.JobUID, data)
+	// The verified Task's own strings: Fiber's route parameters point into a
+	// request buffer that later requests reuse.
+	h.liveViewFrames.put(task.Namespace, task.Name, task.UID, task.Status.JobUID, data)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

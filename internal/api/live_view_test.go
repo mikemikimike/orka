@@ -321,6 +321,55 @@ func TestLiveViewShowsOnlyTheCurrentAttemptsFrames(t *testing.T) {
 	require.Equal(t, "attempt-1", string(body))
 }
 
+// Fiber's route parameters point into a request buffer that later requests
+// reuse; a stored frame must keep its Task's namespace regardless.
+func TestLiveViewFrameKeepsItsNamespaceAcrossRequests(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame")).StatusCode)
+	for range 3 {
+		req := httptest.NewRequest(http.MethodPost, "/internal/v1/live/zzzzzzz/shop", bytes.NewReader([]byte("x")))
+		req.Header.Set("Content-Type", "image/jpeg")
+		resp, err := f.app.Test(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+	}
+	for key, frame := range f.frames.frames {
+		require.Equal(t, "default", frame.namespace, key)
+	}
+}
+
+// A retry keeps the Task's UID, so its first frame lands under the same key
+// as the previous attempt's: cleanup that judged the old frame must not take
+// the new one.
+func TestLiveViewCleanupKeepsANewerAttemptsFrame(t *testing.T) {
+	frames := NewLiveViewFrames()
+	frames.put("default", "shop", "shop-uid", "job-1", []byte("attempt-1"))
+	frames.sweep(t.Context(), func(context.Context, string, string, types.UID) bool {
+		// The new attempt posts while the sweeper sees the Task between attempts.
+		frames.put("default", "shop", "shop-uid", "job-2", []byte("attempt-2"))
+		return false
+	})
+	frame, ok := frames.get(liveViewKey("default", "shop", "shop-uid"))
+	require.True(t, ok, "the sweep dropped the new attempt's frame")
+	require.Equal(t, "attempt-2", string(frame.data))
+
+	f := newLiveViewFixture(t, true)
+	task := &corev1alpha1.Task{}
+	require.NoError(t, f.client.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "shop"}, task))
+	task.Status.Phase, task.Status.JobName, task.Status.JobUID = corev1alpha1.TaskPhasePending, "", ""
+	require.NoError(t, f.client.Status().Update(t.Context(), task))
+	f.frames.put("default", "shop", task.UID, "shop-job-2-uid", []byte("attempt-2"))
+	require.Equal(t, http.StatusNotFound, f.get(t, "shop").StatusCode)
+	_, ok = f.frames.get(liveViewKey("default", "shop", task.UID))
+	require.True(t, ok, "a read of the Task between attempts dropped the next attempt's frame")
+
+	task.Status.Phase, task.Status.JobUID = corev1alpha1.TaskPhaseSucceeded, "shop-job-2-uid"
+	require.NoError(t, f.client.Status().Update(t.Context(), task))
+	require.Equal(t, http.StatusNotFound, f.get(t, "shop").StatusCode)
+	_, ok = f.frames.get(liveViewKey("default", "shop", task.UID))
+	require.False(t, ok, "a finished Task kept its last frame")
+}
+
 func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
 	frames := NewLiveViewFrames()
 	start := time.Unix(1_800_000_000, 0)
