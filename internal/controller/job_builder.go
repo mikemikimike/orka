@@ -978,7 +978,9 @@ func (b *JobBuilder) buildEnvVarsWithOptions(ctx context.Context, task *corev1al
 		envVars = setControllerEnv(envVars, workerenv.Deadline, containerWorkerDeadline(task, opts, time.Now()))
 		if b.BrowserWorkerImage != "" && task.Spec.Image == b.BrowserWorkerImage {
 			// Only the operator turns live view on; a Task cannot opt in itself.
-			envVars = setControllerEnv(envVars, workerenv.BrowserLiveView, browserLiveViewEnvValue(b.BrowserLiveView))
+			// A command replaces the entrypoint and the worker that would stream.
+			liveView := b.BrowserLiveView && len(task.Spec.Command) == 0
+			envVars = setControllerEnv(envVars, workerenv.BrowserLiveView, browserLiveViewEnvValue(liveView))
 		}
 	}
 	envVars = setControllerEnvValue(envVars, workerenv.ResolvedApprovals, opts.ResolvedApprovalsJSON)

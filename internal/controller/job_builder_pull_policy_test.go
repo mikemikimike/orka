@@ -224,12 +224,14 @@ func TestJobBuilder_Build_BrowserLiveViewSwitch(t *testing.T) {
 		liveView bool
 		image    string
 		taskEnv  string
+		command  []string
 		want     string
 	}{
 		{name: "on, browser image", liveView: true, image: browser, want: "1"},
 		{name: "off, browser image", image: browser},
 		{name: "off, a Task cannot turn it on", image: browser, taskEnv: "1"},
 		{name: "on, other image", liveView: true, image: "docker.io/library/busybox:1.36"},
+		{name: "on, command replaces the entrypoint", liveView: true, image: browser, command: []string{"sh", "-c"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -238,7 +240,7 @@ func TestJobBuilder_Build_BrowserLiveViewSwitch(t *testing.T) {
 			builder.BrowserLiveView = tt.liveView
 			task := &corev1alpha1.Task{
 				ObjectMeta: metav1.ObjectMeta{Name: testTask, Namespace: defaultNS},
-				Spec:       corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeContainer, Image: tt.image, Args: []string{"true"}},
+				Spec:       corev1alpha1.TaskSpec{Type: corev1alpha1.TaskTypeContainer, Image: tt.image, Command: tt.command, Args: []string{"true"}},
 			}
 			if tt.taskEnv != "" {
 				task.Spec.Env = []corev1.EnvVar{{Name: workerenv.BrowserLiveView, Value: tt.taskEnv}}

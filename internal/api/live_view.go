@@ -7,6 +7,7 @@ MIT License - see LICENSE file for details.
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -51,8 +52,11 @@ const (
 )
 
 type liveViewFrame struct {
-	data      []byte
-	at        time.Time
+	data []byte
+	// at is when the frame last arrived, keepalives included; it drives expiry.
+	at time.Time
+	// changedAt is when the picture last changed, which the dashboard shows.
+	changedAt time.Time
 	seq       uint64
 	namespace string
 	name      string
@@ -84,9 +88,17 @@ func (f *LiveViewFrames) put(namespace, name string, uid types.UID, data []byte)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
+	key := liveViewKey(namespace, name, uid)
+	if previous, ok := f.frames[key]; ok && bytes.Equal(previous.data, data) {
+		// A keepalive of an unchanged page: it renews expiry, but the picture,
+		// its time, and its ETag stay the same.
+		previous.at = now
+		f.frames[key] = previous
+		return
+	}
 	f.seq++
-	f.frames[liveViewKey(namespace, name, uid)] = liveViewFrame{
-		data: append([]byte(nil), data...), at: now, seq: f.seq, namespace: namespace, name: name, uid: uid,
+	f.frames[key] = liveViewFrame{
+		data: append([]byte(nil), data...), at: now, changedAt: now, seq: f.seq, namespace: namespace, name: name, uid: uid,
 	}
 	oldestKey, oldest := "", now
 	for k, frame := range f.frames {
@@ -171,11 +183,13 @@ func isLiveViewFramePath(path string) bool {
 		strings.EqualFold(parts[2], "live")
 }
 
-// liveViewTask reports whether a Task runs the operator's browser image, the
-// only image whose Chromium the worker can screencast.
+// liveViewTask reports whether a Task runs the operator's browser image
+// through its entrypoint: only then does the worker screencast its Chromium.
+// A command replaces the entrypoint, so that Task has no live view.
 func liveViewTask(task *corev1alpha1.Task, browserWorkerImage string) bool {
 	return task != nil && browserWorkerImage != "" &&
-		task.Spec.Type == corev1alpha1.TaskTypeContainer && task.Spec.Image == browserWorkerImage
+		task.Spec.Type == corev1alpha1.TaskTypeContainer && task.Spec.Image == browserWorkerImage &&
+		len(task.Spec.Command) == 0
 }
 
 // GetTaskLiveView handles GET /api/v1/tasks/{id}/live: the latest frame of a
@@ -210,7 +224,7 @@ func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	}
 	etag := `"` + strconv.FormatUint(frame.seq, 10) + `"`
 	c.Set(fiber.HeaderETag, etag)
-	c.Set("X-Orka-Frame-Time", frame.at.UTC().Format(time.RFC3339Nano))
+	c.Set("X-Orka-Frame-Time", frame.changedAt.UTC().Format(time.RFC3339Nano))
 	if string(c.Request().Header.Peek(fiber.HeaderIfNoneMatch)) == etag {
 		return c.SendStatus(fiber.StatusNotModified)
 	}

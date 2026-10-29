@@ -41,11 +41,15 @@ type liveViewFixture struct {
 func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
 	t.Helper()
 	scheme := internalCallerAuthScheme(t)
-	objects := make([]client.Object, 0, 6)
-	for name, image := range map[string]string{"shop": liveViewTestImage, "other": "busybox:1.37"} {
+	objects := make([]client.Object, 0, 9)
+	for name, image := range map[string]string{"shop": liveViewTestImage, "other": "busybox:1.37", "custom": liveViewTestImage} {
 		task := internalCallerAuthTaskObject(name, name+"-uid", name+"-job", "", "")
 		task.Spec.Type = corev1alpha1.TaskTypeContainer
 		task.Spec.Image = image
+		if name == "custom" {
+			// A command replaces the image entrypoint, and with it the worker.
+			task.Spec.Command = []string{"sh", "-c"}
+		}
 		job := internalCallerAuthJob(task, name+"-job", name+"-job-uid")
 		pod := internalCallerAuthPod(task, name+"-pod", name+"-pod-uid", job)
 		objects = append(objects, task, job, pod)
@@ -138,6 +142,8 @@ func TestLiveViewRefusesFramesItCannotShow(t *testing.T) {
 func TestLiveViewOnlyForRunningBrowserTasks(t *testing.T) {
 	f := newLiveViewFixture(t, true)
 	require.Equal(t, http.StatusNotFound, f.get(t, "other").StatusCode, "a plain container Task has no live view")
+	require.Equal(t, http.StatusNotFound, f.get(t, "custom").StatusCode, "a Task whose command replaces the entrypoint has no live view")
+	require.Equal(t, http.StatusForbidden, f.post(t, "custom", "custom-pod", "image/jpeg", []byte("frame")).StatusCode)
 
 	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame")).StatusCode)
 	task := &corev1alpha1.Task{}
@@ -221,4 +227,28 @@ func TestLiveViewFrameUploadsAreBounded(t *testing.T) {
 		require.Equal(t, maxLiveViewFrameBytes, config.MaxRequestBodySize, target)
 		require.Equal(t, liveViewReadTimeout, config.ReadTimeout, target)
 	}
+}
+
+func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
+	frames := NewLiveViewFrames()
+	start := time.Unix(1_800_000_000, 0)
+	now := start
+	frames.now = func() time.Time { return now }
+	key := liveViewKey("default", "shop", "shop-uid")
+
+	frames.put("default", "shop", "shop-uid", []byte("still-page"))
+	first, _ := frames.get(key)
+	now = start.Add(liveViewFrameTTL - time.Second)
+	frames.put("default", "shop", "shop-uid", []byte("still-page"))
+	now = start.Add(liveViewFrameTTL + time.Second)
+
+	kept, ok := frames.get(key)
+	require.True(t, ok, "a keepalive did not renew the frame")
+	require.Equal(t, first.seq, kept.seq, "a keepalive changed the ETag")
+	require.Equal(t, start, kept.changedAt, "a keepalive moved the time the page last changed")
+
+	frames.put("default", "shop", "shop-uid", []byte("new-page"))
+	changed, _ := frames.get(key)
+	require.NotEqual(t, first.seq, changed.seq)
+	require.Equal(t, now, changed.changedAt)
 }
