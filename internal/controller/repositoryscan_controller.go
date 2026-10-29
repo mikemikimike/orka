@@ -262,6 +262,9 @@ func (r *RepositoryScanReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if active {
+		if err := r.topUpReviewTasks(ctx, scan); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
@@ -1094,6 +1097,14 @@ func (r *RepositoryScanReconciler) createReviewTasks(ctx context.Context, scan *
 	if err != nil {
 		return err
 	}
+	if r.Client != nil {
+		existing, err := r.listCurrentScanTasks(ctx, scan, "")
+		if err != nil {
+			return err
+		}
+		available := max(maxOutstandingReviewTasks-outstandingReviewTasks(existing.Items, run.ID), 0)
+		reviewSlices = reviewSlices[:min(len(reviewSlices), available)]
+	}
 	for _, reviewSlice := range reviewSlices {
 		task, err := r.buildReviewTask(ctx, targetScan, run, threatModel, reviewSlice, policy, securityReviewInitialAttempt)
 		if err != nil {
@@ -1246,9 +1257,32 @@ func (r *RepositoryScanReconciler) retryMissingReviewSliceTasks(
 	run *store.ScanRun,
 	tasks []corev1alpha1.Task,
 ) (bool, error) {
+	missing, err := r.startMissingReviewSliceTasks(ctx, scan, run, tasks)
+	if err != nil || missing == 0 {
+		return false, err
+	}
+	run.Summary = fmt.Sprintf("Threat model generated; retrying %d pending review slices", missing)
+	run.Phase = scanRunPhaseRunning
+	run.CompletedAt = nil
+	run.ErrorMessage = ""
+	if err := r.SecurityStore.UpdateScanRun(ctx, run); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// startMissingReviewSliceTasks creates review Tasks for pending slices that
+// have none, within the outstanding-review bound, and reports how many slices
+// were missing.
+func (r *RepositoryScanReconciler) startMissingReviewSliceTasks(
+	ctx context.Context,
+	scan *corev1alpha1.RepositoryScan,
+	run *store.ScanRun,
+	tasks []corev1alpha1.Task,
+) (int, error) {
 	reviewSlices, err := r.pendingReviewSlices(ctx, scan, run.ID)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	missing := make([]store.ReviewSlice, 0, len(reviewSlices))
 	for _, reviewSlice := range reviewSlices {
@@ -1258,29 +1292,73 @@ func (r *RepositoryScanReconciler) retryMissingReviewSliceTasks(
 		missing = append(missing, reviewSlice)
 	}
 	if len(missing) == 0 {
-		return false, nil
+		return 0, nil
 	}
-
 	var threatModel string
 	if r.SecurityStore != nil {
 		model, err := r.SecurityStore.GetLatestThreatModel(ctx, scan.Namespace, scan.Name)
 		if err == nil {
 			threatModel = model.Content
 		} else if !errors.Is(err, store.ErrNotFound) {
-			return false, err
+			return 0, err
 		}
 	}
 	if err := r.createReviewTasks(ctx, scan, run, threatModel, missing); err != nil {
-		return false, err
+		return 0, err
 	}
-	run.Summary = fmt.Sprintf("Threat model generated; retrying %d pending review slices", len(missing))
-	run.Phase = scanRunPhaseRunning
-	run.CompletedAt = nil
-	run.ErrorMessage = ""
-	if err := r.SecurityStore.UpdateScanRun(ctx, run); err != nil {
-		return false, err
+	return len(missing), nil
+}
+
+// topUpReviewTasks refills a run's review queue while earlier reviews run.
+// Task deadlines include time spent waiting for a runtime, so a run creates
+// only a bounded number of review Tasks at a time.
+func (r *RepositoryScanReconciler) topUpReviewTasks(ctx context.Context, scan *corev1alpha1.RepositoryScan) error {
+	if r.Client == nil || r.SecurityStore == nil {
+		return nil
 	}
-	return true, nil
+	tasks, err := r.listCurrentScanTasks(ctx, scan, "")
+	if err != nil {
+		return err
+	}
+	scanID := latestOwnedScanPipelineRunID(tasks.Items)
+	if scanID == "" || !latestScanPipelineStateForRun(tasks.Items, scanID).hasReviewTasks {
+		return nil
+	}
+	for i := range tasks.Items {
+		task := &tasks.Items[i]
+		stage := taskSecurityStage(task)
+		if scanTaskRunID(task) == scanID && isScanPipelineStage(stage) && stage != security.StageReview &&
+			(task.Status.Phase == "" || isActiveTaskPhase(task.Status.Phase)) {
+			return nil
+		}
+	}
+	if outstandingReviewTasks(tasks.Items, scanID) >= maxOutstandingReviewTasks {
+		return nil
+	}
+	run, err := r.SecurityStore.GetScanRun(ctx, scan.Namespace, scanID)
+	if err != nil {
+		return err
+	}
+	if !security.ScanRunMatchesRepositoryScan(run, scan) || !activeScanRunPhase(run.Phase) {
+		return nil
+	}
+	_, err = r.startMissingReviewSliceTasks(ctx, scan, run, tasks.Items)
+	return err
+}
+
+// maxOutstandingReviewTasks bounds a run's queued and running review Tasks.
+const maxOutstandingReviewTasks = 16
+
+func outstandingReviewTasks(tasks []corev1alpha1.Task, runID string) int {
+	count := 0
+	for i := range tasks {
+		task := &tasks[i]
+		if scanTaskRunID(task) == runID && taskSecurityStage(task) == security.StageReview &&
+			(task.Status.Phase == "" || isActiveTaskPhase(task.Status.Phase)) {
+			count++
+		}
+	}
+	return count
 }
 
 func reviewSliceTaskExists(tasks []corev1alpha1.Task, runID, sliceID string) bool {

@@ -7155,3 +7155,86 @@ func TestIngestReviewTaskRetriesFailedPromptOnce(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want no second retry", len(tasks.Items))
 	}
 }
+
+func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme() error = %v", err)
+	}
+	scan := &corev1alpha1.RepositoryScan{
+		TypeMeta:   metav1.TypeMeta{APIVersion: corev1alpha1.GroupVersion.String(), Kind: "RepositoryScan"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS},
+		Spec: corev1alpha1.RepositoryScanSpec{
+			RepoURL: "https://github.com/sozercan/kaset", Branch: "main",
+			AnalysisAgentRef: corev1alpha1.AgentReference{Name: "scan-reviewer"},
+		},
+		Status: corev1alpha1.RepositoryScanStatus{LastScanID: "scan_review"},
+	}
+	threatTask := newSucceededSecurityTask("kaset-initial-threat", "scan_review", security.StageThreatModel, metav1.Now())
+	threatTask.Spec.Workspace = repositoryScanTaskWorkspace(scan, corev1alpha1.WorkspaceIntentRead)
+	mapperTask := newSucceededSecurityTask("kaset-initial-mapper", "scan_review", security.StageMapper, metav1.Now())
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&corev1alpha1.RepositoryScan{}).
+		WithObjects(repositoryScanTestObjects(scan, threatTask, mapperTask, repositoryScanTestAgent(scan.Spec.AnalysisAgentRef.Name))...).
+		Build()
+	reconciler := &RepositoryScanReconciler{Client: cl, Scheme: scheme, SecurityStore: store}
+	if err := store.CreateScanRun(ctx, &storepkg.ScanRun{
+		ID: "scan_review", Namespace: defaultNS, RepositoryScan: "kaset", TaskName: threatTask.Name,
+		Mode: "initial", Phase: scanRunPhasePending, StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateScanRun() error = %v", err)
+	}
+	const slices = maxOutstandingReviewTasks + 5
+	for i := range slices {
+		reviewSlice := &storepkg.ReviewSlice{
+			SchemaVersion: 1, ID: fmt.Sprintf("slice_%02d", i), Namespace: defaultNS, RepositoryScan: "kaset",
+			Source: "deterministic-go-package", Title: fmt.Sprintf("Go package p%02d", i), Kind: "package",
+			OwnedFiles: []storepkg.ReviewSliceFile{{Path: fmt.Sprintf("p%02d/a.go", i), Reason: "source"}},
+			Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_review",
+		}
+		bindReviewSliceContext(t, reviewSlice)
+		if err := store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
+			t.Fatalf("UpsertReviewSlice() error = %v", err)
+		}
+	}
+	listReviews := func() []corev1alpha1.Task {
+		var tasks corev1alpha1.TaskList
+		if err := cl.List(ctx, &tasks, client.InNamespace(defaultNS),
+			client.MatchingLabels(map[string]string{labels.LabelSecurityStage: security.StageReview})); err != nil {
+			t.Fatalf("List(review tasks) error = %v", err)
+		}
+		return tasks.Items
+	}
+
+	if _, err := reconciler.progressLatestScanRun(ctx, scan); err != nil {
+		t.Fatalf("progressLatestScanRun() error = %v", err)
+	}
+	if got := len(listReviews()); got != maxOutstandingReviewTasks {
+		t.Fatalf("review tasks after mapper = %d, want the %d outstanding bound", got, maxOutstandingReviewTasks)
+	}
+
+	// Nothing to add while every queued review is still outstanding.
+	if err := reconciler.topUpReviewTasks(ctx, scan); err != nil {
+		t.Fatalf("topUpReviewTasks(full) error = %v", err)
+	}
+	if got := len(listReviews()); got != maxOutstandingReviewTasks {
+		t.Fatalf("review tasks with a full queue = %d", got)
+	}
+
+	// Finishing three reviews frees three places while others still run.
+	for i, task := range listReviews()[:3] {
+		task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+		if err := cl.Update(ctx, &task); err != nil {
+			t.Fatalf("Update(review %d) error = %v", i, err)
+		}
+	}
+	if err := reconciler.topUpReviewTasks(ctx, scan); err != nil {
+		t.Fatalf("topUpReviewTasks() error = %v", err)
+	}
+	if got := len(listReviews()); got != maxOutstandingReviewTasks+3 {
+		t.Fatalf("review tasks after top-up = %d, want %d", got, maxOutstandingReviewTasks+3)
+	}
+}
