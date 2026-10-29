@@ -1369,7 +1369,7 @@ const maxOutstandingReviewTasks = 16
 // reviewTaskWindow bounds a run's queued and running review Tasks at four
 // per prompt the run can execute at once: the smaller of the ACP dispatch
 // capacity and the prompt capacity of the RuntimePool the run's reviews are
-// queued to, or the configured pool capacity before any is queued. Task
+// queued to, or at most the default pool capacity before any is queued. Task
 // deadlines include time spent waiting for a runtime, so lower capacity
 // gets a smaller window.
 func (r *RepositoryScanReconciler) reviewTaskWindow(ctx context.Context, tasks []corev1alpha1.Task, runID string) int {
@@ -1377,7 +1377,9 @@ func (r *RepositoryScanReconciler) reviewTaskWindow(ctx context.Context, tasks [
 	if dispatch <= 0 {
 		dispatch = DefaultACPDispatchWorkers
 	}
-	prompts := r.ACPRuntimePoolMaxRunningPrompts
+	// Until a review is queued to a RuntimePool, the run's pool and its
+	// capacity are unknown, so the first batch stays at the default size.
+	prompts := min(r.ACPRuntimePoolMaxRunningPrompts, int(corev1alpha1.DefaultRuntimePoolMaxRunningPrompts))
 	if prompts <= 0 {
 		prompts = int(corev1alpha1.DefaultRuntimePoolMaxRunningPrompts)
 	}

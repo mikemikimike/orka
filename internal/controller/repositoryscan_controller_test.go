@@ -7644,9 +7644,12 @@ func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
 	for _, test := range []struct{ dispatch, prompts, want int }{
 		{0, 0, maxOutstandingReviewTasks},
 		{1, 0, 4},
-		{8, 8, 32},
 		{8, 0, 16},  // a default four-prompt pool bounds it
 		{32, 4, 16}, // the pool, not dispatch, is the limit
+		// Before any review is queued the pool is unknown, so higher
+		// configured limits do not enlarge the first batch.
+		{8, 8, 16},
+		{100, 100, 16},
 	} {
 		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: test.dispatch, ACPRuntimePoolMaxRunningPrompts: test.prompts}
 		if got := reconciler.reviewTaskWindow(context.Background(), nil, "scan_window"); got != test.want {
@@ -7669,11 +7672,18 @@ func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
 		Status: corev1alpha1.TaskStatus{Execution: &corev1alpha1.TaskExecutionStatus{RuntimePoolName: "acp-codex-old"}},
 	}
 	reconciler := &RepositoryScanReconciler{
-		Client:                          fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).Build(),
+		Client:                          fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build(),
 		ACPDispatchMaxConcurrentTasks:   8,
 		ACPRuntimePoolMaxRunningPrompts: 8,
 	}
 	if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != 8 {
 		t.Fatalf("reviewTaskWindow(two-prompt pool) = %d, want 8", got)
+	}
+	pool.Status.Capacity.MaxRunningPrompts = 8
+	if err := reconciler.Status().Update(context.Background(), pool); err != nil {
+		t.Fatalf("Update(pool status) error = %v", err)
+	}
+	if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != 32 {
+		t.Fatalf("reviewTaskWindow(eight-prompt pool) = %d, want 32 once the pool is known", got)
 	}
 }
