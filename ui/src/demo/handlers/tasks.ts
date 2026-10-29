@@ -18,6 +18,7 @@ import { currentRuntimePool } from '../data/runtimes'
 import { SESSION_FIXTURES, sessionExecutionControl } from '../data/sessions'
 import { api, apiError, DEMO_NAMESPACE, digest, inDemoNamespace, list, noContent, notFound, NOW, query, sseFrame, taskUID, uid, isDNSLabel } from '../shared'
 import { AGENTS, REPOS, TASKS, type AgentKey, type DemoTaskSeed, type RepoKey } from '../world'
+import { DEMO_BROWSER_IMAGE, liveScene, renderLiveFrame } from '../live-frames'
 
 // The demo's task engine. Every task is a record that plays its story (see
 // data/tasks.ts) against the wall clock: beats whose time has come are applied
@@ -434,6 +435,7 @@ function spawnAmbient(at: number) {
     createdBy: template.createdBy,
     story,
     created: at,
+    ...(template.specExtras && { specExtras: template.specExtras }),
   })
 }
 
@@ -1246,8 +1248,22 @@ export const taskHandlers: RequestHandler[] = [
     return HttpResponse.json({ artifacts: rec.artifacts.map((artifact) => ({ filename: artifact.filename, contentType: artifact.contentType, size: artifact.size, createdAt: artifact.createdAt })) })
   }),
 
-  // The demo has no browser to show, so live view is off.
-  http.get(api('/tasks/:id/live'), () => notFound('live view')),
+  // A running browser Task on the demo's browser image shows a drawn live view;
+  // every other Task has none, as with the real API.
+  http.get(api('/tasks/:id/live'), async ({ request, params }) => {
+    advanceAll()
+    const rec = lookup(request, nameParam(params))
+    if (!rec) return notFound(`tasks.orka.ai "${nameParam(params)}"`)
+    const spec = rec.type === 'container' ? containerSpec(rec) : undefined
+    if (!spec || spec.image !== DEMO_BROWSER_IMAGE || spec.command.length > 0 || phaseOf(rec) !== 'Running') return notFound('live view')
+    const scene = liveScene(Date.now() - rec.start)
+    const frame = await renderLiveFrame(scene)
+    if (!frame) return notFound('live view')
+    const etag = `"demo-${digest(rec.uid, 8)}-${scene.key}"`
+    const headers = { ETag: etag, 'Cache-Control': 'no-store', 'X-Orka-Frame-Time': iso(rec.start + scene.since) }
+    if (request.headers.get('If-None-Match') === etag) return new HttpResponse(null, { status: 304, headers })
+    return new HttpResponse(frame, { headers: { ...headers, 'Content-Type': 'image/jpeg' } })
+  }),
 
   http.get(api('/tasks/:id/artifacts/:filename'), ({ request, params }) => {
     const rec = lookup(request, nameParam(params))
