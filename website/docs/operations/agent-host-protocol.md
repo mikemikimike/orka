@@ -42,7 +42,7 @@ Optional values:
 | `controller.ahp.tokenMaxTTL` | `2160h` | Longest lifetime a connection token may be minted with. Tokens default to `720h`, or to this maximum when it is lower. |
 | `controller.ahp.turnTimeout` | `2h` | Timeout of each turn's Task. |
 | `controller.ahp.gitCredentialSecret` | `""` | Secret in the user's namespace whose `token` key clones and publishes their github.com repositories. See [Repositories and credentials](#repositories-and-credentials). |
-| `controller.ahp.workspaceClass` | `""` | ExecutionWorkspaceClass for session-scoped workspaces. Needs an installed workspace provider. |
+| `controller.ahp.workspaceClass` | `""` | ExecutionWorkspaceClass for session-scoped workspaces. Needs an installed workspace provider and `controller.executionWorkspace.dispatchEnabled`. |
 | `controller.ahp.workspaceImage` | `""` | Digest-pinned image with `sh`, `git` and `sleep` that turns on [workspaces and terminals](#workspaces-and-terminals). |
 | `controller.ahp.workspaceNamespace` | `orka-ahp-workspaces` | Namespace the chart creates for workspace Pods when `workspaceImage` is set. |
 
@@ -265,7 +265,9 @@ public repositories read-only, and a turn that changes files fails with
 
 With `controller.ahp.workspaceClass` (`--ahp-workspace-class`), turns use session-scoped
 execution workspaces, so a session's files stay warm between turns. This needs an
-installed workspace provider.
+installed workspace provider and workspace dispatch (`--enable-workspace-provider-api` and
+`--acp-workspace-dispatch-enabled`, which `controller.executionWorkspace.dispatchEnabled`
+sets); the controller and the chart refuse the class without them.
 
 ## Workspaces and terminals
 

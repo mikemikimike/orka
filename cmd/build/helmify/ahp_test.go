@@ -58,6 +58,7 @@ func TestStaticChartAHPControllerFlags(t *testing.T) {
 	args := ahpControllerArgs(t, ahpEnabled(
 		"--set-string", "controller.ahp.gitCredentialSecret=git-token",
 		"--set-string", "controller.ahp.workspaceClass=warm",
+		"--set", "controller.executionWorkspace.dispatchEnabled=true",
 		"--set-string", "controller.ahp.turnTimeout=30m",
 		"--set-string", "controller.ahp.tokenMaxTTL=720h",
 	)...)
@@ -253,6 +254,11 @@ func TestStaticChartRejectsInvalidAHPValues(t *testing.T) {
 			name: "no identity that can mint tokens",
 			args: []string{"--set", "controller.ahp.enabled=true"},
 			want: "controller.ahp.enabled requires controller.oidc.issuer and controller.oidc.audience",
+		},
+		{
+			name: "workspace class the controller cannot dispatch",
+			args: ahpEnabled("--set-string", "controller.ahp.workspaceClass=warm"),
+			want: "controller.ahp.workspaceClass requires controller.executionWorkspace.dispatchEnabled",
 		},
 		{
 			name: "no subject allowed to sign in",

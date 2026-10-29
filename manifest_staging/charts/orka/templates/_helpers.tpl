@@ -784,6 +784,9 @@ orka-ahp-workspaces
 {{- if not (trim (toString (dig "oidc" "allowedSubjects" "" .Values.controller))) -}}
 {{- fail "controller.ahp.enabled requires controller.oidc.allowedSubjects: without it every OIDC sign-in is refused, so no one could mint or use an AHP token" -}}
 {{- end -}}
+{{- if and (trim (toString (dig "ahp" "workspaceClass" "" .Values.controller))) (not (dig "executionWorkspace" "dispatchEnabled" false .Values.controller)) -}}
+{{- fail "controller.ahp.workspaceClass requires controller.executionWorkspace.dispatchEnabled: AHP turns run in the class's workspace, which the controller dispatches only then" -}}
+{{- end -}}
 {{- if include "orka.ahpWorkspacesEnabled" . -}}
 {{- if not (regexMatch `^[^@\s]+@sha256:[a-f0-9]{64}$` (include "orka.ahpWorkspaceImage" .)) -}}
 {{- fail "controller.ahp.workspaceImage must be pinned by digest: <repository>@sha256:<digest>" -}}

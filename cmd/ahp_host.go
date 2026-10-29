@@ -81,6 +81,17 @@ func validateAHPProvenance(provenanceProtected bool) error {
 	return nil
 }
 
+// validateAHPWorkspaceClass refuses an AHP workspace class the controller
+// cannot dispatch: every turn would run in it, and every one be rejected.
+func validateAHPWorkspaceClass(class string, providerAPI, dispatch bool) error {
+	if strings.TrimSpace(class) != "" && (!providerAPI || !dispatch) {
+		return errors.New("--ahp-workspace-class requires --enable-workspace-provider-api and " +
+			"--acp-workspace-dispatch-enabled: AHP turns run in the class's workspace, " +
+			"which the controller dispatches only with both")
+	}
+	return nil
+}
+
 var ahpWorkspaceImageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[a-f0-9]{64}$`)
 
 // validateAHPWorkspace checks the workspace settings before anything starts.

@@ -40,6 +40,24 @@ func TestValidateAHPProvenance(t *testing.T) {
 	}
 }
 
+func TestValidateAHPWorkspaceClass(t *testing.T) {
+	for _, tt := range []struct {
+		class                 string
+		providerAPI, dispatch bool
+		ok                    bool
+	}{
+		{"", false, false, true},
+		{"warm", true, true, true},
+		{"warm", false, true, false},
+		{"warm", true, false, false},
+	} {
+		if err := validateAHPWorkspaceClass(tt.class, tt.providerAPI, tt.dispatch); (err == nil) != tt.ok {
+			t.Errorf("class %q, provider API %v, dispatch %v: err = %v, want ok %v",
+				tt.class, tt.providerAPI, tt.dispatch, err, tt.ok)
+		}
+	}
+}
+
 func TestValidateAHPWorkspace(t *testing.T) {
 	digest := "ghcr.io/example/git@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for _, test := range []struct {
