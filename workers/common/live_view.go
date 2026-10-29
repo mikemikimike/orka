@@ -51,6 +51,9 @@ var (
 	liveViewFrameInterval = 500 * time.Millisecond
 	// liveViewScanInterval is how often new browsers and pages are found.
 	liveViewScanInterval = time.Second
+	// liveViewKeepalive re-sends an unchanged frame, so a page that sits still
+	// keeps its picture on the controller, which expires frames after 90 s.
+	liveViewKeepalive = 30 * time.Second
 )
 
 type liveView struct {
@@ -257,12 +260,15 @@ func (lv *liveView) offer(frame []byte) {
 	lv.seq++
 }
 
-// publish posts the latest frame when it changed. A controller that does not
+// publish posts the latest frame when it changed, and again as a keepalive
+// while it does not. A frame counts as sent only once the controller took it,
+// so a failed post is retried on the next tick. A controller that does not
 // take frames for this Task ends the live view.
 func (lv *liveView) publish(ctx context.Context, stopAll context.CancelFunc) {
 	ticker := time.NewTicker(liveViewFrameInterval)
 	defer ticker.Stop()
 	var sent uint64
+	var sentAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -272,10 +278,9 @@ func (lv *liveView) publish(ctx context.Context, stopAll context.CancelFunc) {
 		lv.mu.Lock()
 		frame, seq := lv.latest, lv.seq
 		lv.mu.Unlock()
-		if frame == nil || seq == sent {
+		if frame == nil || (seq == sent && time.Since(sentAt) < liveViewKeepalive) {
 			continue
 		}
-		sent = seq
 		status, err := lv.post(ctx, frame)
 		switch {
 		case err != nil:
@@ -284,9 +289,12 @@ func (lv *liveView) publish(ctx context.Context, stopAll context.CancelFunc) {
 			fmt.Fprintf(os.Stderr, "live view: the controller does not take frames for this Task (HTTP %d); stopped\n", status)
 			stopAll()
 			return
-		case status/100 == 2 && !lv.posted:
-			lv.posted = true
-			fmt.Fprintln(os.Stderr, "live view: streaming the browser to the dashboard")
+		case status/100 == 2:
+			sent, sentAt = seq, time.Now()
+			if !lv.posted {
+				lv.posted = true
+				fmt.Fprintln(os.Stderr, "live view: streaming the browser to the dashboard")
+			}
 		}
 	}
 }

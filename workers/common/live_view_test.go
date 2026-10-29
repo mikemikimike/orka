@@ -96,14 +96,26 @@ type postedFrame struct {
 // liveViewController records frame posts and answers them with status.
 func liveViewController(t *testing.T, status int) (*httptest.Server, func() []postedFrame) {
 	t.Helper()
+	return liveViewControllerFunc(t, func(int) int { return status })
+}
+
+// liveViewControllerFunc answers the nth post (from 0) with status(n).
+func liveViewControllerFunc(t *testing.T, status func(n int) int) (*httptest.Server, func() []postedFrame) {
+	t.Helper()
 	var mu sync.Mutex
 	var posts []postedFrame
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only frame posts count: anything else probing a local port is not the worker.
+		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/internal/v1/live/") {
+			http.NotFound(w, r)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
+		n := len(posts)
 		posts = append(posts, postedFrame{r.URL.Path, r.Header.Get("Content-Type"), r.Header.Get("Authorization"), body})
 		mu.Unlock()
-		w.WriteHeader(status)
+		w.WriteHeader(status(n))
 	}))
 	t.Cleanup(server.Close)
 	return server, func() []postedFrame {
@@ -130,10 +142,15 @@ func setUpLiveView(t *testing.T, port, controllerURL string) {
 	if err := os.WriteFile(tokenFile, []byte("callback-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	oldProfiles, oldFrame, oldScan := liveViewProfiles, liveViewFrameInterval, liveViewScanInterval
+	restore := func(profiles string, frame, scan, keepalive time.Duration) func() {
+		return func() {
+			liveViewProfiles, liveViewFrameInterval, liveViewScanInterval, liveViewKeepalive = profiles, frame, scan, keepalive
+		}
+	}
+	t.Cleanup(restore(liveViewProfiles, liveViewFrameInterval, liveViewScanInterval, liveViewKeepalive))
 	liveViewProfiles = filepath.Join(profiles, "*", "DevToolsActivePort")
 	liveViewFrameInterval, liveViewScanInterval = 20*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { liveViewProfiles, liveViewFrameInterval, liveViewScanInterval = oldProfiles, oldFrame, oldScan })
+	liveViewKeepalive = time.Hour
 	t.Setenv(workerenv.BrowserLiveView, "1")
 	t.Setenv(workerenv.ControllerURL, controllerURL)
 	t.Setenv(workerenv.TaskNamespace, "team-a")
@@ -190,7 +207,7 @@ func TestStartLiveViewIsOffWithoutTheOperatorSwitch(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	stop()
 	if got := posts(); len(got) != 0 {
-		t.Fatalf("posted %d frames with live view off", len(got))
+		t.Fatalf("posted %d frames with live view off; first: %s %q", len(got), got[0].path, got[0].body)
 	}
 }
 
@@ -223,5 +240,41 @@ func TestLiveViewIgnoresPagesOffLoopback(t *testing.T) {
 	}
 	if len(pages) != 0 {
 		t.Fatalf("followed a page URL off loopback: %v", pages)
+	}
+}
+
+func TestStartLiveViewRetriesAFrameTheControllerDidNotTake(t *testing.T) {
+	browser := newFakeBrowser(t, [][]byte{[]byte("only-frame")})
+	controller, posts := liveViewControllerFunc(t, func(n int) int {
+		if n < 2 {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusNoContent
+	})
+	setUpLiveView(t, browser.port(t), controller.URL)
+
+	stop := StartLiveView(context.Background())
+	waitFor(t, "the frame to be taken after two failures", func() bool { return len(posts()) >= 3 })
+	stop()
+	for _, post := range posts()[:3] {
+		if string(post.body) != "only-frame" {
+			t.Fatalf("retried %q, want the same frame", post.body)
+		}
+	}
+}
+
+func TestStartLiveViewResendsAStillPage(t *testing.T) {
+	browser := newFakeBrowser(t, [][]byte{[]byte("still-page")})
+	controller, posts := liveViewController(t, http.StatusNoContent)
+	setUpLiveView(t, browser.port(t), controller.URL)
+	liveViewKeepalive = 40 * time.Millisecond
+
+	stop := StartLiveView(context.Background())
+	waitFor(t, "keepalive posts of an unchanged frame", func() bool { return len(posts()) >= 3 })
+	stop()
+	for _, post := range posts() {
+		if string(post.body) != "still-page" {
+			t.Fatalf("posted %q, want the unchanged frame", post.body)
+		}
 	}
 }

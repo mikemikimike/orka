@@ -231,6 +231,11 @@ func requestBodyConfigWithNativeSessionLimit(header *fasthttp.RequestHeader, nat
 	if nativeURI.Parse(header.Host(), header.RequestURI()) == nil && isNativeSessionImportPath(string(nativeURI.PathOriginal())) {
 		return fasthttp.RequestConfig{MaxRequestBodySize: harnessv2.NativeSessionJSONLimit(nativeSessionMaxBytes), ReadTimeout: 30 * time.Second}
 	}
+	// A browser Task's worker posts live view frames; bound the size and the
+	// whole read, so a Task cannot hold controller connections with a slow one.
+	if isLiveViewFramePath(path) {
+		return fasthttp.RequestConfig{MaxRequestBodySize: maxLiveViewFrameBytes, ReadTimeout: liveViewReadTimeout}
+	}
 	// Internal broker endpoints authorize against per-pool secrets that are
 	// only resolvable from the request body, so unauthenticated peers cannot
 	// be rejected on headers alone. Bound both the body size and the full
@@ -631,6 +636,9 @@ func (s *Server) hasInternalStores() bool {
 func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	log.Info("starting API server", "address", addr)
+	if s.liveViewFrames != nil {
+		go s.liveViewFrames.run(ctx, s.liveViewTaskRunning)
+	}
 
 	// Start server in a goroutine
 	errCh := make(chan error, 1)

@@ -8,6 +8,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/valyala/fasthttp"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -159,19 +161,58 @@ func TestLiveViewFramesExpireAndStayBounded(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	frames.now = func() time.Time { return now }
 
-	frames.put("a", []byte("old"))
+	frames.put("default", "a", "a-uid", []byte("old"))
 	now = now.Add(liveViewFrameTTL + time.Second)
-	_, ok := frames.get("a")
+	_, ok := frames.get(liveViewKey("default", "a", "a-uid"))
 	require.False(t, ok, "a frame outlived its time to live")
 
 	for i := 0; i <= maxLiveViewTasks; i++ {
 		now = now.Add(time.Millisecond)
-		frames.put(fmt.Sprintf("task-%d", i), []byte("frame"))
+		frames.put("default", fmt.Sprintf("task-%d", i), "uid", []byte("frame"))
 	}
 	require.Len(t, frames.frames, maxLiveViewTasks)
-	_, ok = frames.get("task-0")
+	_, ok = frames.get(liveViewKey("default", "task-0", "uid"))
 	require.False(t, ok, "the oldest frame was kept past the bound")
 
 	// A recreated Task with the same name has a new UID, so a new key.
 	require.NotEqual(t, liveViewKey("default", "shop", "uid-1"), liveViewKey("default", "shop", "uid-2"))
+}
+
+func TestLiveViewSweepDropsFramesOfTasksThatStopped(t *testing.T) {
+	frames := NewLiveViewFrames()
+	now := time.Unix(1_800_000_000, 0)
+	frames.now = func() time.Time { return now }
+	frames.put("default", "running", "running-uid", []byte("keep"))
+	frames.put("default", "finished", "finished-uid", []byte("drop"))
+	frames.put("default", "stale", "stale-uid", []byte("drop"))
+	frames.frames[liveViewKey("default", "stale", "stale-uid")] = liveViewFrame{
+		at: now.Add(-liveViewFrameTTL - time.Second), namespace: "default", name: "stale", uid: "stale-uid",
+	}
+
+	frames.sweep(t.Context(), func(_ context.Context, _, name string, _ types.UID) bool {
+		return name == "running" || name == "stale"
+	})
+
+	require.Len(t, frames.frames, 1, "a finished or expired Task's frame stayed in memory")
+	_, kept := frames.get(liveViewKey("default", "running", "running-uid"))
+	require.True(t, kept)
+}
+
+func TestLiveViewTaskRunningMatchesTheTaskUID(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	s := &Server{client: f.client}
+	require.True(t, s.liveViewTaskRunning(t.Context(), "default", "shop", "shop-uid"))
+	require.False(t, s.liveViewTaskRunning(t.Context(), "default", "shop", "an-earlier-uid"), "a recreated Task kept the old frame")
+	require.False(t, s.liveViewTaskRunning(t.Context(), "default", "gone", "gone-uid"), "a deleted Task kept its frame")
+}
+
+func TestLiveViewFrameUploadsAreBounded(t *testing.T) {
+	for _, target := range []string{"/internal/v1/live/default/shop", "/INTERNAL/v1/Live/default/shop/"} {
+		header := &fasthttp.RequestHeader{}
+		header.SetMethod(http.MethodPost)
+		header.SetRequestURI(target)
+		config := requestBodyConfig(header)
+		require.Equal(t, maxLiveViewFrameBytes, config.MaxRequestBodySize, target)
+		require.Equal(t, liveViewReadTimeout, config.ReadTimeout, target)
+	}
 }

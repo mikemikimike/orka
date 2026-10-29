@@ -7,12 +7,15 @@ MIT License - see LICENSE file for details.
 package api
 
 import (
+	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
@@ -33,18 +36,27 @@ const (
 	// maxLiveViewFrameBytes bounds one frame; a 1280x800 JPEG at the
 	// worker's quality is about a tenth of this.
 	maxLiveViewFrameBytes = 1 << 20
-	// liveViewFrameTTL is how long a frame is shown after it arrived. A page
-	// that stops repainting sends nothing, so an older frame is still the
-	// current picture; only a worker that went away leaves it stale.
-	liveViewFrameTTL = 2 * time.Minute
+	// liveViewFrameTTL is how long a frame is shown after it arrived. The
+	// worker re-sends an unchanged frame every 30 seconds, so only a worker
+	// that went away lets a frame expire.
+	liveViewFrameTTL = 90 * time.Second
+	// liveViewSweepInterval is how soon a finished, deleted, or expired
+	// Task's frame leaves memory without anyone asking for it.
+	liveViewSweepInterval = 15 * time.Second
+	// liveViewReadTimeout bounds a whole frame upload, so a Task cannot hold
+	// controller connections open with a slow one.
+	liveViewReadTimeout = 10 * time.Second
 	// maxLiveViewTasks bounds memory: about one frame per running browser Task.
 	maxLiveViewTasks = 256
 )
 
 type liveViewFrame struct {
-	data []byte
-	at   time.Time
-	seq  uint64
+	data      []byte
+	at        time.Time
+	seq       uint64
+	namespace string
+	name      string
+	uid       types.UID
 }
 
 // LiveViewFrames holds the latest screencast frame of each running browser
@@ -68,12 +80,14 @@ func liveViewKey(namespace, name string, uid types.UID) string {
 	return namespace + "/" + name + "/" + string(uid)
 }
 
-func (f *LiveViewFrames) put(key string, data []byte) {
+func (f *LiveViewFrames) put(namespace, name string, uid types.UID, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
 	f.seq++
-	f.frames[key] = liveViewFrame{data: append([]byte(nil), data...), at: now, seq: f.seq}
+	f.frames[liveViewKey(namespace, name, uid)] = liveViewFrame{
+		data: append([]byte(nil), data...), at: now, seq: f.seq, namespace: namespace, name: name, uid: uid,
+	}
 	oldestKey, oldest := "", now
 	for k, frame := range f.frames {
 		if now.Sub(frame.at) > liveViewFrameTTL {
@@ -104,6 +118,57 @@ func (f *LiveViewFrames) drop(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.frames, key)
+}
+
+// liveViewTaskRunning reports whether the Task with this UID is still running.
+type liveViewTaskRunning func(ctx context.Context, namespace, name string, uid types.UID) bool
+
+// sweep drops expired frames and the frames of Tasks that stopped running or
+// were deleted, so a finished Task's last picture leaves memory even when
+// nobody asks for it again.
+func (f *LiveViewFrames) sweep(ctx context.Context, running liveViewTaskRunning) {
+	type candidate struct {
+		key, namespace, name string
+		uid                  types.UID
+	}
+	f.mu.Lock()
+	now := f.now()
+	candidates := make([]candidate, 0, len(f.frames))
+	for key, frame := range f.frames {
+		if now.Sub(frame.at) > liveViewFrameTTL {
+			delete(f.frames, key)
+			continue
+		}
+		candidates = append(candidates, candidate{key, frame.namespace, frame.name, frame.uid})
+	}
+	f.mu.Unlock()
+	for _, c := range candidates {
+		if !running(ctx, c.namespace, c.name, c.uid) {
+			f.drop(c.key)
+		}
+	}
+}
+
+// run sweeps until ctx ends.
+func (f *LiveViewFrames) run(ctx context.Context, running liveViewTaskRunning) {
+	ticker := time.NewTicker(liveViewSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			f.sweep(ctx, running)
+		}
+	}
+}
+
+// isLiveViewFramePath matches /internal/v1/live/{namespace}/{taskName}, the
+// frame upload route, case-insensitively like the router.
+func isLiveViewFramePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && strings.EqualFold(parts[0], "internal") && strings.EqualFold(parts[1], "v1") &&
+		strings.EqualFold(parts[2], "live")
 }
 
 // liveViewTask reports whether a Task runs the operator's browser image, the
@@ -185,6 +250,16 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 	if len(data) > maxLiveViewFrameBytes {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
-	h.liveViewFrames.put(liveViewKey(namespace, task.Name, task.UID), data)
+	h.liveViewFrames.put(namespace, task.Name, task.UID, data)
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// liveViewTaskRunning keeps a frame while its Task, with the same UID, is
+// running. A lookup error keeps it; the frame still expires on its own.
+func (s *Server) liveViewTaskRunning(ctx context.Context, namespace, name string, uid types.UID) bool {
+	task := &corev1alpha1.Task{}
+	if err := s.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, task); err != nil {
+		return !apierrors.IsNotFound(err)
+	}
+	return task.UID == uid && task.Status.Phase == corev1alpha1.TaskPhaseRunning
 }
