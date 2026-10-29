@@ -524,6 +524,7 @@ describe('TaskDetail', () => {
     let attempts = 1
     let live = 404
     let liveRequests = 0
+    let liveUID: string | null = null
     server.use(
       http.get('/api/v1/tasks/:id', () =>
         HttpResponse.json({
@@ -532,8 +533,9 @@ describe('TaskDetail', () => {
           status: { phase: 'Running', attempts },
         }),
       ),
-      http.get('/api/v1/tasks/:id/live', () => {
+      http.get('/api/v1/tasks/:id/live', ({ request }) => {
         liveRequests += 1
+        liveUID = new URL(request.url).searchParams.get('uid')
         if (live === 404) return new HttpResponse(null, { status: 404 })
         return new HttpResponse(new Blob(['jpeg'], { type: 'image/jpeg' }), {
           status: 200,
@@ -555,6 +557,7 @@ describe('TaskDetail', () => {
       await client.invalidateQueries({ queryKey: ['task'] })
     })
     expect(await screen.findByRole('img', { name: "What the Task's browser shows now" })).toBeInTheDocument()
+    expect(liveUID).toBe('uid-shop')
   })
 
   it('shows activity as a trace or as raw events', async () => {

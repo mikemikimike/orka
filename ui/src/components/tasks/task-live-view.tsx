@@ -6,8 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 // A view-only picture of what a running browser Task's page shows now. It
 // renders nothing unless the operator turned live view on and this Task runs
 // the browser image; frames are never stored, so it ends with the Task.
-export function TaskLiveView({ taskId, running, paused = false }: { taskId: string; running: boolean; paused?: boolean }) {
-  const view = useTaskLiveView(taskId, running, paused)
+export function TaskLiveView({ taskId, uid, running, paused = false }: { taskId: string; uid?: string; running: boolean; paused?: boolean }) {
+  const view = useTaskLiveView(taskId, running, paused, uid)
   if (view.status === 'off') return null
 
   return (

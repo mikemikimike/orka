@@ -73,6 +73,8 @@ type liveViewFrame struct {
 	uid       types.UID
 	// job is the Job UID of the attempt whose worker sent the frame.
 	job string
+	// attempt is that attempt's number; a retry's is higher.
+	attempt int32
 }
 
 // LiveViewFrames holds the latest screencast frame of each running browser
@@ -152,22 +154,29 @@ func liveViewKey(namespace, name string, uid types.UID) string {
 	return namespace + "/" + name + "/" + string(uid)
 }
 
-func (f *LiveViewFrames) put(namespace, name string, uid types.UID, job string, data []byte) {
+// put stores a frame of the given attempt. It refuses one from an earlier
+// attempt than the stored frame's: that worker is going away, and its proof may
+// still be remembered.
+func (f *LiveViewFrames) put(namespace, name string, uid types.UID, job string, attempt int32, data []byte) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
 	key := liveViewKey(namespace, name, uid)
-	if previous, ok := f.frames[key]; ok && previous.job == job && bytes.Equal(previous.data, data) {
+	previous, ok := f.frames[key]
+	if ok && attempt < previous.attempt {
+		return false
+	}
+	if ok && previous.job == job && bytes.Equal(previous.data, data) {
 		// A keepalive of an unchanged page: it renews expiry, but the picture,
 		// its time, and its ETag stay the same.
 		previous.at = now
 		f.frames[key] = previous
-		return
+		return true
 	}
 	f.seq++
 	f.frames[key] = liveViewFrame{
 		data: append([]byte(nil), data...), at: now, changedAt: now, seq: f.seq,
-		namespace: namespace, name: name, uid: uid, job: job,
+		namespace: namespace, name: name, uid: uid, job: job, attempt: attempt,
 	}
 	oldestKey, oldest := "", now
 	for k, frame := range f.frames {
@@ -182,6 +191,7 @@ func (f *LiveViewFrames) put(namespace, name string, uid types.UID, job string, 
 	if len(f.frames) > maxLiveViewTasks && oldestKey != "" {
 		delete(f.frames, oldestKey)
 	}
+	return true
 }
 
 func (f *LiveViewFrames) get(key string) (liveViewFrame, bool) {
@@ -269,7 +279,8 @@ func liveViewTask(task *corev1alpha1.Task, browserWorkerImage string) bool {
 // GetTaskLiveView handles GET /api/v1/tasks/{id}/live: the latest frame of a
 // running browser Task, for the dashboard's view-only live view. It needs the
 // same permission as the Task's artifacts. 204 means live view is on and no
-// frame has arrived yet; 404 means the Task has no live view now.
+// frame has arrived yet; 404 means the Task has no live view now, or is not
+// the Task with the UID the optional uid query names.
 func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	id := c.Params("id")
 	namespace, err := h.resolveNamespace(c, c.Query(toolNamespaceArg, ""))
@@ -279,6 +290,11 @@ func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	task, err := h.taskAccess().loadReadable(c, "getTaskLiveView", namespace, id)
 	if err != nil {
 		return err
+	}
+	// The dashboard names the Task it shows: one recreated under the same name
+	// since it last read the Task is not that Task.
+	if uid := c.Query("uid"); uid != "" && types.UID(uid) != task.UID {
+		return fiber.NewError(fiber.StatusNotFound, "the Task was replaced")
 	}
 	if h.liveViewFrames == nil {
 		return fiber.NewError(fiber.StatusNotFound, "live view is not enabled")
@@ -369,7 +385,9 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 	}
 	// The verified Task's own strings: Fiber's route parameters point into a
 	// request buffer that later requests reuse.
-	h.liveViewFrames.put(task.Namespace, task.Name, task.UID, task.Status.JobUID, data)
+	if !h.liveViewFrames.put(task.Namespace, task.Name, task.UID, task.Status.JobUID, task.Status.Attempts, data) {
+		return fiber.NewError(fiber.StatusForbidden, "a later attempt of this Task is running")
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

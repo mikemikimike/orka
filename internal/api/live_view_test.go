@@ -60,6 +60,7 @@ func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
 	objects := make([]client.Object, 0, 9)
 	for name, image := range map[string]string{"shop": liveViewTestImage, "other": "busybox:1.37", "custom": liveViewTestImage} {
 		task := internalCallerAuthTaskObject(name, name+"-uid", name+"-job", "", "")
+		task.Status.Attempts = 1
 		task.Spec.Type = corev1alpha1.TaskTypeContainer
 		task.Spec.Image = image
 		if name == "custom" {
@@ -188,14 +189,14 @@ func TestLiveViewFramesExpireAndStayBounded(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	frames.now = func() time.Time { return now }
 
-	frames.put("default", "a", "a-uid", "job-uid", []byte("old"))
+	frames.put("default", "a", "a-uid", "job-uid", 1, []byte("old"))
 	now = now.Add(liveViewFrameTTL + time.Second)
 	_, ok := frames.get(liveViewKey("default", "a", "a-uid"))
 	require.False(t, ok, "a frame outlived its time to live")
 
 	for i := 0; i <= maxLiveViewTasks; i++ {
 		now = now.Add(time.Millisecond)
-		frames.put("default", fmt.Sprintf("task-%d", i), "uid", "job-uid", []byte("frame"))
+		frames.put("default", fmt.Sprintf("task-%d", i), "uid", "job-uid", 1, []byte("frame"))
 	}
 	require.Len(t, frames.frames, maxLiveViewTasks)
 	_, ok = frames.get(liveViewKey("default", "task-0", "uid"))
@@ -209,9 +210,9 @@ func TestLiveViewSweepDropsFramesOfTasksThatStopped(t *testing.T) {
 	frames := NewLiveViewFrames()
 	now := time.Unix(1_800_000_000, 0)
 	frames.now = func() time.Time { return now }
-	frames.put("default", "running", "running-uid", "job-uid", []byte("keep"))
-	frames.put("default", "finished", "finished-uid", "job-uid", []byte("drop"))
-	frames.put("default", "stale", "stale-uid", "job-uid", []byte("drop"))
+	frames.put("default", "running", "running-uid", "job-uid", 1, []byte("keep"))
+	frames.put("default", "finished", "finished-uid", "job-uid", 1, []byte("drop"))
+	frames.put("default", "stale", "stale-uid", "job-uid", 1, []byte("drop"))
 	frames.frames[liveViewKey("default", "stale", "stale-uid")] = liveViewFrame{
 		at: now.Add(-liveViewFrameTTL - time.Second), namespace: "default", name: "stale", uid: "stale-uid",
 	}
@@ -313,12 +314,53 @@ func TestLiveViewShowsOnlyTheCurrentAttemptsFrames(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, f.get(t, "shop").StatusCode, "the previous attempt's frame was shown")
 
 	// The same picture from the new attempt's worker is a new frame, not a keepalive.
-	f.frames.put("default", "shop", task.UID, "shop-job-2-uid", []byte("attempt-1"))
+	f.frames.put("default", "shop", task.UID, "shop-job-2-uid", 2, []byte("attempt-1"))
 	resp := f.get(t, "shop")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "attempt-1", string(body))
+}
+
+// The previous attempt's worker may still be shutting down when the retry's
+// worker sends its first frame, and its proof is remembered for a while: a
+// late frame from it must not replace the retry's.
+func TestLiveViewRefusesAnEarlierAttemptsLateFrame(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("attempt-1")).StatusCode)
+
+	task := &corev1alpha1.Task{}
+	require.NoError(t, f.client.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "shop"}, task))
+	task.Status.Attempts = 2
+	task.Status.JobName, task.Status.JobUID = "shop-job-2", "shop-job-2-uid"
+	require.NoError(t, f.client.Status().Update(t.Context(), task))
+	job := internalCallerAuthJob(task, "shop-job-2", "shop-job-2-uid")
+	require.NoError(t, f.client.Create(t.Context(), job))
+	require.NoError(t, f.client.Create(t.Context(), internalCallerAuthPod(task, "shop-pod-2", "shop-pod-2-uid", job)))
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod-2", "image/jpeg", []byte("attempt-2")).StatusCode)
+
+	require.Equal(t, http.StatusForbidden, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("late")).StatusCode,
+		"the earlier attempt's worker was not told to stop")
+	resp := f.get(t, "shop")
+	require.Equal(t, http.StatusOK, resp.StatusCode, "the earlier attempt's frame replaced the retry's")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "attempt-2", string(body))
+}
+
+// The dashboard names the Task it shows by UID: a Task recreated under the
+// same name between two of its Task polls must not stream into the old card.
+func TestLiveViewServesOnlyTheTaskTheDashboardShows(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame")).StatusCode)
+	get := func(uid string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/shop/live?namespace=default&uid="+uid, nil)
+		resp, err := f.app.Test(req)
+		require.NoError(t, err)
+		return resp.StatusCode
+	}
+	require.Equal(t, http.StatusOK, get("shop-uid"))
+	require.Equal(t, http.StatusNotFound, get("replaced-shop-uid"), "another Task of this name streamed into the card")
 }
 
 // Fiber's route parameters point into a request buffer that later requests
@@ -343,10 +385,10 @@ func TestLiveViewFrameKeepsItsNamespaceAcrossRequests(t *testing.T) {
 // the new one.
 func TestLiveViewCleanupKeepsANewerAttemptsFrame(t *testing.T) {
 	frames := NewLiveViewFrames()
-	frames.put("default", "shop", "shop-uid", "job-1", []byte("attempt-1"))
+	frames.put("default", "shop", "shop-uid", "job-1", 1, []byte("attempt-1"))
 	frames.sweep(t.Context(), func(context.Context, string, string, types.UID) bool {
 		// The new attempt posts while the sweeper sees the Task between attempts.
-		frames.put("default", "shop", "shop-uid", "job-2", []byte("attempt-2"))
+		frames.put("default", "shop", "shop-uid", "job-2", 2, []byte("attempt-2"))
 		return false
 	})
 	frame, ok := frames.get(liveViewKey("default", "shop", "shop-uid"))
@@ -358,7 +400,7 @@ func TestLiveViewCleanupKeepsANewerAttemptsFrame(t *testing.T) {
 	require.NoError(t, f.client.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "shop"}, task))
 	task.Status.Phase, task.Status.JobName, task.Status.JobUID = corev1alpha1.TaskPhasePending, "", ""
 	require.NoError(t, f.client.Status().Update(t.Context(), task))
-	f.frames.put("default", "shop", task.UID, "shop-job-2-uid", []byte("attempt-2"))
+	f.frames.put("default", "shop", task.UID, "shop-job-2-uid", 2, []byte("attempt-2"))
 	require.Equal(t, http.StatusNotFound, f.get(t, "shop").StatusCode)
 	_, ok = f.frames.get(liveViewKey("default", "shop", task.UID))
 	require.True(t, ok, "a read of the Task between attempts dropped the next attempt's frame")
@@ -377,10 +419,10 @@ func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
 	frames.now = func() time.Time { return now }
 	key := liveViewKey("default", "shop", "shop-uid")
 
-	frames.put("default", "shop", "shop-uid", "job-uid", []byte("still-page"))
+	frames.put("default", "shop", "shop-uid", "job-uid", 1, []byte("still-page"))
 	first, _ := frames.get(key)
 	now = start.Add(liveViewFrameTTL - time.Second)
-	frames.put("default", "shop", "shop-uid", "job-uid", []byte("still-page"))
+	frames.put("default", "shop", "shop-uid", "job-uid", 1, []byte("still-page"))
 	now = start.Add(liveViewFrameTTL + time.Second)
 
 	kept, ok := frames.get(key)
@@ -388,7 +430,7 @@ func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
 	require.Equal(t, first.seq, kept.seq, "a keepalive changed the ETag")
 	require.Equal(t, start, kept.changedAt, "a keepalive moved the time the page last changed")
 
-	frames.put("default", "shop", "shop-uid", "job-uid", []byte("new-page"))
+	frames.put("default", "shop", "shop-uid", "job-uid", 1, []byte("new-page"))
 	changed, _ := frames.get(key)
 	require.NotEqual(t, first.seq, changed.seq)
 	require.Equal(t, now, changed.changedAt)
@@ -396,8 +438,8 @@ func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
 
 func TestLiveViewETagsDifferAcrossControllerRestarts(t *testing.T) {
 	before, after := NewLiveViewFrames(), NewLiveViewFrames()
-	before.put("default", "shop", "shop-uid", "job-uid", []byte("frame-a"))
-	after.put("default", "shop", "shop-uid", "job-uid", []byte("frame-b"))
+	before.put("default", "shop", "shop-uid", "job-uid", 1, []byte("frame-a"))
+	after.put("default", "shop", "shop-uid", "job-uid", 1, []byte("frame-b"))
 	a, _ := before.get(liveViewKey("default", "shop", "shop-uid"))
 	b, _ := after.get(liveViewKey("default", "shop", "shop-uid"))
 	require.Equal(t, a.seq, b.seq, "both holders start their sequence at the same number")

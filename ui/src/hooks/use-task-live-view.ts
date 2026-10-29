@@ -11,9 +11,14 @@ export type TaskLiveView =
 /** How often the latest frame is fetched; the worker sends at most two a second. */
 export const LIVE_VIEW_POLL_MS = 1000
 
-export function taskLiveViewUrl(taskId: string, namespace: string) {
-  const ns = namespace ? `?namespace=${encodeURIComponent(namespace)}` : ''
-  return `${API_BASE_URL}/tasks/${encodeURIComponent(taskId)}/live${ns}`
+// uid names the Task the page shows: the controller answers 404 for another
+// Task since created under the same name.
+export function taskLiveViewUrl(taskId: string, namespace: string, uid = '') {
+  const query = new URLSearchParams()
+  if (namespace) query.set('namespace', namespace)
+  if (uid) query.set('uid', uid)
+  const search = query.toString()
+  return `${API_BASE_URL}/tasks/${encodeURIComponent(taskId)}/live${search ? `?${search}` : ''}`
 }
 
 // frameDataUrl turns a frame into a data: URL. The dashboard's Content
@@ -35,9 +40,9 @@ function frameDataUrl(frame: Blob): Promise<string> {
 // The view belongs to one Task: switching Tasks or namespaces never shows the
 // previous Task's frame, even while the new one waits for its first. Paused,
 // it keeps the current frame and stops polling, like the page's Following.
-export function useTaskLiveView(taskId: string, enabled: boolean, paused = false): TaskLiveView {
+export function useTaskLiveView(taskId: string, enabled: boolean, paused = false, uid = ''): TaskLiveView {
   const namespace = useUIStore((s) => s.namespace)
-  const identity = `${namespace}/${taskId}`
+  const identity = `${namespace}/${taskId}/${uid}`
   const [state, setState] = useState<{ identity: string; view: TaskLiveView }>({
     identity,
     view: { status: 'waiting' },
@@ -56,7 +61,7 @@ export function useTaskLiveView(taskId: string, enabled: boolean, paused = false
         const headers: Record<string, string> = {}
         if (token) headers.Authorization = `Bearer ${token}`
         if (etag) headers['If-None-Match'] = etag
-        const res = await fetch(taskLiveViewUrl(taskId, namespace), { headers, signal: abort.signal, cache: 'no-store' })
+        const res = await fetch(taskLiveViewUrl(taskId, namespace, uid), { headers, signal: abort.signal, cache: 'no-store' })
         if (stopped) return
         if (res.status === 404 || res.status === 501) {
           setState({ identity, view: { status: 'off' } })
@@ -85,7 +90,7 @@ export function useTaskLiveView(taskId: string, enabled: boolean, paused = false
       abort.abort()
       clearTimeout(timer)
     }
-  }, [taskId, namespace, identity, enabled, paused])
+  }, [taskId, namespace, uid, identity, enabled, paused])
 
   if (!enabled) return { status: 'off' }
   return state.identity === identity ? state.view : { status: 'waiting' }

@@ -428,6 +428,7 @@ export function TaskDetail({ taskId }: { taskId: string }) {
             <TaskLiveView
               key={`${task.metadata.namespace}/${task.metadata.name}/${task.metadata.uid}/${task.status?.attempts ?? 0}`}
               taskId={taskId}
+              uid={task.metadata.uid}
               running={taskRunning}
               paused={!following}
             />

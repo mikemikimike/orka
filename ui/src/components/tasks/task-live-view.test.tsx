@@ -41,6 +41,13 @@ describe('TaskLiveView', () => {
     expect(init.headers.Authorization).toBe('Bearer viewer-token')
   })
 
+  it('names the Task it shows by UID', async () => {
+    fetchMock.mockResolvedValue(frame())
+    render(<TaskLiveView taskId="shop" uid="uid-shop" running />)
+    await screen.findByRole('img')
+    expect(new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost').searchParams.get('uid')).toBe('uid-shop')
+  })
+
   it('waits for the first frame', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
     render(<TaskLiveView taskId="shop" running />)
