@@ -1878,6 +1878,11 @@ func (r *RepositoryScanReconciler) collectScanRunProgress(
 	sort.Strings(reviewKeys)
 	for _, key := range reviewKeys {
 		task := reviewTasks[key]
+		if task.Status.Phase == corev1alpha1.TaskPhaseFailed {
+			if retryTask := r.uncachedReviewRetry(ctx, task); retryTask != nil {
+				task = retryTask
+			}
+		}
 		progress.hasReview = true
 		progress.reviewCount++
 		recordScanTaskTiming(&progress, task)
@@ -1889,6 +1894,32 @@ func (r *RepositoryScanReconciler) collectScanRunProgress(
 		}
 	}
 	return progress
+}
+
+// uncachedReviewRetry reads the retry of a failed first review attempt past
+// the informer cache. The retry is created just before progress is refreshed,
+// and a cache that has not seen it yet would end the run on the failure the
+// retry replaces.
+func (r *RepositoryScanReconciler) uncachedReviewRetry(ctx context.Context, task *corev1alpha1.Task) *corev1alpha1.Task {
+	attempt, ok := securityReviewAttempt(task)
+	sliceID := strings.TrimSpace(task.Labels[labels.LabelSecuritySliceID])
+	owner := metav1.GetControllerOf(task)
+	if !ok || attempt != securityReviewInitialAttempt || sliceID == "" || owner == nil || owner.Kind != "RepositoryScan" {
+		return nil
+	}
+	name := security.ScanStageRetryTaskName(owner.Name, scanTaskRunID(task), security.StageReview, sliceID, securityReviewRetryAttempt)
+	reader := uncachedReader(r.APIReader, r.Client)
+	if reader == nil {
+		return nil
+	}
+	retryTask := &corev1alpha1.Task{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: name}, retryTask); err != nil {
+		return nil
+	}
+	if retryAttempt, ok := securityReviewAttempt(retryTask); !ok || retryAttempt != securityReviewRetryAttempt || scanTaskRunID(retryTask) != scanTaskRunID(task) {
+		return nil
+	}
+	return retryTask
 }
 
 func recordScanTaskTiming(progress *scanRunProgress, task *corev1alpha1.Task) {
@@ -3459,15 +3490,20 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 		if err != nil {
 			return err
 		}
+		// A repeat of a finding this run keeps is stored as its duplicate and
+		// does not take a place under the run's cap. Duplicates are linked
+		// only after their canonical finding survives the cap and is stored
+		// under its final ID.
+		stored := make(map[*store.Finding]struct{}, len(kept))
+		for _, finding := range kept {
+			stored[finding] = struct{}{}
+		}
 		unique := make([]*store.Finding, 0, len(partition.Accepted))
+		type duplicateFinding struct{ finding, canonical *store.Finding }
+		var duplicates []duplicateFinding
 		for _, finding := range partition.Accepted {
-			// A repeat of a finding this run already kept is stored as its
-			// duplicate and does not take a place under the run's cap.
 			if canonical := findingWithSharedAnchor(finding, kept); canonical != nil {
-				finding.DuplicateOf = canonical.ID
-				if err := tx.SecurityStore.UpsertObservedFinding(ctx, finding); err != nil {
-					return err
-				}
+				duplicates = append(duplicates, duplicateFinding{finding, canonical})
 				continue
 			}
 			unique = append(unique, finding)
@@ -3487,6 +3523,17 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 				return err
 			}
 			ingestion.FindingIDs = append(ingestion.FindingIDs, finding.ID)
+			stored[finding] = struct{}{}
+		}
+		for _, duplicate := range duplicates {
+			// A repeat of a capped finding is dropped with it.
+			if _, ok := stored[duplicate.canonical]; !ok || duplicate.finding.ID == duplicate.canonical.ID {
+				continue
+			}
+			duplicate.finding.DuplicateOf = duplicate.canonical.ID
+			if err := tx.SecurityStore.UpsertObservedFinding(ctx, duplicate.finding); err != nil {
+				return err
+			}
 		}
 		clearReviewRunError(current, sliceID)
 		current.AcceptedFindings += len(accepted)

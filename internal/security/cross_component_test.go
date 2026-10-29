@@ -1,6 +1,8 @@
 package security
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -64,6 +66,18 @@ func TestParseThreatModelResultRendersInvestigations(t *testing.T) {
 	got := ThreatModelInvestigations(content)
 	if len(got) != 1 || got[0].Question != "Does input reach the sink?" {
 		t.Fatalf("investigations = %#v", got)
+	}
+
+	// An incremental result that omits investigations keeps the saved ones.
+	result.ThreatModel, result.Investigations = content, nil
+	updated, err := ParseThreatModelResult(mustMarshalSecurityResult(t, result), AgentResultBinding{
+		RepositoryScan: binding.RepositoryScan, ScanID: binding.ScanID, PolicyDigest: binding.PolicyDigest,
+	})
+	if err != nil {
+		t.Fatalf("ParseThreatModelResult(without investigations) error = %v", err)
+	}
+	if got := ThreatModelInvestigations(updated); len(got) != 1 {
+		t.Fatalf("investigations after an incremental result = %#v, want the saved one kept", got)
 	}
 }
 
@@ -244,5 +258,29 @@ func TestParseValidationResultAcceptsCalibratedRatings(t *testing.T) {
 	bad := strings.Replace(string(data), `"status":"validated"`, `"status":"maybe"`, 1)
 	if _, err := ParseValidationResult([]byte(bad), expected); err == nil {
 		t.Fatal("ParseValidationResult() accepted an unknown status")
+	}
+}
+
+func TestMarshalReviewContextKeepsManifestWithinLimit(t *testing.T) {
+	manifest := ReviewContextManifest{SchemaVersion: SchemaVersionReviewContext, SliceID: "slice_inv"}
+	long := strings.Repeat("d/", 120)
+	for i := range MaxReviewContextReferenceFiles {
+		manifest.ReferenceFiles = append(manifest.ReferenceFiles, ReviewContextReferenceFile{
+			Path: fmt.Sprintf("%sfile%04d.go", long, i), Lines: 100, Relation: ReferenceRelationRepository,
+		})
+	}
+	data, err := MarshalReviewContext(manifest)
+	if err != nil {
+		t.Fatalf("MarshalReviewContext() error = %v", err)
+	}
+	if len(data) > maxReviewContextBytes {
+		t.Fatalf("manifest = %d bytes, want at most %d", len(data), maxReviewContextBytes)
+	}
+	var got ReviewContextManifest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(got.ReferenceFiles) == 0 || len(got.ReferenceFiles) == len(manifest.ReferenceFiles) || got.ReferenceFiles[0] != manifest.ReferenceFiles[0] {
+		t.Fatalf("kept %d of %d references, want a trimmed prefix", len(got.ReferenceFiles), len(manifest.ReferenceFiles))
 	}
 }

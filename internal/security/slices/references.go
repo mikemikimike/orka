@@ -33,7 +33,7 @@ func ReferenceFiles(root string, reviewSlices []store.ReviewSlice) (map[string][
 		return nil, err
 	}
 	lines := referenceLineCounts(root, files)
-	graph := newGoImportGraph(root, files)
+	graph := newGoImportGraph(root, files, lines)
 	repository := repositoryReferenceFiles(files, lines)
 
 	out := make(map[string][]security.ReviewContextReferenceFile, len(reviewSlices))
@@ -188,7 +188,9 @@ type goModule struct {
 	dir  string
 }
 
-func newGoImportGraph(root string, files []repoFile) *goImportGraph {
+// Only files with a line count, which are regular and within the reference
+// size bound, are parsed.
+func newGoImportGraph(root string, files []repoFile, lines map[string]int) *goImportGraph {
 	graph := &goImportGraph{
 		sources:   map[string][]string{},
 		edges:     map[string]map[string]struct{}{},
@@ -201,7 +203,7 @@ func newGoImportGraph(root string, files []repoFile) *goImportGraph {
 				graph.modules = append(graph.modules, goModule{path: module, dir: file.Dir})
 			}
 		}
-		if file.Ext == extGo && !strings.HasSuffix(file.Name, "_test.go") {
+		if _, ok := lines[file.Path]; ok && file.Ext == extGo && !strings.HasSuffix(file.Name, "_test.go") {
 			graph.sources[file.Dir] = append(graph.sources[file.Dir], file.Path)
 			graph.goDirsSet[file.Dir] = struct{}{}
 		}

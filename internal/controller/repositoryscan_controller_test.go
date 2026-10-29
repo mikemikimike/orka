@@ -7131,6 +7131,12 @@ func TestIngestReviewTaskRetriesFailedPromptOnce(t *testing.T) {
 	if progress := fixture.reconciler.collectScanRunProgress(fixture.ctx, tasks.Items); progress.reviewCount != 1 || len(progress.failedStages) != 0 || !progress.hasActive {
 		t.Fatalf("progress = %#v, want the superseded failure ignored", progress)
 	}
+	// A cache that has not seen the retry yet must not end the run on the
+	// failure the retry replaces.
+	stale := []corev1alpha1.Task{*fixture.sourceTask}
+	if progress := fixture.reconciler.collectScanRunProgress(fixture.ctx, stale); len(progress.failedStages) != 0 || !progress.hasActive {
+		t.Fatalf("progress from a stale cache = %#v, want the retry observed", progress)
+	}
 
 	// The retry is the slice's last chance: its failure fails the run.
 	retryTask.Status.Phase = corev1alpha1.TaskPhaseFailed
@@ -7240,6 +7246,59 @@ func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
 }
 
 func TestIngestReviewTaskStoresRepeatedControlAsDuplicateOutsideCap(t *testing.T) {
+	run, all := ingestOneSliceUnderCapOfOne(t,
+		duplicateTestFinding("Missing authorization check", "authz", 5),
+		// Same broken control, reported again under other words.
+		duplicateTestFinding("Callers bypass the API permission gate", "CWE-863", 6),
+		// A different control competes for the run's single place.
+		duplicateTestFinding("Audit bypass", "authz", 9),
+	)
+	if run.AcceptedFindings != 1 || run.DroppedFindings != 1 {
+		t.Fatalf("run counts accepted=%d dropped=%d, want 1/1: the repeat must not consume the cap (%s)", run.AcceptedFindings, run.DroppedFindings, run.ErrorMessage)
+	}
+	var canonicalID, duplicateOf string
+	for _, item := range all {
+		switch item.Title {
+		case "Missing authorization check":
+			canonicalID = item.ID
+		case "Callers bypass the API permission gate":
+			duplicateOf = item.DuplicateOf
+		case "Audit bypass":
+			t.Fatalf("capped finding was stored: %#v", item)
+		}
+	}
+	if canonicalID == "" || duplicateOf != canonicalID {
+		t.Fatalf("findings = %#v, want the repeat stored as a duplicate of the first", all)
+	}
+}
+
+func TestIngestReviewTaskDropsRepeatOfCappedFinding(t *testing.T) {
+	run, all := ingestOneSliceUnderCapOfOne(t,
+		duplicateTestFinding("Missing authorization check", "authz", 5),
+		duplicateTestFinding("Audit bypass", "authz", 9),
+		// Repeats the capped finding, so it has no stored canonical to alias.
+		duplicateTestFinding("Audit bypass, reported again", "authz", 11),
+	)
+	if run.AcceptedFindings != 1 || run.DroppedFindings != 1 {
+		t.Fatalf("run counts accepted=%d dropped=%d, want 1/1 (%s)", run.AcceptedFindings, run.DroppedFindings, run.ErrorMessage)
+	}
+	if len(all) != 1 || all[0].Title != "Missing authorization check" {
+		t.Fatalf("findings = %#v, want only the kept finding and no alias to the capped one", all)
+	}
+}
+
+func duplicateTestFinding(title, category string, start int) security.FindingsV2Finding {
+	return security.FindingsV2Finding{
+		Title: title, Category: category, Severity: "high", Confidence: "high", Summary: title, Remediation: "Check authorization.",
+		Evidence: []security.FindingsV2EvidenceRef{{Path: "internal/api/security.go", StartLine: start, EndLine: start + 3, Role: "root_control"}},
+	}
+}
+
+// ingestOneSliceUnderCapOfOne ingests one review result into a run limited to
+// a single finding and returns the run and every stored finding, duplicates
+// included.
+func ingestOneSliceUnderCapOfOne(t *testing.T, items ...security.FindingsV2Finding) (*storepkg.ScanRun, []storepkg.Finding) {
+	t.Helper()
 	ctx := context.Background()
 	store := setupControllerSQLiteStore(t)
 	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
@@ -7271,55 +7330,26 @@ func TestIngestReviewTaskStoresRepeatedControlAsDuplicateOutsideCap(t *testing.T
 		}},
 		Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded},
 	}
-	finding := func(title, category string, start int) security.FindingsV2Finding {
-		return security.FindingsV2Finding{
-			Title: title, Category: category, Severity: "high", Confidence: "high", Summary: title, Remediation: "Check authorization.",
-			Evidence: []security.FindingsV2EvidenceRef{{Path: "internal/api/security.go", StartLine: start, EndLine: start + 3, Role: "root_control"}},
-		}
-	}
 	findings := security.FindingsV2Artifact{
 		SchemaVersion: security.SchemaVersionFindingsV2,
 		Repository:    security.FindingsV2Repository{RepoURL: "https://github.com/example/repo", Branch: "main", BaseSHA: "trusted-base", HeadSHA: "trusted-head"},
 		Scan:          security.FindingsV2Scan{Mode: "initial", SliceID: "slice_api"},
-		Findings: []security.FindingsV2Finding{
-			finding("Missing authorization check", "authz", 5),
-			// Same broken control, reported again under other words.
-			finding("Callers bypass the API permission gate", "CWE-863", 6),
-			// A different control competes for the run's single place.
-			finding("Audit bypass", "authz", 9),
-		},
+		Findings:      items,
 	}
 	saveFindingsTaskResult(t, store, task, scan.Name, "scan_dupes", policyDigest, reviewSlice.ReviewContextHash, "slice_api", findings)
 	reconciler.APIReader = repositoryScanRunTestClient(t, scan)
 	if err := reconciler.ingestScanTask(ctx, scan, task); err != nil {
 		t.Fatalf("ingestScanTask() error = %v", err)
 	}
-
 	run, err := store.GetScanRun(ctx, defaultNS, "scan_dupes")
 	if err != nil {
 		t.Fatalf("GetScanRun() error = %v", err)
-	}
-	if run.AcceptedFindings != 1 || run.DroppedFindings != 1 {
-		t.Fatalf("run counts accepted=%d dropped=%d, want 1/1: the repeat must not consume the cap", run.AcceptedFindings, run.DroppedFindings)
 	}
 	all, _, err := store.ListFindings(ctx, storepkg.FindingFilter{Namespace: defaultNS, RepositoryScan: "kaset", IncludeDuplicates: true})
 	if err != nil {
 		t.Fatalf("ListFindings() error = %v", err)
 	}
-	var canonicalID, duplicateOf string
-	for _, item := range all {
-		switch item.Title {
-		case "Missing authorization check":
-			canonicalID = item.ID
-		case "Callers bypass the API permission gate":
-			duplicateOf = item.DuplicateOf
-		case "Audit bypass":
-			t.Fatalf("capped finding was stored: %#v", item)
-		}
-	}
-	if canonicalID == "" || duplicateOf != canonicalID {
-		t.Fatalf("findings = %#v, want the repeat stored as a duplicate of the first", all)
-	}
+	return run, all
 }
 
 func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {

@@ -351,7 +351,7 @@ func runSecurityMapper(ctx context.Context) error {
 			return fmt.Errorf("build security review context for %s: %w", contextSlice.ID, err)
 		}
 		manifest.ReferenceFiles = references[contextSlice.ID]
-		manifestData, err := json.Marshal(manifest)
+		manifestData, err := security.MarshalReviewContext(manifest)
 		if err != nil {
 			return fmt.Errorf("marshal security review context for %s: %w", contextSlice.ID, err)
 		}

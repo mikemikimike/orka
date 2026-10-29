@@ -61,6 +61,28 @@ type AgentResultBinding struct {
 	ContextDigest  string
 }
 
+// MarshalReviewContext encodes a review context within the size a scan
+// accepts. When the reference listing would not fit, trailing references are
+// dropped; the mapper lists the most relevant ones first.
+func MarshalReviewContext(manifest ReviewContextManifest) ([]byte, error) {
+	data, err := json.Marshal(manifest)
+	if err != nil || len(data) <= maxReviewContextBytes {
+		return data, err
+	}
+	excess := len(data) - maxReviewContextBytes
+	references := manifest.ReferenceFiles
+	for excess > 0 && len(references) > 0 {
+		last, err := json.Marshal(references[len(references)-1])
+		if err != nil {
+			return nil, err
+		}
+		excess -= len(last) + 1
+		references = references[:len(references)-1]
+	}
+	manifest.ReferenceFiles = references
+	return json.Marshal(manifest)
+}
+
 // ParseTrustedReviewContextManifest validates the mapper-owned context used as
 // an evidence boundary for a review Task.
 func ParseTrustedReviewContextManifest(data []byte) (*ReviewContextManifest, string, error) {
@@ -184,7 +206,11 @@ func ParseThreatModelResult(data []byte, expected AgentResultBinding) (string, e
 	if securityResultLooksLikeToolTranscript(content) {
 		return "", fmt.Errorf("threatModel looks like a tool transcript")
 	}
-	content = RenderThreatModelInvestigations(content, result.Investigations)
+	// Incremental scans do not request investigations; keep the saved
+	// section unless the result supplies a replacement.
+	if result.Investigations != nil {
+		content = RenderThreatModelInvestigations(content, result.Investigations)
+	}
 	content = SanitizeThreatModel(content)
 	if len(content) > maxThreatModelBytes {
 		return "", fmt.Errorf("threatModel exceeds %d bytes", maxThreatModelBytes)

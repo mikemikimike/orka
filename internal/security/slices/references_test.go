@@ -131,3 +131,23 @@ func TestMapRepositorySkipsBuildOutputOnlyAtTheRoot(t *testing.T) {
 		t.Fatalf("owned = %v, want root build output skipped", owned)
 	}
 }
+
+func TestGoImportGraphParsesOnlyIndexedFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n")
+	writeFile(t, root, "a/a.go", "package a\n\nimport _ \"example.com/app/b\"\n")
+	writeFile(t, root, "b/b.go", "package b\n")
+	files, err := collectFiles(root)
+	if err != nil {
+		t.Fatalf("collectFiles() error = %v", err)
+	}
+	lines := referenceLineCounts(root, files)
+	if got := newGoImportGraph(root, files, lines).imports("a"); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("imports(a) = %v, want [b]", got)
+	}
+	// A file over the reference size bound has no line count and is not read.
+	delete(lines, "a/a.go")
+	if got := newGoImportGraph(root, files, lines).imports("a"); len(got) != 0 {
+		t.Fatalf("imports(a) = %v, want none for an unindexed file", got)
+	}
+}
