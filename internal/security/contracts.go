@@ -149,6 +149,74 @@ type FindingsV2Scan struct {
 	// and ruled out, so a slice without findings still explains its result.
 	ReviewedFiles     []string                     `json:"reviewedFiles,omitempty"`
 	ResolvedQuestions []FindingsV2ResolvedQuestion `json:"resolvedQuestions,omitempty"`
+	Limitations       []string                     `json:"limitations,omitempty"`
+}
+
+// UnmarshalJSON reads the scan block leniently. Mode and sliceId are still
+// checked against the task identity, but descriptive keys a reviewer adds
+// must not discard the findings that accompany them.
+func (s *FindingsV2Scan) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Mode              string            `json:"mode"`
+		SliceID           string            `json:"sliceId"`
+		Summary           FlexibleText      `json:"summary"`
+		ReviewedFiles     json.RawMessage   `json:"reviewedFiles"`
+		ResolvedQuestions []json.RawMessage `json:"resolvedQuestions"`
+		Limitations       json.RawMessage   `json:"limitations"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = FindingsV2Scan{Mode: raw.Mode, SliceID: raw.SliceID, Summary: string(raw.Summary)}
+	s.ReviewedFiles = lenientStringList(raw.ReviewedFiles)
+	s.Limitations = lenientStringList(raw.Limitations)
+	for _, item := range raw.ResolvedQuestions {
+		var question struct {
+			Question   FlexibleText `json:"question"`
+			Resolution FlexibleText `json:"resolution"`
+			Answer     FlexibleText `json:"answer"`
+			Evidence   FlexibleText `json:"evidence"`
+		}
+		if json.Unmarshal(item, &question) != nil {
+			var text string
+			if json.Unmarshal(item, &text) == nil {
+				s.ResolvedQuestions = append(s.ResolvedQuestions, FindingsV2ResolvedQuestion{Question: text})
+			}
+			continue
+		}
+		resolution := strings.TrimSpace(string(question.Resolution))
+		if resolution == "" {
+			resolution = strings.TrimSpace(string(question.Answer))
+		}
+		if evidence := strings.TrimSpace(string(question.Evidence)); evidence != "" {
+			resolution = strings.TrimSpace(resolution + "\nEvidence: " + evidence)
+		}
+		s.ResolvedQuestions = append(s.ResolvedQuestions, FindingsV2ResolvedQuestion{
+			Question: string(question.Question), Resolution: resolution,
+		})
+	}
+	return nil
+}
+
+// lenientStringList accepts a string array, a single string, or any other
+// JSON, which is kept as one compact entry.
+func lenientStringList(data json.RawMessage) []string {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var list []FlexibleText
+	if json.Unmarshal(data, &list) == nil {
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			out = append(out, string(item))
+		}
+		return out
+	}
+	var single FlexibleText
+	if json.Unmarshal(data, &single) == nil && single != "" {
+		return []string{string(single)}
+	}
+	return nil
 }
 
 // FindingsV2ResolvedQuestion is a security question the reviewer checked and
@@ -173,6 +241,39 @@ type FindingsV2Finding struct {
 	WhyTestsDoNotAlreadyCoverThis string                  `json:"whyTestsDoNotAlreadyCoverThis"`
 	SuggestedRegressionTest       string                  `json:"suggestedRegressionTest"`
 	MinimumFixScope               string                  `json:"minimumFixScope"`
+}
+
+// UnmarshalJSON reads a finding leniently: unknown keys are ignored and
+// narrative fields returned as structured JSON are kept as text. Required
+// fields and evidence are still validated before the finding is accepted.
+func (f *FindingsV2Finding) UnmarshalJSON(data []byte) error {
+	type plain FindingsV2Finding
+	var raw struct {
+		plain
+		Triage                        FlexibleText `json:"triage"`
+		Summary                       FlexibleText `json:"summary"`
+		RootCause                     FlexibleText `json:"rootCause"`
+		Reproduction                  FlexibleText `json:"reproduction"`
+		Remediation                   FlexibleText `json:"remediation"`
+		SuggestedAction               FlexibleText `json:"suggestedAction"`
+		WhyTestsDoNotAlreadyCoverThis FlexibleText `json:"whyTestsDoNotAlreadyCoverThis"`
+		SuggestedRegressionTest       FlexibleText `json:"suggestedRegressionTest"`
+		MinimumFixScope               FlexibleText `json:"minimumFixScope"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*f = FindingsV2Finding(raw.plain)
+	f.Triage = string(raw.Triage)
+	f.Summary = string(raw.Summary)
+	f.RootCause = string(raw.RootCause)
+	f.Reproduction = string(raw.Reproduction)
+	f.Remediation = string(raw.Remediation)
+	f.SuggestedAction = string(raw.SuggestedAction)
+	f.WhyTestsDoNotAlreadyCoverThis = string(raw.WhyTestsDoNotAlreadyCoverThis)
+	f.SuggestedRegressionTest = string(raw.SuggestedRegressionTest)
+	f.MinimumFixScope = string(raw.MinimumFixScope)
+	return nil
 }
 
 type FindingsV2EvidenceRef struct {

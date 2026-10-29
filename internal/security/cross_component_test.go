@@ -176,3 +176,38 @@ func TestBuildThreatModelResultPromptRequestsInvestigationsForFullScans(t *testi
 		t.Fatalf("incremental threat model prompt requests investigations:\n%s", got)
 	}
 }
+
+// Shapes taken from live reviews: resolved questions written as
+// {question, answer, evidence}, an extra scan.limitations key, and narrative
+// fields returned as structured JSON.
+func TestParseFindingsResultToleratesDescriptiveShapeDrift(t *testing.T) {
+	binding := testResultBinding()
+	repository := FindingsV2Repository{RepoURL: "https://github.com/example/project", Branch: "main"}
+	data := []byte(`{"schemaVersion":1,"kind":"orka.security.findings.v1","repositoryScan":"project","scanId":"scan_123","sliceId":"slice_inv","policyDigest":"sha256:policy","contextDigest":"sha256:context",` +
+		`"findings":{"schemaVersion":2,"repository":{"repoURL":"https://github.com/example/project","branch":"main","subPath":"","baseSHA":"","headSHA":""},` +
+		`"scan":{"mode":"initial","sliceId":"slice_inv","summary":"Traced the flow.","reviewedFiles":["a.go"],` +
+		`"resolvedQuestions":[{"question":"Is the key bound?","answer":"Yes.","evidence":[{"path":"a.go","startLine":1}]},"Is it cached?"],"limitations":["No runtime checks."],"confidenceNotes":"extra"},` +
+		`"findings":[{"title":"Key replaced","category":"authz","severity":"medium","confidence":"high","triage":"needs-review","evidence":[{"path":"a.go","startLine":1,"endLine":2,"role":"sink"}],` +
+		`"summary":"s","rootCause":"r","reproduction":{"steps":["a"]},"remediation":"fix","suggestedAction":"a","whyTestsDoNotAlreadyCoverThis":"w","suggestedRegressionTest":"t","minimumFixScope":"m","exploitability":"high"}]}}`)
+	artifact, err := ParseFindingsResult(data, FindingsResultExpectation{Binding: binding, SliceID: "slice_inv", Mode: "initial", Repository: repository})
+	if err != nil {
+		t.Fatalf("ParseFindingsResult() error = %v", err)
+	}
+	questions := artifact.Scan.ResolvedQuestions
+	if len(questions) != 2 || questions[0].Resolution != "Yes.\nEvidence: [{\"path\":\"a.go\",\"startLine\":1}]" || questions[1].Question != "Is it cached?" {
+		t.Fatalf("resolvedQuestions = %#v", questions)
+	}
+	if len(artifact.Scan.Limitations) != 1 || len(artifact.Findings) != 1 || artifact.Findings[0].Reproduction != `{"steps":["a"]}` {
+		t.Fatalf("artifact = %#v", artifact)
+	}
+
+	// Identity stays strict.
+	mismatched := strings.Replace(string(data), `"mode":"initial"`, `"mode":"incremental"`, 1)
+	if _, err := ParseFindingsResult([]byte(mismatched), FindingsResultExpectation{Binding: binding, SliceID: "slice_inv", Mode: "initial", Repository: repository}); err == nil {
+		t.Fatal("ParseFindingsResult() accepted a mismatched scan mode")
+	}
+	unknownEnvelopeKey := strings.Replace(string(data), `"kind":`, `"note":"x","kind":`, 1)
+	if _, err := ParseFindingsResult([]byte(unknownEnvelopeKey), FindingsResultExpectation{Binding: binding, SliceID: "slice_inv", Mode: "initial", Repository: repository}); err == nil {
+		t.Fatal("ParseFindingsResult() accepted an unknown envelope key")
+	}
+}

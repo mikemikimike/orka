@@ -706,7 +706,7 @@ func BuildReviewResultPrompt(
 	prompt.WriteString("Every finding must cite repo-relative file evidence with startLine and endLine, either from the included excerpts or from the reference files listed below. Cite every location the attack path needs: where attacker input enters, the control that fails, and the sensitive operation.\n")
 	prompt.WriteString("Give each evidence entry a role when it applies: entrypoint, source, propagation, root_control, sink, or context.\n")
 	prompt.WriteString("Quote fields are optional; use them only when you can copy the cited file text exactly.\n")
-	prompt.WriteString("Record coverage in the result: set scan.reviewedFiles to the repository files you actually read, and scan.resolvedQuestions to the security questions you checked and ruled out, each with the evidence that resolved it.\n")
+	prompt.WriteString("Record coverage in the result: set scan.reviewedFiles to the repository files you actually read, and scan.resolvedQuestions to the security questions you checked and ruled out, each as {\"question\":\"...\",\"resolution\":\"...\"} with the evidence that resolved it in the resolution. Optionally set scan.limitations to what you could not check.\n")
 	appendSliceScopePrompt(&prompt, slice)
 	prompt.WriteString("\n")
 	prompt.WriteString(ScannerFindingQualityPolicy())

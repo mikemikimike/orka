@@ -349,6 +349,16 @@ func normalizeFindingsCoverage(scan *FindingsV2Scan) {
 		}
 	}
 	scan.ResolvedQuestions = questions
+	limitations := make([]string, 0, min(len(scan.Limitations), maxResolvedQuestions))
+	for _, limitation := range scan.Limitations {
+		if limitation = truncateUTF8(strings.TrimSpace(limitation), maxResolvedQuestionBytes); limitation != "" {
+			limitations = append(limitations, limitation)
+		}
+		if len(limitations) == maxResolvedQuestions {
+			break
+		}
+	}
+	scan.Limitations = limitations
 }
 
 func truncateUTF8(value string, limit int) string {
