@@ -134,11 +134,11 @@ func shouldSkipDir(rel string, entry fs.DirEntry) bool {
 	name := path.Base(rel)
 	switch name {
 	case ".git", ".hg", ".svn", "node_modules", "vendor", "third_party", ".cache", ".turbo", ".venv", "venv",
-		"__pycache__", ".pytest_cache":
+		"__pycache__", ".pytest_cache", "dist", "coverage", ".next":
 		return true
-	case "dist", "build", "coverage", ".next", "target", "bin":
-		// Build output lives at the repository root; nested directories with
-		// these names, such as pkg/target or cmd/build, are source.
+	case "build", "target", "bin":
+		// These are build output at the repository root, but nested ones,
+		// such as pkg/target or cmd/build, are usually source.
 		return !strings.Contains(rel, "/")
 	default:
 		return false

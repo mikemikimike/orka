@@ -4123,6 +4123,11 @@ func findingWithSharedAnchor(finding *store.Finding, kept []*store.Finding) *sto
 			if candidate == nil || candidate.ID == finding.ID || candidate.DuplicateOf != "" {
 				continue
 			}
+			// A shared sink identifies the same issue only when neither
+			// finding names its broken control.
+			if role == "sink" && len(findingEvidenceWithRole(candidate, "root_control")) > 0 {
+				continue
+			}
 			for _, left := range anchors {
 				for _, right := range findingEvidenceWithRole(candidate, role) {
 					if left.Path == right.Path && findingRangesOverlap(left.StartLine, left.EndLine, right.StartLine, right.EndLine) {

@@ -114,6 +114,8 @@ func TestMapRepositorySkipsBuildOutputOnlyAtTheRoot(t *testing.T) {
 	writeFile(t, root, "cmd/build/main.go", "package main\n")
 	writeFile(t, root, "target/debug/gen.go", "package gen\n")
 	writeFile(t, root, "build/out.go", "package out\n")
+	writeFile(t, root, "web/dist/app.js", "var a=1\n")
+	writeFile(t, root, "apps/site/.next/chunk.js", "var b=2\n")
 	slices, err := MapRepository(root, MapperOptions{RepositoryScan: "repo"})
 	if err != nil {
 		t.Fatalf("MapRepository() error = %v", err)
@@ -129,6 +131,9 @@ func TestMapRepositorySkipsBuildOutputOnlyAtTheRoot(t *testing.T) {
 	}
 	if owned["target/debug/gen.go"] || owned["build/out.go"] {
 		t.Fatalf("owned = %v, want root build output skipped", owned)
+	}
+	if owned["web/dist/app.js"] || owned["apps/site/.next/chunk.js"] {
+		t.Fatalf("owned = %v, want generated output skipped at any depth", owned)
 	}
 }
 

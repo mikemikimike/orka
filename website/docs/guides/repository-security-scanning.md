@@ -189,7 +189,7 @@ control, and sensitive operation live in different components. Full-repository s
   per-component slicing.
 
 When a review reports a broken control that the run has already kept, that is, both findings
-cite an overlapping `root_control` location (or, without one, an overlapping `sink`), the
+cite an overlapping `root_control` location (or, when neither marks one, an overlapping `sink`), the
 repeat is stored as a duplicate of the first finding and does not count toward
 `maxFindingsPerRun`.
 

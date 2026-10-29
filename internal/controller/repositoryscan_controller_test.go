@@ -7494,7 +7494,10 @@ func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {
 	ref := func(role string, start int) storepkg.FindingEvidenceRef {
 		return storepkg.FindingEvidenceRef{Kind: "file", Path: "pkg/a.go", StartLine: start, EndLine: start + 2, Role: role}
 	}
-	kept := []*storepkg.Finding{{ID: "f1", Evidence: []storepkg.FindingEvidenceRef{ref("root_control", 10), ref("sink", 40)}}}
+	kept := []*storepkg.Finding{
+		{ID: "f1", Evidence: []storepkg.FindingEvidenceRef{ref("root_control", 10), ref("sink", 40)}},
+		{ID: "f3", Evidence: []storepkg.FindingEvidenceRef{ref("sink", 60)}},
+	}
 	for name, test := range map[string]struct {
 		evidence []storepkg.FindingEvidenceRef
 		want     bool
@@ -7502,7 +7505,8 @@ func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {
 		"overlapping control":      {[]storepkg.FindingEvidenceRef{ref("root_control", 11)}, true},
 		"distant control":          {[]storepkg.FindingEvidenceRef{ref("root_control", 20)}, false},
 		"same sink, other control": {[]storepkg.FindingEvidenceRef{ref("root_control", 30), ref("sink", 40)}, false},
-		"sink only":                {[]storepkg.FindingEvidenceRef{ref("sink", 41)}, true},
+		"sink only":                {[]storepkg.FindingEvidenceRef{ref("sink", 61)}, true},
+		"sink of a named control":  {[]storepkg.FindingEvidenceRef{ref("sink", 41)}, false},
 		"no roles":                 {[]storepkg.FindingEvidenceRef{ref("", 10)}, false},
 	} {
 		got := findingWithSharedAnchor(&storepkg.Finding{ID: "f2", Evidence: test.evidence}, kept) != nil
