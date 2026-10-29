@@ -16,9 +16,20 @@ export function taskLiveViewUrl(taskId: string, namespace: string) {
   return `${API_BASE_URL}/tasks/${encodeURIComponent(taskId)}/live${ns}`
 }
 
+// frameDataUrl turns a frame into a data: URL. The dashboard's Content
+// Security Policy allows data: images but not blob: URLs.
+function frameDataUrl(frame: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(new Blob([frame], { type: 'image/jpeg' }))
+  })
+}
+
 // Polls the latest screencast frame of a running browser Task. A frame is a
 // JPEG fetched with the bearer token (auth is header-only, so a bare <img src>
-// would get 401) and shown through an object URL. 204 means live view is on
+// would get 401) and shown as a data: URL. 204 means live view is on
 // but no page has repainted yet; 404 means this Task has no live view, which
 // ends the polling. An unchanged frame answers 304 and keeps the current one.
 export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView {
@@ -29,7 +40,6 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
     if (!enabled || !taskId) return
     let stopped = false
     let etag = ''
-    let objectUrl = ''
     let timer: ReturnType<typeof setTimeout> | undefined
     const abort = new AbortController()
 
@@ -46,13 +56,10 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
           return
         }
         if (res.status === 200) {
-          const blob = await res.blob()
+          const src = await frameDataUrl(await res.blob())
           if (stopped) return
-          const next = URL.createObjectURL(blob)
-          if (objectUrl) URL.revokeObjectURL(objectUrl)
-          objectUrl = next
           etag = res.headers.get('ETag') ?? ''
-          setView({ status: 'live', src: next, frameTime: res.headers.get('X-Orka-Frame-Time') ?? undefined })
+          setView({ status: 'live', src, frameTime: res.headers.get('X-Orka-Frame-Time') ?? undefined })
         } else if (res.status === 204) {
           setView((current) => (current.status === 'live' ? current : { status: 'waiting' }))
         }
@@ -67,7 +74,6 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
       stopped = true
       abort.abort()
       clearTimeout(timer)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [taskId, namespace, enabled])
 

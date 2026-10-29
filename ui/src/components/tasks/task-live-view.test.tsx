@@ -11,10 +11,6 @@ const fetchMock = vi.fn()
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
-  vi.stubGlobal('URL', Object.assign(URL, {
-    createObjectURL: vi.fn(() => 'blob:frame'),
-    revokeObjectURL: vi.fn(),
-  }))
   useAuthStore.setState({ token: 'viewer-token' })
 })
 
@@ -31,12 +27,13 @@ const frame = () =>
   })
 
 describe('TaskLiveView', () => {
+  // The dashboard's Content Security Policy allows data: images, not blob: URLs.
   it('shows the latest frame, fetched with the bearer token', async () => {
     fetchMock.mockResolvedValue(frame())
     render(<TaskLiveView taskId="shop" running />)
 
     const img = await screen.findByRole('img', { name: "What the Task's browser shows now" })
-    expect(img).toHaveAttribute('src', 'blob:frame')
+    expect(img).toHaveAttribute('src', expect.stringMatching(/^data:image\/jpeg;base64,/))
     expect(screen.getByText('View only')).toBeInTheDocument()
     expect(screen.getByText(/Not recorded/)).toBeInTheDocument()
     const [url, init] = fetchMock.mock.calls[0]
@@ -76,6 +73,6 @@ describe('TaskLiveView', () => {
     await vi.advanceTimersByTimeAsync(LIVE_VIEW_POLL_MS)
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock.mock.calls[1][1].headers['If-None-Match']).toBe('"7"')
-    expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:frame')
+    expect(screen.getByRole('img')).toHaveAttribute('src', expect.stringMatching(/^data:image\/jpeg;base64,/))
   })
 })
