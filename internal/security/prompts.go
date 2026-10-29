@@ -72,7 +72,7 @@ func appendReferenceFilesPrompt(prompt *strings.Builder, references []ReviewCont
 		}
 		files[file.Relation] = append(files[file.Relation], file.Path)
 	}
-	prompt.WriteString("\nREFERENCE FILES:\nBeyond the excerpts, you may read these files in your workspace and cite any of their lines; evidence citing any other file is dropped:\n")
+	prompt.WriteString("\nREFERENCE FILES:\nThis extends the context's rule to cite only included file ranges: beyond the excerpts, you may read these files in your workspace and cite any of their lines. Evidence citing any other file is dropped:\n")
 	if repositoryFiles > 0 {
 		fmt.Fprintf(prompt, "- any of the %d indexed repository source and configuration files (vendored, generated, and build output directories are not indexed", repositoryFiles)
 		if repositoryFiles >= MaxReviewContextReferenceFiles {
