@@ -3587,12 +3587,16 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 				return err
 			}
 			stored[finding] = struct{}{}
+			// Every stored finding is reconsidered for validation: a merge
+			// can raise its severity or confidence.
+			if !slices.Contains(ingestion.FindingIDs, finding.ID) {
+				ingestion.FindingIDs = append(ingestion.FindingIDs, finding.ID)
+			}
 			// A finding merged into one this run already counted is not new.
 			if _, ok := storedIDs[finding.ID]; ok {
 				continue
 			}
 			storedIDs[finding.ID] = struct{}{}
-			ingestion.FindingIDs = append(ingestion.FindingIDs, finding.ID)
 			newlyAccepted++
 		}
 		for _, duplicate := range duplicates {
