@@ -252,3 +252,38 @@ func TestReferenceFilesFollowTSConfigPathAliases(t *testing.T) {
 		}
 	}
 }
+
+// Node package tests are slice tests, as Go package tests are: they do not
+// take excerpt budget from the package's source or form fallback slices.
+func TestMapRepositoryKeepsNodeTestsOutOfOwnedFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "backend/package.json", `{"name":"backend","scripts":{"test":"bun test"}}`)
+	writeFile(t, root, "backend/src/helm.ts", "export const helm = 1\n")
+	writeFile(t, root, "backend/src/helm.test.ts", "import { helm } from './helm'\n")
+	writeFile(t, root, "backend/src/__tests__/fixtures.ts", "export const f = 1\n")
+	slices, err := MapRepository(root, MapperOptions{RepositoryScan: "repo"})
+	if err != nil {
+		t.Fatalf("MapRepository() error = %v", err)
+	}
+	var packageSlice *store.ReviewSlice
+	for i := range slices {
+		for _, file := range slices[i].OwnedFiles {
+			if strings.Contains(file.Path, ".test.") || strings.Contains(file.Path, "__tests__") {
+				t.Fatalf("slice %q owns test file %s", slices[i].Title, file.Path)
+			}
+		}
+		if slices[i].Title == "Node package backend" {
+			packageSlice = &slices[i]
+		}
+	}
+	if packageSlice == nil || !strings.Contains(filePaths(packageSlice.OwnedFiles), "backend/src/helm.ts") {
+		t.Fatalf("package slice = %#v, want it to own the source", packageSlice)
+	}
+	tests := map[string]string{}
+	for _, test := range packageSlice.Tests {
+		tests[test.Path] = test.Command
+	}
+	if tests["backend/src/helm.test.ts"] != "cd backend && npm run test" {
+		t.Fatalf("tests = %v, want helm.test.ts with the package test command", tests)
+	}
+}

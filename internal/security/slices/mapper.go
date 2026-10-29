@@ -236,6 +236,10 @@ func (b *sliceBuilder) add(slice store.ReviewSlice) {
 		slice.Status = "pending"
 	}
 	normalizeSliceFiles(&slice)
+	// A package's tests are its context; no fallback slice reviews them.
+	for _, test := range slice.Tests {
+		b.claimed[test.Path] = struct{}{}
+	}
 	for _, bounded := range boundedReviewSlices(slice) {
 		if bounded.ID == "" {
 			bounded.ID = sliceID(b.repositoryScan, bounded.Source, bounded.Title)
@@ -431,7 +435,19 @@ func addNodeSlices(builder *sliceBuilder, root string, files []repoFile) {
 		nodeFiles := nodeFilesForDir(file.Dir, files)
 		owned := make([]store.ReviewSliceFile, 0, len(nodeFiles)+1)
 		owned = append(owned, fileRef(file, "package manifest"))
+		testCommand := ""
+		for _, test := range tests {
+			if strings.HasSuffix(test.Command, "npm run test") {
+				testCommand = test.Command
+			}
+		}
 		for _, candidate := range nodeFiles {
+			// Tests are context, as for Go packages: they get excerpts only
+			// after the package's own source.
+			if isTestFile(candidate) {
+				tests = append(tests, store.ReviewSliceTest{Path: candidate.Path, Command: testCommand})
+				continue
+			}
 			owned = append(owned, fileRef(candidate, "node/typescript source"))
 		}
 		titleDir := file.Dir
