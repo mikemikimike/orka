@@ -71,6 +71,8 @@ type liveViewFrame struct {
 	namespace string
 	name      string
 	uid       types.UID
+	// job is the Job UID of the attempt whose worker sent the frame.
+	job string
 }
 
 // LiveViewFrames holds the latest screencast frame of each running browser
@@ -150,12 +152,12 @@ func liveViewKey(namespace, name string, uid types.UID) string {
 	return namespace + "/" + name + "/" + string(uid)
 }
 
-func (f *LiveViewFrames) put(namespace, name string, uid types.UID, data []byte) {
+func (f *LiveViewFrames) put(namespace, name string, uid types.UID, job string, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
 	key := liveViewKey(namespace, name, uid)
-	if previous, ok := f.frames[key]; ok && bytes.Equal(previous.data, data) {
+	if previous, ok := f.frames[key]; ok && previous.job == job && bytes.Equal(previous.data, data) {
 		// A keepalive of an unchanged page: it renews expiry, but the picture,
 		// its time, and its ETag stay the same.
 		previous.at = now
@@ -164,7 +166,8 @@ func (f *LiveViewFrames) put(namespace, name string, uid types.UID, data []byte)
 	}
 	f.seq++
 	f.frames[key] = liveViewFrame{
-		data: append([]byte(nil), data...), at: now, changedAt: now, seq: f.seq, namespace: namespace, name: name, uid: uid,
+		data: append([]byte(nil), data...), at: now, changedAt: now, seq: f.seq,
+		namespace: namespace, name: name, uid: uid, job: job,
 	}
 	oldestKey, oldest := "", now
 	for k, frame := range f.frames {
@@ -285,7 +288,9 @@ func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	}
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	frame, ok := h.liveViewFrames.get(key)
-	if !ok {
+	// A retry runs a new Job: an earlier attempt's frame is not this one's.
+	// The new worker's first frame replaces it, and it expires regardless.
+	if !ok || frame.job != task.Status.JobUID {
 		return c.SendStatus(fiber.StatusNoContent)
 	}
 	etag := h.liveViewFrames.etag(frame)
@@ -353,7 +358,7 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 		c.RequestCtx().SetConnectionClose()
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
-	h.liveViewFrames.put(namespace, task.Name, task.UID, data)
+	h.liveViewFrames.put(namespace, task.Name, task.UID, task.Status.JobUID, data)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
