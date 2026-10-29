@@ -127,10 +127,12 @@ type RepositoryScanReconciler struct {
 	ArtifactStore    store.ArtifactStore
 	ResultStore      store.ResultStore
 	PublicationStore store.PublicationStore
-	// ACPDispatchMaxConcurrentTasks is the controller's ACP dispatch
-	// capacity; it sizes each run's review Task window. Zero uses the
-	// default window.
-	ACPDispatchMaxConcurrentTasks int
+	// ACPDispatchMaxConcurrentTasks and ACPRuntimePoolMaxRunningPrompts are
+	// the controller's ACP dispatch capacity and the prompt capacity of new
+	// built-in RuntimePools; the smaller sizes each run's review Task
+	// window. Zero values use the defaults.
+	ACPDispatchMaxConcurrentTasks   int
+	ACPRuntimePoolMaxRunningPrompts int
 	// APIReader reads uncached Secrets and verifies RepositoryScan identity
 	// before run admission or cleanup; nil falls back to Client.
 	APIReader client.Reader
@@ -1365,13 +1367,19 @@ func (r *RepositoryScanReconciler) topUpReviewTasks(ctx context.Context, scan *c
 const maxOutstandingReviewTasks = 16
 
 // reviewTaskWindow bounds a run's queued and running review Tasks at four
-// per ACP dispatch place. Task deadlines include time spent waiting for a
-// runtime, so a low dispatch capacity gets a smaller window.
+// per prompt the run can execute at once: the smaller of the ACP dispatch
+// and RuntimePool prompt capacities. Task deadlines include time spent
+// waiting for a runtime, so lower capacity gets a smaller window.
 func (r *RepositoryScanReconciler) reviewTaskWindow() int {
-	if r.ACPDispatchMaxConcurrentTasks <= 0 {
-		return maxOutstandingReviewTasks
+	dispatch := r.ACPDispatchMaxConcurrentTasks
+	if dispatch <= 0 {
+		dispatch = DefaultACPDispatchWorkers
 	}
-	return maxOutstandingReviewTasks / DefaultACPDispatchWorkers * r.ACPDispatchMaxConcurrentTasks
+	prompts := r.ACPRuntimePoolMaxRunningPrompts
+	if prompts <= 0 {
+		prompts = int(corev1alpha1.DefaultRuntimePoolMaxRunningPrompts)
+	}
+	return maxOutstandingReviewTasks / DefaultACPDispatchWorkers * min(dispatch, prompts)
 }
 
 func outstandingReviewTasks(tasks []corev1alpha1.Task, runID string) int {

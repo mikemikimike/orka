@@ -7641,10 +7641,16 @@ func TestUnreviewableFirstBatchKeepsRunForPendingSlices(t *testing.T) {
 }
 
 func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
-	for capacity, want := range map[int]int{0: maxOutstandingReviewTasks, 1: 4, 4: 16, 8: 32} {
-		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: capacity}
-		if got := reconciler.reviewTaskWindow(); got != want {
-			t.Fatalf("reviewTaskWindow(capacity %d) = %d, want %d", capacity, got, want)
+	for _, test := range []struct{ dispatch, prompts, want int }{
+		{0, 0, maxOutstandingReviewTasks},
+		{1, 0, 4},
+		{8, 8, 32},
+		{8, 0, 16},  // a default four-prompt pool bounds it
+		{32, 4, 16}, // the pool, not dispatch, is the limit
+	} {
+		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: test.dispatch, ACPRuntimePoolMaxRunningPrompts: test.prompts}
+		if got := reconciler.reviewTaskWindow(); got != test.want {
+			t.Fatalf("reviewTaskWindow(dispatch %d, prompts %d) = %d, want %d", test.dispatch, test.prompts, got, test.want)
 		}
 	}
 }
