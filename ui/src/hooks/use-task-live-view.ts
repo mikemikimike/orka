@@ -33,8 +33,9 @@ function frameDataUrl(frame: Blob): Promise<string> {
 // but no page has repainted yet; 404 means this Task has no live view, which
 // ends the polling. An unchanged frame answers 304 and keeps the current one.
 // The view belongs to one Task: switching Tasks or namespaces never shows the
-// previous Task's frame, even while the new one waits for its first.
-export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView {
+// previous Task's frame, even while the new one waits for its first. Paused,
+// it keeps the current frame and stops polling, like the page's Following.
+export function useTaskLiveView(taskId: string, enabled: boolean, paused = false): TaskLiveView {
   const namespace = useUIStore((s) => s.namespace)
   const identity = `${namespace}/${taskId}`
   const [state, setState] = useState<{ identity: string; view: TaskLiveView }>({
@@ -43,7 +44,7 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
   })
 
   useEffect(() => {
-    if (!enabled || !taskId) return
+    if (!enabled || paused || !taskId) return
     let stopped = false
     let etag = ''
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -67,9 +68,10 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
           etag = res.headers.get('ETag') ?? ''
           setState({ identity, view: { status: 'live', src, frameTime: res.headers.get('X-Orka-Frame-Time') ?? undefined } })
         } else if (res.status === 204) {
-          setState((current) =>
-            current.identity === identity && current.view.status === 'live' ? current : { identity, view: { status: 'waiting' } },
-          )
+          // No frame now: none has arrived yet, or the last one expired because
+          // the worker stopped sending. Either way, an old frame is not current.
+          etag = ''
+          setState({ identity, view: { status: 'waiting' } })
         }
       } catch {
         // A dropped request is retried on the next tick.
@@ -83,7 +85,7 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
       abort.abort()
       clearTimeout(timer)
     }
-  }, [taskId, namespace, identity, enabled])
+  }, [taskId, namespace, identity, enabled, paused])
 
   if (!enabled) return { status: 'off' }
   return state.identity === identity ? state.view : { status: 'waiting' }

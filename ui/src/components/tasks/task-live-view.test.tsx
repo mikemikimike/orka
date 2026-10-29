@@ -87,4 +87,29 @@ describe('TaskLiveView', () => {
     expect(await screen.findByText('Waiting for the browser to show a page.')).toBeInTheDocument()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
+
+  it('drops a frame the controller no longer has', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockResolvedValueOnce(frame()).mockResolvedValue(new Response(null, { status: 204 }))
+    render(<TaskLiveView taskId="shop" running />)
+    await screen.findByRole('img')
+
+    await vi.advanceTimersByTimeAsync(LIVE_VIEW_POLL_MS)
+    expect(await screen.findByText('Waiting for the browser to show a page.')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('keeps the frame and stops polling while paused', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockResolvedValue(frame())
+    const { rerender } = render(<TaskLiveView taskId="shop" running />)
+    await screen.findByRole('img')
+
+    rerender(<TaskLiveView taskId="shop" running paused />)
+    const calls = fetchMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(LIVE_VIEW_POLL_MS * 3)
+    expect(fetchMock.mock.calls.length).toBe(calls)
+    expect(screen.getByRole('img')).toBeInTheDocument()
+    expect(screen.getByText(/Paused: turn Following back on/)).toBeInTheDocument()
+  })
 })

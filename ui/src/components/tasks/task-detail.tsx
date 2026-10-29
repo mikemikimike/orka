@@ -427,6 +427,7 @@ export function TaskDetail({ taskId }: { taskId: string }) {
               key={`${task.metadata.namespace}/${task.metadata.name}/${task.metadata.uid}`}
               taskId={taskId}
               running={taskRunning}
+              paused={!following}
             />
           )}
           <TaskOverview

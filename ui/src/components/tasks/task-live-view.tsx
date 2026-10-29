@@ -6,8 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 // A view-only picture of what a running browser Task's page shows now. It
 // renders nothing unless the operator turned live view on and this Task runs
 // the browser image; frames are never stored, so it ends with the Task.
-export function TaskLiveView({ taskId, running }: { taskId: string; running: boolean }) {
-  const view = useTaskLiveView(taskId, running)
+export function TaskLiveView({ taskId, running, paused = false }: { taskId: string; running: boolean; paused?: boolean }) {
+  const view = useTaskLiveView(taskId, running, paused)
   if (view.status === 'off') return null
 
   return (
@@ -29,6 +29,7 @@ export function TaskLiveView({ taskId, running }: { taskId: string; running: boo
             />
             <figcaption className="text-xs text-muted-foreground">
               {view.frameTime ? `Page last changed at ${new Date(view.frameTime).toLocaleTimeString()}. ` : ''}
+              {paused ? 'Paused: turn Following back on to update. ' : ''}
               Not recorded: this view ends with the Task.
             </figcaption>
           </figure>
