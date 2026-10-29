@@ -7225,8 +7225,26 @@ func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
 	if _, err := reconciler.progressLatestScanRun(ctx, scan); err != nil {
 		t.Fatalf("progressLatestScanRun() error = %v", err)
 	}
+	// The run's RuntimePool is unknown until a review is queued to it.
+	if got := len(listReviews()); got != 4 {
+		t.Fatalf("review tasks after mapper = %d, want 4 before the pool is known", got)
+	}
+	pool := &corev1alpha1.RuntimePool{ObjectMeta: metav1.ObjectMeta{Name: "acp-codex-pool", Namespace: defaultNS}}
+	pool.Status.Capacity.MaxRunningPrompts = 4
+	if err := cl.Create(ctx, pool); err != nil {
+		t.Fatalf("Create(RuntimePool) error = %v", err)
+	}
+	for i, task := range listReviews() {
+		task.Status.Execution = &corev1alpha1.TaskExecutionStatus{RuntimePoolName: pool.Name}
+		if err := cl.Update(ctx, &task); err != nil {
+			t.Fatalf("Update(queued review %d) error = %v", i, err)
+		}
+	}
+	if err := reconciler.topUpReviewTasks(ctx, scan); err != nil {
+		t.Fatalf("topUpReviewTasks(pool known) error = %v", err)
+	}
 	if got := len(listReviews()); got != maxOutstandingReviewTasks {
-		t.Fatalf("review tasks after mapper = %d, want the %d outstanding bound", got, maxOutstandingReviewTasks)
+		t.Fatalf("review tasks once the pool is known = %d, want the %d outstanding bound", got, maxOutstandingReviewTasks)
 	}
 
 	// Nothing to add while every queued review is still outstanding.
@@ -7641,49 +7659,42 @@ func TestUnreviewableFirstBatchKeepsRunForPendingSlices(t *testing.T) {
 }
 
 func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
-	for _, test := range []struct{ dispatch, prompts, want int }{
-		{0, 0, maxOutstandingReviewTasks},
-		{1, 0, 4},
-		{8, 0, 16},  // a default four-prompt pool bounds it
-		{32, 4, 16}, // the pool, not dispatch, is the limit
-		// Before any review is queued the pool is unknown, so higher
-		// configured limits do not enlarge the first batch.
-		{8, 8, 16},
-		{100, 100, 16},
-	} {
-		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: test.dispatch, ACPRuntimePoolMaxRunningPrompts: test.prompts}
-		if got := reconciler.reviewTaskWindow(context.Background(), nil, "scan_window"); got != test.want {
-			t.Fatalf("reviewTaskWindow(dispatch %d, prompts %d) = %d, want %d", test.dispatch, test.prompts, got, test.want)
+	// Before any review is queued the run's pool is unknown, so the first
+	// batch assumes one prompt whatever the configured limits.
+	for _, dispatch := range []int{0, 1, 8, 100} {
+		reconciler := &RepositoryScanReconciler{ACPDispatchMaxConcurrentTasks: dispatch}
+		if got := reconciler.reviewTaskWindow(context.Background(), nil, "scan_window"); got != 4 {
+			t.Fatalf("reviewTaskWindow(dispatch %d, no queued review) = %d, want 4", dispatch, got)
 		}
 	}
 
-	// Once reviews are queued, the pool they run on decides: an existing
-	// pool keeps the capacity it was created with.
+	// Once reviews are queued, the smaller of dispatch and the pool they run
+	// on decides; an existing pool keeps the capacity it was created with.
 	scheme := runtime.NewScheme()
 	if err := corev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("AddToScheme() error = %v", err)
 	}
-	pool := &corev1alpha1.RuntimePool{ObjectMeta: metav1.ObjectMeta{Name: "acp-codex-old", Namespace: defaultNS}}
-	pool.Status.Capacity.MaxRunningPrompts = 2
 	queued := corev1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{Name: "kaset-review", Namespace: defaultNS, Labels: map[string]string{
 			labels.LabelSecurityStage: security.StageReview, labels.LabelSecurityScanID: "scan_window",
 		}},
-		Status: corev1alpha1.TaskStatus{Execution: &corev1alpha1.TaskExecutionStatus{RuntimePoolName: "acp-codex-old"}},
+		Status: corev1alpha1.TaskStatus{Execution: &corev1alpha1.TaskExecutionStatus{RuntimePoolName: "acp-codex-pool"}},
 	}
-	reconciler := &RepositoryScanReconciler{
-		Client:                          fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build(),
-		ACPDispatchMaxConcurrentTasks:   8,
-		ACPRuntimePoolMaxRunningPrompts: 8,
-	}
-	if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != 8 {
-		t.Fatalf("reviewTaskWindow(two-prompt pool) = %d, want 8", got)
-	}
-	pool.Status.Capacity.MaxRunningPrompts = 8
-	if err := reconciler.Status().Update(context.Background(), pool); err != nil {
-		t.Fatalf("Update(pool status) error = %v", err)
-	}
-	if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != 32 {
-		t.Fatalf("reviewTaskWindow(eight-prompt pool) = %d, want 32 once the pool is known", got)
+	for _, test := range []struct{ dispatch, poolPrompts, want int }{
+		{8, 2, 8},
+		{8, 8, 32},
+		{1, 8, 4},
+		{32, 4, 16},
+		{0, 8, 16}, // the default dispatch capacity of 4
+	} {
+		pool := &corev1alpha1.RuntimePool{ObjectMeta: metav1.ObjectMeta{Name: "acp-codex-pool", Namespace: defaultNS}}
+		pool.Status.Capacity.MaxRunningPrompts = int32(test.poolPrompts)
+		reconciler := &RepositoryScanReconciler{
+			Client:                        fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).Build(),
+			ACPDispatchMaxConcurrentTasks: test.dispatch,
+		}
+		if got := reconciler.reviewTaskWindow(context.Background(), []corev1alpha1.Task{queued}, "scan_window"); got != test.want {
+			t.Fatalf("reviewTaskWindow(dispatch %d, pool %d) = %d, want %d", test.dispatch, test.poolPrompts, got, test.want)
+		}
 	}
 }

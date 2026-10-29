@@ -654,6 +654,17 @@ func TestFilterFindingsDropsTopLevelTestDirectoryFinding(t *testing.T) {
 	assertFilterDropped(t, got, "test-only")
 }
 
+func TestFilterFindingsDropsE2EAndTestdataFindings(t *testing.T) {
+	for _, filePath := range []string{"frontend/e2e/login.ts", "e2e/helpers.ts", "pkg/parser/testdata/fixture.go"} {
+		got := FilterFindings([]*store.Finding{filterFinding(
+			"Test-only helper issue",
+			filePath,
+			"Test-only fixture has an auth helper issue.",
+		)})
+		assertFilterDropped(t, got, "test-only")
+	}
+}
+
 func TestFilterFindingsKeepsDocsAWSAccessKeyLeak(t *testing.T) {
 	got := FilterFindings([]*store.Finding{filterFinding(
 		"AWS access key ID "+"A"+"KIA"+strings.Repeat("A", 16),

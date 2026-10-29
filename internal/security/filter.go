@@ -410,7 +410,9 @@ func isTestPath(value string) bool {
 	p := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "\\", "/")))
 	base := path.Base(p)
 	return strings.HasPrefix(p, "test/") || strings.HasPrefix(p, "tests/") || strings.HasPrefix(p, "__tests__/") ||
+		strings.HasPrefix(p, "e2e/") || strings.HasPrefix(p, "testdata/") ||
 		strings.Contains(p, "/test/") || strings.Contains(p, "/tests/") || strings.Contains(p, "/__tests__/") ||
+		strings.Contains(p, "/e2e/") || strings.Contains(p, "/testdata/") ||
 		strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, ".test.tsx") ||
 		strings.HasSuffix(base, ".spec.ts") || strings.HasSuffix(base, ".spec.tsx") || strings.HasSuffix(base, ".test.js") ||
 		strings.HasSuffix(base, ".spec.js")
