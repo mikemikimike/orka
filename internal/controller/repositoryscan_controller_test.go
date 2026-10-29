@@ -7477,3 +7477,30 @@ func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyScanRunProgressReportsUnreviewableSlices(t *testing.T) {
+	for name, test := range map[string]struct {
+		progress  scanRunProgress
+		wantPhase string
+		wantText  string
+	}{
+		"others reviewed": {
+			scanRunProgress{hasThreatModelReady: true, hasReview: true, reviewCount: 3, reviewSucceeded: 2, reviewUnreviewable: 1},
+			scanRunPhaseSucceeded, "2/3 review slices completed successfully; 1 could not be reviewed after a retry",
+		},
+		"reviews still running": {
+			scanRunProgress{hasThreatModelReady: true, hasReview: true, hasActive: true, reviewCount: 3, reviewSucceeded: 1, reviewUnreviewable: 1},
+			scanRunPhaseRunning, "",
+		},
+		"none reviewed": {
+			scanRunProgress{hasThreatModelReady: true, hasReview: true, reviewCount: 2, reviewUnreviewable: 2},
+			scanRunPhaseFailed, "no review slice could be reviewed after a retry",
+		},
+	} {
+		run := &storepkg.ScanRun{Phase: scanRunPhaseRunning}
+		applyScanRunProgress(run, test.progress)
+		if run.Phase != test.wantPhase || !strings.Contains(run.Summary, test.wantText) {
+			t.Fatalf("%s: run = %s %q, want %s %q", name, run.Phase, run.Summary, test.wantPhase, test.wantText)
+		}
+	}
+}

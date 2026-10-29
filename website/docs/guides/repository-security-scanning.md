@@ -197,6 +197,12 @@ limit (`controller.acpRuntime.dispatch.maxConcurrentTasks`) and the RuntimePool'
 starts more as earlier reviews finish, so queued slices do not spend their Task deadline
 waiting for a runtime.
 
+A review slice is retried once when its prompt fails or returns an invalid result. If the
+retry prompt also fails, for example because the model provider stopped the response, the
+slice is marked `failed` and the run continues; the run summary reports how many slices
+could not be reviewed, and the run fails only when none could. A result that still fails
+validation after the retry fails the run.
+
 Each review also records coverage: `scan.reviewedFiles` lists the files it read and
 `scan.resolvedQuestions` lists the questions it checked and ruled out. Both appear in the
 review Task's result. Finding evidence can carry a role (`entrypoint`, `source`,

@@ -1840,6 +1840,7 @@ type scanRunProgress struct {
 	hasReview           bool
 	reviewCount         int
 	reviewSucceeded     int
+	reviewUnreviewable  int
 	failedStages        []string
 	failureMessage      string
 	latestCompletion    *time.Time
@@ -1913,11 +1914,25 @@ func (r *RepositoryScanReconciler) collectScanRunProgress(
 		if task.Status.Phase == corev1alpha1.TaskPhaseSucceeded {
 			progress.reviewSucceeded++
 		}
+		if unreviewableAfterRetry(task) {
+			progress.reviewUnreviewable++
+			continue
+		}
 		if isFailedScanTaskPhase(task.Status.Phase) {
 			recordScanProgressFailure(&progress, task, r.pipelineTaskFailureSummary(ctx, task))
 		}
 	}
 	return progress
+}
+
+// unreviewableAfterRetry reports a review slice whose retry prompt also
+// failed, for example because the provider stopped the response. The slice
+// stays unreviewed and the run reports it, but one such slice does not
+// discard the rest of the run. Results that fail validation still fail it.
+func unreviewableAfterRetry(task *corev1alpha1.Task) bool {
+	attempt, ok := securityReviewAttempt(task)
+	return ok && attempt == securityReviewRetryAttempt && task.Status.Phase == corev1alpha1.TaskPhaseFailed &&
+		taskSecurityStage(task) == security.StageReview
 }
 
 // uncachedReviewRetry reads the retry of a failed first review attempt past
@@ -2016,6 +2031,18 @@ func applyScanRunProgress(run *store.ScanRun, progress scanRunProgress) {
 		return
 	}
 
+	// Unreviewable slices do not fail a run that reviewed others, but a run
+	// that reviewed none has nothing to report.
+	if progress.hasReview && progress.reviewSucceeded == 0 && progress.reviewUnreviewable == progress.reviewCount {
+		run.Phase = scanRunPhaseFailed
+		if progress.latestCompletion != nil {
+			run.CompletedAt = progress.latestCompletion
+		}
+		run.ErrorMessage = "no review slice could be reviewed after a retry"
+		run.Summary = run.ErrorMessage
+		return
+	}
+
 	if progress.hasThreatModelReady && !progress.hasReview {
 		if progress.hasMapper && !progress.hasMapperReady {
 			run.Phase = scanRunPhaseRunning
@@ -2034,27 +2061,27 @@ func applyScanRunProgress(run *store.ScanRun, progress scanRunProgress) {
 	}
 
 	if progress.hasThreatModelReady && progress.hasReview {
-		if progress.reviewSucceeded < progress.reviewCount {
-			run.Phase = scanRunPhaseRunning
-			run.CompletedAt = nil
-			run.ErrorMessage = ""
-			run.Summary = fmt.Sprintf(
-				"Threat model generated and %d/%d review slices completed successfully",
-				progress.reviewSucceeded,
-				progress.reviewCount,
-			)
-			return
-		}
-		run.Phase = scanRunPhaseSucceeded
-		run.ErrorMessage = ""
-		if progress.latestCompletion != nil {
-			run.CompletedAt = progress.latestCompletion
-		}
-		run.Summary = fmt.Sprintf(
+		summary := fmt.Sprintf(
 			"Threat model generated and %d/%d review slices completed successfully",
 			progress.reviewSucceeded,
 			progress.reviewCount,
 		)
+		if progress.reviewUnreviewable > 0 {
+			summary += fmt.Sprintf("; %d could not be reviewed after a retry", progress.reviewUnreviewable)
+		}
+		if progress.reviewSucceeded+progress.reviewUnreviewable < progress.reviewCount {
+			run.Phase = scanRunPhaseRunning
+			run.CompletedAt = nil
+			run.ErrorMessage = ""
+			run.Summary = summary
+			return
+		}
+		if progress.latestCompletion != nil {
+			run.CompletedAt = progress.latestCompletion
+		}
+		run.Phase = scanRunPhaseSucceeded
+		run.ErrorMessage = ""
+		run.Summary = summary
 		return
 	}
 
@@ -2207,7 +2234,7 @@ func (r *RepositoryScanReconciler) keepScanRunningForPendingReviewSlices(
 	}
 	// Kubernetes success precedes ingestion. In particular, the mapper may not
 	// have persisted any slices yet when all Tasks are first observed terminal.
-	pending := max(len(reviewSlices), progress.reviewCount-run.ReviewedSliceCount)
+	pending := max(len(reviewSlices), progress.reviewCount-progress.reviewUnreviewable-run.ReviewedSliceCount)
 	if pending == 0 {
 		return nil
 	}
@@ -3454,6 +3481,9 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 				return err
 			}
 		}
+		if unreviewableAfterRetry(task) {
+			return r.leaveReviewSliceUnreviewed(ctx, scan, task, run, sliceID, r.pipelineTaskFailureSummary(ctx, task))
+		}
 		return r.failReviewTask(ctx, scan, task, run, sliceID, r.pipelineTaskFailureSummary(ctx, task))
 	}
 
@@ -3597,6 +3627,29 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 			current.Summary = fmt.Sprintf("Reviewed slice %s", sliceID)
 		}
 		ingestion.Completed = false
+		return nil
+	})
+}
+
+// leaveReviewSliceUnreviewed records a slice whose retry prompt also failed
+// and lets the run continue; see unreviewableAfterRetry.
+func (r *RepositoryScanReconciler) leaveReviewSliceUnreviewed(
+	ctx context.Context,
+	scan *corev1alpha1.RepositoryScan,
+	task *corev1alpha1.Task,
+	run *store.ScanRun,
+	sliceID string,
+	message string,
+) error {
+	log.FromContext(ctx).Info("Review slice could not be reviewed after its retry; continuing the scan run",
+		"task", task.Name, "slice", sliceID, "reason", message)
+	return r.applyScanTaskIngestion(ctx, scan, task, run, func(tx *RepositoryScanReconciler, current *store.ScanRun, _ *store.ScanTaskIngestion) error {
+		if sliceID != "" {
+			if err := tx.SecurityStore.UpdateReviewSliceStatus(ctx, scan.Namespace, scan.Name, sliceID, current.ID, reviewSliceStatusFailed); err != nil {
+				return err
+			}
+		}
+		current.Summary = fmt.Sprintf("Review slice %s could not be reviewed after a retry: %s", sliceID, message)
 		return nil
 	})
 }
