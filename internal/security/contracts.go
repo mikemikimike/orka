@@ -158,12 +158,12 @@ type FindingsV2Scan struct {
 // must not discard the findings that accompany them.
 func (s *FindingsV2Scan) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Mode              string            `json:"mode"`
-		SliceID           string            `json:"sliceId"`
-		Summary           FlexibleText      `json:"summary"`
-		ReviewedFiles     json.RawMessage   `json:"reviewedFiles"`
-		ResolvedQuestions []json.RawMessage `json:"resolvedQuestions"`
-		Limitations       json.RawMessage   `json:"limitations"`
+		Mode              string          `json:"mode"`
+		SliceID           string          `json:"sliceId"`
+		Summary           FlexibleText    `json:"summary"`
+		ReviewedFiles     json.RawMessage `json:"reviewedFiles"`
+		ResolvedQuestions json.RawMessage `json:"resolvedQuestions"`
+		Limitations       json.RawMessage `json:"limitations"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -171,7 +171,12 @@ func (s *FindingsV2Scan) UnmarshalJSON(data []byte) error {
 	*s = FindingsV2Scan{Mode: raw.Mode, SliceID: raw.SliceID, Summary: string(raw.Summary)}
 	s.ReviewedFiles = lenientStringList(raw.ReviewedFiles)
 	s.Limitations = lenientStringList(raw.Limitations)
-	for _, item := range raw.ResolvedQuestions {
+	// A single question, object or string, counts as a one-item list.
+	var questions []json.RawMessage
+	if len(raw.ResolvedQuestions) > 0 && json.Unmarshal(raw.ResolvedQuestions, &questions) != nil {
+		questions = []json.RawMessage{raw.ResolvedQuestions}
+	}
+	for _, item := range questions {
 		var question struct {
 			Question   FlexibleText `json:"question"`
 			Resolution FlexibleText `json:"resolution"`

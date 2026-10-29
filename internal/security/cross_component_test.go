@@ -284,3 +284,18 @@ func TestMarshalReviewContextKeepsManifestWithinLimit(t *testing.T) {
 		t.Fatalf("kept %d of %d references, want a trimmed prefix", len(got.ReferenceFiles), len(manifest.ReferenceFiles))
 	}
 }
+
+func TestFindingsV2ScanAcceptsASingleResolvedQuestion(t *testing.T) {
+	for name, data := range map[string]string{
+		"object": `{"resolvedQuestions":{"question":"Is the key bound?","answer":"Yes."}}`,
+		"string": `{"resolvedQuestions":"Is the key bound?"}`,
+	} {
+		var scan FindingsV2Scan
+		if err := json.Unmarshal([]byte(data), &scan); err != nil {
+			t.Fatalf("%s: Unmarshal() error = %v", name, err)
+		}
+		if len(scan.ResolvedQuestions) != 1 || scan.ResolvedQuestions[0].Question != "Is the key bound?" {
+			t.Fatalf("%s: resolvedQuestions = %#v", name, scan.ResolvedQuestions)
+		}
+	}
+}
