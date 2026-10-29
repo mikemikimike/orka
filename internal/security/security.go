@@ -56,6 +56,42 @@ type ValidationArtifact struct {
 	Controls           []string                       `json:"controls,omitempty"`
 	Blindspots         []string                       `json:"blindspots,omitempty"`
 	Evidence           ValidationArtifactEvidenceRefs `json:"evidence,omitempty"`
+	// Severity and Confidence are the validator's calibrated ratings.
+	Severity   string `json:"severity,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
+}
+
+// UnmarshalJSON reads a validation artifact leniently: unknown keys are
+// ignored and list fields given as a single string become one entry. The
+// version, finding identity, status, and evidence are still validated.
+func (a *ValidationArtifact) UnmarshalJSON(data []byte) error {
+	type plain ValidationArtifact
+	var raw struct {
+		plain
+		Summary         FlexibleText    `json:"summary"`
+		Likelihood      FlexibleText    `json:"likelihood"`
+		Impact          FlexibleText    `json:"impact"`
+		Severity        FlexibleText    `json:"severity"`
+		Confidence      FlexibleText    `json:"confidence"`
+		ValidationSteps json.RawMessage `json:"validation_steps"`
+		Assumptions     json.RawMessage `json:"assumptions"`
+		Controls        json.RawMessage `json:"controls"`
+		Blindspots      json.RawMessage `json:"blindspots"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = ValidationArtifact(raw.plain)
+	a.Summary = string(raw.Summary)
+	a.Likelihood = string(raw.Likelihood)
+	a.Impact = string(raw.Impact)
+	a.Severity = strings.ToLower(strings.TrimSpace(string(raw.Severity)))
+	a.Confidence = strings.ToLower(strings.TrimSpace(string(raw.Confidence)))
+	a.ValidationSteps = lenientStringList(raw.ValidationSteps)
+	a.Assumptions = lenientStringList(raw.Assumptions)
+	a.Controls = lenientStringList(raw.Controls)
+	a.Blindspots = lenientStringList(raw.Blindspots)
+	return nil
 }
 
 // FlexibleText is narrative text that agents sometimes return as structured
@@ -523,7 +559,9 @@ func EffectiveMaxFindingsPerRun(scan *corev1alpha1.RepositoryScan) int32 {
 }
 
 // defaultMaxFindingsPerRun is the accepted-finding cap when a scan sets none.
-const defaultMaxFindingsPerRun = 10
+// A full-repository review with cross-component slices routinely keeps more
+// than ten real findings.
+const defaultMaxFindingsPerRun = 25
 
 // EffectiveBranch returns the configured branch or the standard default.
 func EffectiveBranch(scan *corev1alpha1.RepositoryScan) string {

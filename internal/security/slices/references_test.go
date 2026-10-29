@@ -107,3 +107,27 @@ func filePaths(files []store.ReviewSliceFile) string {
 	}
 	return strings.Join(parts, ",")
 }
+
+func TestMapRepositorySkipsBuildOutputOnlyAtTheRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "pkg/target/matcher.go", "package target\n")
+	writeFile(t, root, "cmd/build/main.go", "package main\n")
+	writeFile(t, root, "target/debug/gen.go", "package gen\n")
+	writeFile(t, root, "build/out.go", "package out\n")
+	slices, err := MapRepository(root, MapperOptions{RepositoryScan: "repo"})
+	if err != nil {
+		t.Fatalf("MapRepository() error = %v", err)
+	}
+	owned := map[string]bool{}
+	for _, slice := range slices {
+		for _, file := range slice.OwnedFiles {
+			owned[file.Path] = true
+		}
+	}
+	if !owned["pkg/target/matcher.go"] || !owned["cmd/build/main.go"] {
+		t.Fatalf("owned = %v, want nested target and build source reviewed", owned)
+	}
+	if owned["target/debug/gen.go"] || owned["build/out.go"] {
+		t.Fatalf("owned = %v, want root build output skipped", owned)
+	}
+}

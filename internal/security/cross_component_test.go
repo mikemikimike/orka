@@ -112,8 +112,21 @@ func TestValidateFindingsV2AcceptsReferenceFileEvidence(t *testing.T) {
 		"unlisted file":     {Path: "pkg/other/other.go", StartLine: 1, EndLine: 2},
 		"inverted in range": {Path: "pkg/consumer/consumer.go", StartLine: 5, EndLine: 4},
 	} {
-		if got := validate(ref); len(got.Accepted) != 0 {
-			t.Fatalf("%s: evidence accepted, want dropped", name)
+		// The unverifiable citation is removed; the verified one keeps the finding.
+		got := validate(ref)
+		if len(got.Accepted) != 1 || len(got.Accepted[0].Evidence) != 1 || got.Accepted[0].Evidence[0].Path != "app.go" {
+			t.Fatalf("%s: result = %#v, want the finding with only its verified evidence", name, got)
+		}
+		// A finding whose only citation is unverifiable is dropped.
+		only := validFinding()
+		only.Evidence = []FindingsV2EvidenceRef{ref}
+		dropped := ValidateFindingsV2(FindingsV2Artifact{
+			SchemaVersion: SchemaVersionFindingsV2,
+			Scan:          FindingsV2Scan{Mode: "initial", SliceID: "slice_app"},
+			Findings:      []FindingsV2Finding{only},
+		}, manifest, FindingValidationOptions{Namespace: "default", RepositoryScan: "repo", ScanRunID: "scan1", TaskName: "task1"})
+		if len(dropped.Accepted) != 0 || len(dropped.Dropped) != 1 {
+			t.Fatalf("%s: unverifiable-only finding = %#v, want dropped", name, dropped)
 		}
 	}
 }
@@ -209,5 +222,27 @@ func TestParseFindingsResultToleratesDescriptiveShapeDrift(t *testing.T) {
 	unknownEnvelopeKey := strings.Replace(string(data), `"kind":`, `"note":"x","kind":`, 1)
 	if _, err := ParseFindingsResult([]byte(unknownEnvelopeKey), FindingsResultExpectation{Binding: binding, SliceID: "slice_inv", Mode: "initial", Repository: repository}); err == nil {
 		t.Fatal("ParseFindingsResult() accepted an unknown envelope key")
+	}
+}
+
+// Calibrated ratings and a single-string list.
+func TestParseValidationResultAcceptsCalibratedRatings(t *testing.T) {
+	finding := &store.Finding{ID: "fnd_1", ScanRunID: "scan_123"}
+	expected := ValidationResultExpectation{
+		Binding: AgentResultBinding{RepositoryScan: "vekil", ScanID: "scan_123", PolicyDigest: "sha256:policy"},
+		Finding: finding,
+	}
+	data := []byte(`{"schemaVersion":1,"kind":"orka.security.validation.v1","repositoryScan":"vekil","scanId":"scan_123","findingId":"fnd_1","policyDigest":"sha256:policy",` +
+		`"validation":{"version":1,"finding_id":"fnd_1","status":"validated","summary":"Confirmed.","severity":"Medium","confidence":"high","assumptions":"Feature flag enabled.","exploit_notes":"extra"}}`)
+	artifact, err := ParseValidationResult(data, expected)
+	if err != nil {
+		t.Fatalf("ParseValidationResult() error = %v", err)
+	}
+	if artifact.Severity != "medium" || artifact.Confidence != "high" || len(artifact.Assumptions) != 1 {
+		t.Fatalf("artifact = %#v", artifact)
+	}
+	bad := strings.Replace(string(data), `"status":"validated"`, `"status":"maybe"`, 1)
+	if _, err := ParseValidationResult([]byte(bad), expected); err == nil {
+		t.Fatal("ParseValidationResult() accepted an unknown status")
 	}
 }

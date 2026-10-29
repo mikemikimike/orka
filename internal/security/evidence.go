@@ -54,7 +54,8 @@ func ValidateFindingsV2(artifact FindingsV2Artifact, manifest ReviewContextManif
 			result.Dropped = append(result.Dropped, droppedDiagnostic(index, reason, finding))
 			continue
 		}
-		if reason := validateFindingEvidence(finding, included, references, opts.WorkspaceRoot); reason != "" {
+		finding, reason = usableFindingEvidence(finding, included, references, opts.WorkspaceRoot)
+		if reason != "" {
 			result.Dropped = append(result.Dropped, droppedDiagnostic(index, reason, finding))
 			continue
 		}
@@ -158,6 +159,36 @@ func canonicalFindingConfidence(value string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// usableFindingEvidence keeps the evidence the review context can verify. A
+// reviewer that traces across the repository may cite one file the mapper did
+// not index; that citation is dropped, and the finding stays while at least
+// one verified citation remains.
+func usableFindingEvidence(
+	finding FindingsV2Finding,
+	included map[string]ReviewContextIncludedFile,
+	references map[string]ReviewContextReferenceFile,
+	workspaceRoot string,
+) (FindingsV2Finding, string) {
+	kept := make([]FindingsV2EvidenceRef, 0, len(finding.Evidence))
+	firstReason := ""
+	for _, ref := range finding.Evidence {
+		single := finding
+		single.Evidence = []FindingsV2EvidenceRef{ref}
+		if reason := validateFindingEvidence(single, included, references, workspaceRoot); reason != "" {
+			if firstReason == "" {
+				firstReason = reason
+			}
+			continue
+		}
+		kept = append(kept, ref)
+	}
+	if len(kept) == 0 {
+		return finding, firstReason
+	}
+	finding.Evidence = kept
+	return finding, ""
 }
 
 func validateFindingEvidence(
