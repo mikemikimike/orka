@@ -204,18 +204,12 @@ func ahpSessionHiddenBy(ui *UserInfo, session string, owners map[string]*corev1a
 	return owner == nil || !ahpOwns(ui, owner)
 }
 
-// ahpUsageHidden reports retained usage of an AHP turn, or in an AHP session,
-// that the person may not see. Usage that retains its requester is that
-// person's alone, whoever now holds a session of its name: a name is free
-// again once a session and its Tasks are gone. Other usage follows the owner
-// of its session while a turn's Task still continues it, as the session
-// does, and is no one's after, or without a session.
-func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task) bool {
-	if requester := task.Requester; requester != nil {
-		return requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
-	}
-	if _, ahp := ahpSessionName(task.SessionName); !ahp {
-		return true
-	}
-	return ahpSessionHiddenBy(ui, task.SessionName, owners)
+// ahpUsageHidden reports usage of an AHP turn, or in an AHP session, that the
+// person may not see: all but the usage that names them as its requester.
+// A session's name says nothing of whose its usage is, since a name is free
+// again once a session and its Tasks are gone, so usage that names no
+// requester, such as a chat's or one recorded before requesters were, is
+// no person's.
+func ahpUsageHidden(ui *UserInfo, requester *store.UsageRequester) bool {
+	return requester == nil || requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
 }

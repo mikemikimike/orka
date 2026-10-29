@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -259,11 +260,10 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 	}
 }
 
-// Usage outlives the Tasks of AHP turns. Usage that retains its requester is
-// that person's alone, also once a session of the same name is someone
+// Usage outlives the Tasks of AHP turns. A person sees AHP usage only when it
+// names them as its requester, also once a session of its name is someone
 // else's: a name is free again once its session and Tasks are gone. Usage
-// without one follows the session's owner while a turn's Task continues the
-// session, and is no one's after.
+// that names no requester, such as a chat's, is no person's.
 func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	const namespace = "default"
 	bobsTurn := &corev1alpha1.Task{
@@ -294,13 +294,12 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		// A private fork of a turn with no session of its own.
 		{Namespace: namespace, TaskUID: "alice-sessionless-fork", AHPTurn: true, Requester: requester("alice")},
 		{Namespace: namespace, TaskUID: "unknown-sessionless-turn", AHPTurn: true},
-		// Recorded before the turn mark: the fork's name still shows it.
-		{Namespace: namespace, TaskUID: "legacy-alice-fork", TaskName: "ahp-alice-t1-fork-1", Requester: requester("alice")},
-		{Namespace: namespace, TaskUID: "legacy-unknown-fork", TaskName: "ahp-alice-t1-fork-2"},
+		// Any Task may be named with the AHP prefix: a name alone is no turn's.
+		{Namespace: namespace, TaskUID: "ordinary-ahp-name", TaskName: "ahp-report", Requester: requester("bob")},
+		{Namespace: namespace, TaskUID: "ordinary-ahp-name-no-requester", TaskName: "ahp-report-2"},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
-	// Usage with no Task, as a chat's: an AHP session's is its owner's while
-	// a turn's Task continues the session, and no one's after.
+	// Usage with no Task, as a chat's, names no requester.
 	observations := []store.UsageObservation{
 		{Namespace: namespace, CounterID: "chat-in-bobs", SessionName: "ahp-live"},
 		{Namespace: namespace, CounterID: "chat-in-gone", SessionName: "ahp-gone"},
@@ -319,16 +318,20 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode)
 		return data.HiddenTasks
 	}
-	require.Equal(t, map[string]bool{
-		"default/alice-legacy": true, "default/reused-bob": true, "default/other-issuer": true,
-		"default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true, "default/unknown-sessionless-turn": true,
-		"default/legacy-unknown-fork": true, "default/call-chat-in-bobs": true, "default/call-chat-in-gone": true,
-	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
-	require.Equal(t, map[string]bool{
-		"default/alice-turn": true, "default/alice-legacy": true, "default/reused-alice": true, "default/other-issuer": true,
-		"default/alice-before-bob": true, "default/alice-sessionless-fork": true, "default/unknown-sessionless-turn": true,
-		"default/legacy-alice-fork": true, "default/legacy-unknown-fork": true, "default/call-chat-in-gone": true,
-	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
+	noOnes := map[string]bool{
+		"default/alice-legacy": true, "default/other-issuer": true, "default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true,
+		"default/unknown-sessionless-turn": true, "default/call-chat-in-bobs": true, "default/call-chat-in-gone": true,
+	}
+	with := func(keys ...string) map[string]bool {
+		hidden := maps.Clone(noOnes)
+		for _, key := range keys {
+			hidden["default/"+key] = true
+		}
+		return hidden
+	}
+	require.Equal(t, with("reused-bob"), hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
+	require.Equal(t, with("alice-turn", "reused-alice", "alice-before-bob", "alice-sessionless-fork"),
+		hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }
 
@@ -458,9 +461,9 @@ func TestAHPSessionPagesNeverNameAHiddenSession(t *testing.T) {
 	require.Equal(t, []string{"team-new", "team-old"}, all)
 }
 
-// Rows that retain their requester need no session owner, so a report of
-// only such rows lists no Tasks.
-func TestAHPUsageOfKnownRequestersLooksUpNoOwners(t *testing.T) {
+// Whose AHP usage is follows from the usage alone, so a report looks up no
+// session owners and lists no Tasks.
+func TestAHPUsageLooksUpNoSessionOwners(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	var lists atomic.Int32
@@ -472,10 +475,13 @@ func TestAHPUsageOfKnownRequestersLooksUpNoOwners(t *testing.T) {
 	}).Build()
 	handlers := NewHandlers(HandlersConfig{Client: kube})
 	alice := &store.UsageRequester{Issuer: "https://issuer.example", Subject: "alice"}
-	data := store.UsageData{Tasks: []store.UsageTask{
-		{Namespace: "default", TaskUID: "one", SessionName: "ahp-gone", Requester: alice},
-		{Namespace: "default", TaskUID: "two", SessionName: "ahp-other", Requester: alice},
-	}}
+	data := store.UsageData{
+		Tasks: []store.UsageTask{
+			{Namespace: "default", TaskUID: "one", SessionName: "ahp-gone", Requester: alice},
+			{Namespace: "default", TaskUID: "two", SessionName: "ahp-other"},
+		},
+		Observations: []store.UsageObservation{{Namespace: "default", CounterID: "chat", SessionName: "ahp-other"}},
+	}
 	app := fiber.New()
 	app.Get("/", func(c fiber.Ctx) error {
 		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"})
@@ -485,6 +491,6 @@ func TestAHPUsageOfKnownRequestersLooksUpNoOwners(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.Equal(t, map[string]bool{"default/one": true, "default/two": true}, data.HiddenTasks)
+	require.Equal(t, map[string]bool{"default/one": true, "default/two": true, "default/call-chat": true}, data.HiddenTasks)
 	require.Zero(t, lists.Load())
 }
