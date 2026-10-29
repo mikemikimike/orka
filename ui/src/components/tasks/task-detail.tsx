@@ -421,10 +421,12 @@ export function TaskDetail({ taskId }: { taskId: string }) {
 
         <TabsContent value="overview" className="space-y-4">
           {task.spec.type === 'container' && (
-            // Keyed by identity, so another Task, or one recreated under the same
-            // name, never inherits this one's frame or polling state.
+            // Keyed by identity and attempt, so another Task, one recreated
+            // under the same name, or a retry never inherits this one's frame or
+            // polling state. A retry's Pending gap can fall between two Task
+            // polls, and the live view's 404 then must not outlast the attempt.
             <TaskLiveView
-              key={`${task.metadata.namespace}/${task.metadata.name}/${task.metadata.uid}`}
+              key={`${task.metadata.namespace}/${task.metadata.name}/${task.metadata.uid}/${task.status?.attempts ?? 0}`}
               taskId={taskId}
               running={taskRunning}
               paused={!following}
