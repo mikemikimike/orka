@@ -7,6 +7,7 @@ MIT License - see LICENSE file for details.
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1126,15 +1127,29 @@ func (t *ahpTurn) settleWithError(kind, message string) {
 func (t *ahpTurn) finishSession() {
 	now := ahpNow(t.b)
 	_ = t.emit.Emit(t.ctx, t.session.Session, ahpSessionIdle(t.session.Chat, now)...)
-	logSessionUpdate(t.b.updateSession(t.ctx, t.principal.UserKey, t.session.Session, func(s *ahpSession) {
-		if s.ActiveTurn == t.id {
-			s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
-		}
-	}), t.session.Session, "end the turn")
+	end := func(ctx context.Context) error {
+		return t.b.updateSession(ctx, t.principal.UserKey, t.session.Session, func(s *ahpSession) {
+			if s.ActiveTurn == t.id {
+				s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
+			}
+		})
+	}
+	err := end(t.ctx)
+	logSessionUpdate(err, t.session.Session, "end the turn")
 	go func() {
+		// A session still recording the turn refuses every later message,
+		// and nothing else ends it while this process runs: try again until
+		// it ends, or the session is gone.
+		ctx := context.WithoutCancel(t.ctx)
+		retry := cmp.Or(t.b.endTurnRetry, time.Second)
+		for delay := retry; err != nil && !errors.Is(err, store.ErrNotFound); delay = min(2*delay, 32*retry) {
+			time.Sleep(delay)
+			err = end(ctx)
+			logSessionUpdate(err, t.session.Session, "end the turn")
+		}
 		// The turn's slot frees when its run loop returns.
 		<-t.ctx.Done()
-		t.b.runPending(context.WithoutCancel(t.ctx), t.principal.UserKey, t.session.Session, t.emit)
+		t.b.runPending(ctx, t.principal.UserKey, t.session.Session, t.emit)
 	}()
 }
 

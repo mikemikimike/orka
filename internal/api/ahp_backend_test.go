@@ -2373,3 +2373,96 @@ func TestAHPBackendSendsTheGitCredentialToGitHubOnly(t *testing.T) {
 		}
 	}
 }
+
+// A turn's end the store refuses is tried again: a session still recording
+// the turn would refuse every later message while this process runs.
+func TestAHPBackendRetriesATurnEndTheStoreRefused(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	env.backend.endTurnRetry = time.Millisecond
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		s.ActiveTurn, s.ActiveTask = "turn-1", "task-1"
+	}))
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	failing := &ahpFailingStore{AHPStore: env.backend.store, fail: func(store.AHPRecord) bool { return true }}
+	env.backend.store = failing
+	failing.armed.Store(true)
+	turnCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	turn := &ahpTurn{b: env.backend, principal: alice, session: record, id: "turn-1", ctx: turnCtx, cancel: cancel,
+		emit: env.backend.emitterFor(alice), tools: map[string]*ahpToolCall{}}
+
+	turn.finishSession()
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Equal(t, "turn-1", record.ActiveTurn, "the store refused the turn's end")
+	// The store refuses well past a few tries.
+	time.Sleep(300 * time.Millisecond)
+	failing.armed.Store(false)
+	cancel()
+	require.Eventually(t, func() bool {
+		var current ahpSession
+		return env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &current) == nil && current.ActiveTurn == ""
+	}, 5*time.Second, 10*time.Millisecond, "the turn's end is tried again")
+}
+
+// ahpActionsEmitter records every action emitted.
+type ahpActionsEmitter struct {
+	mu      sync.Mutex
+	actions []ahptypes.StateAction
+}
+
+func (e *ahpActionsEmitter) Emit(_ context.Context, _ string, actions ...ahptypes.StateAction) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.actions = append(e.actions, actions...)
+	return nil
+}
+
+// A waiting message whose replacement the store refuses keeps waiting, with
+// its sender, and the client shows it again instead of the replacement.
+func TestAHPBackendKeepsAWaitingMessageWhoseReplacementFails(t *testing.T) {
+	env := newAHPTestEnv(t)
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	env.setUpSession(c, "allow-all")
+	alice := ahphost.Principal{Issuer: "https://issuer.example", Subject: "alice", Namespace: ahpTestNamespace,
+		UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	key := ahpPendingKey(alice.UserKey, ahpTestSession, "waiting")
+	env.backend.mu.Lock()
+	env.backend.pendingAuth = map[string]ahpPendingSender{key: {principal: alice, version: "v1"}}
+	env.backend.mu.Unlock()
+	waiting := ahptypes.Message{Text: "run me", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}}
+	// A running turn keeps the message waiting.
+	require.NoError(t, env.backend.updateSession(ctx, alice.UserKey, ahpTestSession, func(s *ahpSession) {
+		s.ActiveTurn = "running"
+		s.Pending = []ahpPending{{ID: "waiting", Kind: string(ahptypes.PendingMessageKindQueued), Version: "v1", Message: waiting}}
+	}))
+	var record ahpSession
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	failing := &ahpFailingStore{AHPStore: env.backend.store, fail: func(store.AHPRecord) bool { return true }}
+	env.backend.store = failing
+	failing.armed.Store(true)
+
+	emitter := &ahpActionsEmitter{}
+	env.backend.HandleClientAction(ctx, alice, record.Chat, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageSetAction{
+		Type: ahptypes.ActionTypeChatPendingMessageSet, Kind: ahptypes.PendingMessageKindQueued, Id: "waiting",
+		Message: ahptypes.Message{Text: "run me instead", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}}, emitter)
+
+	env.backend.mu.Lock()
+	sender := env.backend.pendingAuth[key]
+	env.backend.mu.Unlock()
+	require.Equal(t, "v1", sender.version, "the waiting message keeps its sender")
+	require.NoError(t, env.backend.getRecord(ctx, alice.UserKey, ahpRecordSession, ahpTestSession, &record))
+	require.Len(t, record.Pending, 1)
+	require.Equal(t, "v1", record.Pending[0].Version)
+	require.Len(t, emitter.actions, 1)
+	shown, ok := emitter.actions[0].Value.(*ahptypes.ChatPendingMessageSetAction)
+	require.True(t, ok, "the client shows the waiting message again, not %#v", emitter.actions[0].Value)
+	require.Equal(t, "run me", shown.Message.Text)
+}

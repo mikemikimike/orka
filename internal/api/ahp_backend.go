@@ -192,6 +192,10 @@ type ahpBackend struct {
 	lifecycle map[string]*sync.Mutex
 	// changes serializes, per user, changes to session changesets.
 	changes map[string]*sync.Mutex
+	// endTurnRetry is the first wait before ending a turn the store refused
+	// is tried again; each next wait doubles, up to 32 times it. Zero is a
+	// second.
+	endTurnRetry time.Duration
 }
 
 // lockUser takes the user's lifecycle lock. It is never taken while mu is held.
@@ -1152,6 +1156,40 @@ func (b *ahpBackend) authorizeMessage(ctx context.Context, principal ahphost.Pri
 	}
 }
 
+// unqueue takes back a message the store would not queue. One it would have
+// replaced stays queued, with its sender, prior, and the client shows it
+// again; otherwise the client takes the message out of its queue. A sender
+// set since by another message is left alone.
+func (b *ahpBackend) unqueue(ctx context.Context, record ahpSession, a *ahptypes.ChatPendingMessageSetAction, key, version string,
+	prior ahpPendingSender, emit ahphost.Emitter) {
+	b.mu.Lock()
+	if b.pendingAuth[key].version == version {
+		if prior.version != "" {
+			b.pendingAuth[key] = prior
+		} else {
+			delete(b.pendingAuth, key)
+		}
+	}
+	b.mu.Unlock()
+	i := slices.IndexFunc(record.Pending, func(p ahpPending) bool { return p.ID == a.Id })
+	if i < 0 {
+		_ = emit.Emit(ctx, record.Chat, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageRemovedAction{
+			Type: ahptypes.ActionTypeChatPendingMessageRemoved, Kind: a.Kind, Id: a.Id,
+		}})
+		return
+	}
+	var actions []ahptypes.StateAction
+	if a.Kind == ahptypes.PendingMessageKindSteering {
+		actions = append(actions, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageRemovedAction{
+			Type: ahptypes.ActionTypeChatPendingMessageRemoved, Kind: ahptypes.PendingMessageKindSteering, Id: a.Id,
+		}})
+	}
+	actions = append(actions, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageSetAction{
+		Type: ahptypes.ActionTypeChatPendingMessageSet, Kind: ahptypes.PendingMessageKindQueued, Id: a.Id, Message: record.Pending[i].Message,
+	}})
+	_ = emit.Emit(ctx, record.Chat, actions...)
+}
+
 // HandleClientAction runs what an admitted client action asks for.
 func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.Principal, channel string, action ahptypes.StateAction, emit ahphost.Emitter) {
 	if strings.HasPrefix(channel, ahpTerminalScheme) {
@@ -1187,11 +1225,13 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 		}
 	case *ahptypes.ChatPendingMessageSetAction:
 		version := ahpRandomHex(16)
+		key := ahpPendingKey(principal.UserKey, record.Session, a.Id)
 		b.mu.Lock()
 		if b.pendingAuth == nil {
 			b.pendingAuth = map[string]ahpPendingSender{}
 		}
-		b.pendingAuth[ahpPendingKey(principal.UserKey, record.Session, a.Id)] = ahpPendingSender{principal: principal, version: version}
+		prior, replacing := b.pendingAuth[key]
+		b.pendingAuth[key] = ahpPendingSender{principal: principal, version: version}
 		b.mu.Unlock()
 		// Orka's runtimes take no input mid-turn, so a steering message is
 		// queued first instead, and shown so: it then appears once, when its
@@ -1219,14 +1259,11 @@ func (b *ahpBackend) HandleClientAction(ctx context.Context, principal ahphost.P
 			}
 		})
 		if err != nil || full {
-			// The message was not queued: take it out of the client's queue.
 			logSessionUpdate(err, record.Session, "queue a message")
-			b.mu.Lock()
-			delete(b.pendingAuth, ahpPendingKey(principal.UserKey, record.Session, a.Id))
-			b.mu.Unlock()
-			_ = emit.Emit(ctx, record.Chat, ahptypes.StateAction{Value: &ahptypes.ChatPendingMessageRemovedAction{
-				Type: ahptypes.ActionTypeChatPendingMessageRemoved, Kind: a.Kind, Id: a.Id,
-			}})
+			if !replacing {
+				prior = ahpPendingSender{}
+			}
+			b.unqueue(ctx, record, a, key, version, prior, emit)
 			return
 		}
 		if steering {
