@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -7193,8 +7195,8 @@ func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateScanRun() error = %v", err)
 	}
-	const slices = maxOutstandingReviewTasks + 5
-	for i := range slices {
+	const sliceCount = maxOutstandingReviewTasks + 5
+	for i := range sliceCount {
 		reviewSlice := &storepkg.ReviewSlice{
 			SchemaVersion: 1, ID: fmt.Sprintf("slice_%02d", i), Namespace: defaultNS, RepositoryScan: "kaset",
 			Source: "deterministic-go-package", Title: fmt.Sprintf("Go package p%02d", i), Kind: "package",
@@ -7307,35 +7309,53 @@ func ingestOneSliceUnderCapOfOne(t *testing.T, items ...security.FindingsV2Findi
 // duplicates included. Every slice owns the same file, as overlapping slices do.
 func ingestReviewSlices(t *testing.T, maxFindings int32, results ...[]security.FindingsV2Finding) (*storepkg.ScanRun, []storepkg.Finding) {
 	t.Helper()
-	ctx := context.Background()
+	fixture := newSliceIngestionFixture(t, maxFindings)
+	return fixture.ingestRun(t, "scan_dupes", results...)
+}
+
+type sliceIngestionFixture struct {
+	store        *sqlitestore.Store
+	reconciler   *RepositoryScanReconciler
+	scan         *corev1alpha1.RepositoryScan
+	policyDigest string
+}
+
+func newSliceIngestionFixture(t *testing.T, maxFindings int32) *sliceIngestionFixture {
+	t.Helper()
 	store := setupControllerSQLiteStore(t)
-	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
 	scan := &corev1alpha1.RepositoryScan{
 		ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS},
 		Spec:       corev1alpha1.RepositoryScanSpec{RepoURL: "https://github.com/example/repo", MaxFindingsPerRun: &maxFindings},
 	}
-	policyDigest := security.ScannerPolicyDigest(security.ScannerPolicy{})
-	if err := store.CreateScanRun(ctx, &storepkg.ScanRun{
-		ID: "scan_dupes", Namespace: defaultNS, RepositoryScan: "kaset", TaskName: "kaset-review-slice", Mode: "initial",
-		Phase: scanRunPhaseRunning, BaseCommit: "trusted-base", HeadCommit: "trusted-head", PolicyDigest: policyDigest, StartedAt: time.Now(),
+	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
+	reconciler.APIReader = repositoryScanRunTestClient(t, scan)
+	return &sliceIngestionFixture{store: store, reconciler: reconciler, scan: scan, policyDigest: security.ScannerPolicyDigest(security.ScannerPolicy{})}
+}
+
+// ingestRun ingests one review result per slice, in order, into a new run.
+func (f *sliceIngestionFixture) ingestRun(t *testing.T, runID string, results ...[]security.FindingsV2Finding) (*storepkg.ScanRun, []storepkg.Finding) {
+	t.Helper()
+	ctx := context.Background()
+	if err := f.store.CreateScanRun(ctx, &storepkg.ScanRun{
+		ID: runID, Namespace: defaultNS, RepositoryScan: "kaset", TaskName: "kaset-review-slice", Mode: "initial",
+		Phase: scanRunPhaseRunning, BaseCommit: "trusted-base", HeadCommit: "trusted-head", PolicyDigest: f.policyDigest, StartedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("CreateScanRun() error = %v", err)
 	}
-	reconciler.APIReader = repositoryScanRunTestClient(t, scan)
 	for i, items := range results {
 		sliceID := fmt.Sprintf("slice_api_%d", i)
 		reviewSlice := &storepkg.ReviewSlice{
 			SchemaVersion: 1, ID: sliceID, Namespace: defaultNS, RepositoryScan: "kaset", Source: "deterministic-go-package",
 			Title: "Go package internal/api", Kind: "package", OwnedFiles: []storepkg.ReviewSliceFile{{Path: "internal/api/security.go", Reason: "source"}},
-			Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_dupes",
+			Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: runID,
 		}
 		bindReviewSliceContext(t, reviewSlice)
-		if err := store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
+		if err := f.store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
 			t.Fatalf("UpsertReviewSlice() error = %v", err)
 		}
 		task := &corev1alpha1.Task{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("kaset-review-slice-%d", i), Namespace: defaultNS, Labels: map[string]string{
-				labels.LabelSecurityTarget: "kaset", labels.LabelSecurityScanID: "scan_dupes", labels.LabelSecurityMode: "initial",
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("kaset-%s-review-slice-%d", runID, i), Namespace: defaultNS, Labels: map[string]string{
+				labels.LabelSecurityTarget: "kaset", labels.LabelSecurityScanID: runID, labels.LabelSecurityMode: "initial",
 				labels.LabelSecurityStage: security.StageReview, labels.LabelSecuritySliceID: sliceID,
 			}},
 			Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded},
@@ -7346,20 +7366,82 @@ func ingestReviewSlices(t *testing.T, maxFindings int32, results ...[]security.F
 			Scan:          security.FindingsV2Scan{Mode: "initial", SliceID: sliceID},
 			Findings:      items,
 		}
-		saveFindingsTaskResult(t, store, task, scan.Name, "scan_dupes", policyDigest, reviewSlice.ReviewContextHash, sliceID, findings)
-		if err := reconciler.ingestScanTask(ctx, scan, task); err != nil {
+		saveFindingsTaskResult(t, f.store, task, f.scan.Name, runID, f.policyDigest, reviewSlice.ReviewContextHash, sliceID, findings)
+		if err := f.reconciler.ingestScanTask(ctx, f.scan, task); err != nil {
 			t.Fatalf("ingestScanTask(%s) error = %v", sliceID, err)
 		}
 	}
-	run, err := store.GetScanRun(ctx, defaultNS, "scan_dupes")
+	run, err := f.store.GetScanRun(ctx, defaultNS, runID)
 	if err != nil {
 		t.Fatalf("GetScanRun() error = %v", err)
 	}
-	all, _, err := store.ListFindings(ctx, storepkg.FindingFilter{Namespace: defaultNS, RepositoryScan: "kaset", IncludeDuplicates: true})
+	all, _, err := f.store.ListFindings(ctx, storepkg.FindingFilter{Namespace: defaultNS, RepositoryScan: "kaset", IncludeDuplicates: true})
 	if err != nil {
 		t.Fatalf("ListFindings() error = %v", err)
 	}
 	return run, all
+}
+
+func TestIngestReviewTaskCarriesADecisionOnARepeatToItsCanonical(t *testing.T) {
+	fixture := newSliceIngestionFixture(t, 25)
+	repeat := duplicateTestFinding("Callers bypass the API permission gate", "CWE-863", 6)
+	firstRun, first := fixture.ingestRun(t, "scan_first", []security.FindingsV2Finding{repeat})
+	if len(first) != 1 {
+		t.Fatalf("first run findings = %#v", first)
+	}
+	completed := time.Now()
+	firstRun.Phase, firstRun.CompletedAt = scanRunPhaseSucceeded, &completed
+	if err := fixture.store.UpdateScanRun(context.Background(), firstRun); err != nil {
+		t.Fatalf("UpdateScanRun() error = %v", err)
+	}
+	if err := fixture.store.UpdateFindingState(context.Background(), defaultNS, first[0].ID, "dismissed"); err != nil {
+		t.Fatalf("UpdateFindingState() error = %v", err)
+	}
+
+	// The next run keeps another report of the same control first, so the
+	// dismissed finding becomes its duplicate.
+	_, all := fixture.ingestRun(t, "scan_second",
+		[]security.FindingsV2Finding{duplicateTestFinding("Missing authorization check", "authz", 5)},
+		[]security.FindingsV2Finding{repeat},
+	)
+	var canonical, alias *storepkg.Finding
+	for i := range all {
+		switch all[i].Title {
+		case "Missing authorization check":
+			canonical = &all[i]
+		case repeat.Title:
+			alias = &all[i]
+		}
+	}
+	if canonical == nil || alias == nil || alias.DuplicateOf != canonical.ID {
+		t.Fatalf("findings = %#v, want the dismissed finding aliased to the new one", all)
+	}
+	if canonical.State != "dismissed" {
+		t.Fatalf("canonical state = %q, want the dismissal carried over", canonical.State)
+	}
+}
+
+func TestCompareScanTasksForIngestionPutsFailedFirstReviewsFirst(t *testing.T) {
+	review := func(name string, created time.Time, phase corev1alpha1.TaskPhase, attempt string) corev1alpha1.Task {
+		task := corev1alpha1.Task{ObjectMeta: metav1.ObjectMeta{
+			Name: name, CreationTimestamp: metav1.NewTime(created),
+			Labels: map[string]string{labels.LabelSecurityStage: security.StageReview},
+		}, Status: corev1alpha1.TaskStatus{Phase: phase}}
+		if attempt != "" {
+			task.Annotations = map[string]string{labels.AnnotationSecurityReviewAttempt: attempt}
+		}
+		return task
+	}
+	now := time.Now()
+	tasks := []corev1alpha1.Task{
+		review("succeeded", now, corev1alpha1.TaskPhaseSucceeded, ""),
+		review("failed-retry", now.Add(time.Second), corev1alpha1.TaskPhaseFailed, strconv.Itoa(securityReviewRetryAttempt)),
+		review("failed-first", now.Add(2*time.Second), corev1alpha1.TaskPhaseFailed, ""),
+	}
+	slices.SortFunc(tasks, compareScanTasksForIngestion)
+	if tasks[0].Name != "failed-first" || tasks[1].Name != "succeeded" || tasks[2].Name != "failed-retry" {
+		t.Fatalf("order = %s, %s, %s; want the failed first attempt before the others in creation order", tasks[0].Name, tasks[1].Name, tasks[2].Name)
+	}
 }
 
 func TestIngestReviewTaskCountsAFindingReportedByOverlappingSlicesOnce(t *testing.T) {

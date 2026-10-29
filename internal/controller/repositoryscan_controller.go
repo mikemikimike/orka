@@ -1541,6 +1541,29 @@ func needsNoopScanSummary(summary string) bool {
 	return trimmed == "" || trimmed == scanSummaryThreatModelPending
 }
 
+// compareScanTasksForIngestion orders Tasks by creation, except that failed
+// first review attempts come first: their automatic retries must exist
+// before ingesting another Task refreshes the run's progress, or the run
+// would end on a failure that a retry replaces.
+func compareScanTasksForIngestion(a, b corev1alpha1.Task) int {
+	if failedA, failedB := failedFirstReviewAttempt(&a), failedFirstReviewAttempt(&b); failedA != failedB {
+		if failedA {
+			return -1
+		}
+		return 1
+	}
+	if cmp := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(a.Name, b.Name)
+}
+
+func failedFirstReviewAttempt(task *corev1alpha1.Task) bool {
+	attempt, ok := securityReviewAttempt(task)
+	return ok && attempt == securityReviewInitialAttempt &&
+		task.Status.Phase == corev1alpha1.TaskPhaseFailed && taskSecurityStage(task) == security.StageReview
+}
+
 func (r *RepositoryScanReconciler) ingestOwnedTasks(ctx context.Context, scan *corev1alpha1.RepositoryScan) error {
 	if r.SecurityStore == nil {
 		return nil
@@ -1551,12 +1574,7 @@ func (r *RepositoryScanReconciler) ingestOwnedTasks(ctx context.Context, scan *c
 		return err
 	}
 
-	slices.SortFunc(tasks.Items, func(a, b corev1alpha1.Task) int {
-		if cmp := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); cmp != 0 {
-			return cmp
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
+	slices.SortFunc(tasks.Items, compareScanTasksForIngestion)
 
 	latestScanRunID := latestOwnedScanPipelineRunID(tasks.Items)
 	refreshLatestScanRun := false
@@ -3549,11 +3567,24 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 		}
 		for _, duplicate := range duplicates {
 			// A repeat of a capped finding is dropped with it.
-			if _, ok := stored[duplicate.canonical]; !ok || duplicate.finding.ID == duplicate.canonical.ID {
+			if _, ok := stored[duplicate.canonical]; !ok {
 				continue
 			}
-			duplicate.finding.DuplicateOf = duplicate.canonical.ID
+			// Join the repeat to the finding history it continues, store the
+			// observation, then alias it through the store so a decision
+			// already recorded there (dismissed, suppressed, or false
+			// positive) carries over to its canonical finding.
+			if err := tx.mergeExistingFindingForTarget(ctx, scan, trustedRepository, duplicate.finding); err != nil {
+				return err
+			}
+			if _, ok := storedIDs[duplicate.finding.ID]; ok {
+				// The repeat resolved to a finding this run already kept.
+				continue
+			}
 			if err := tx.SecurityStore.UpsertObservedFinding(ctx, duplicate.finding); err != nil {
+				return err
+			}
+			if err := tx.SecurityStore.MarkFindingDuplicate(ctx, scan.Namespace, duplicate.finding.ID, duplicate.canonical.ID); err != nil {
 				return err
 			}
 		}
