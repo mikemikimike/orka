@@ -31,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
@@ -7532,6 +7533,7 @@ func TestApplyScanRunProgressReportsUnreviewableSlices(t *testing.T) {
 	} {
 		run := &storepkg.ScanRun{Phase: scanRunPhaseRunning}
 		applyScanRunProgress(run, test.progress)
+		failScanRunWithoutReviews(run, test.progress)
 		if run.Phase != test.wantPhase || !strings.Contains(run.Summary, test.wantText) {
 			t.Fatalf("%s: run = %s %q, want %s %q", name, run.Phase, run.Summary, test.wantPhase, test.wantText)
 		}
@@ -7570,5 +7572,62 @@ func TestKeepThreatModelInvestigationsCarriesSavedQuestions(t *testing.T) {
 	}
 	if !strings.Contains(got, "Incremental update.") || len(security.ThreatModelInvestigations(got)) != 1 {
 		t.Fatalf("incremental threat model = %q, want the update with the saved investigation", got)
+	}
+}
+
+func TestCollectScanRunProgressKeepsRunActiveWhenRetryReadFails(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme() error = %v", err)
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	failing := interceptor.NewClient(base, interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("apiserver unavailable")
+		},
+	})
+	reconciler := &RepositoryScanReconciler{Client: base, APIReader: failing}
+	controller := true
+	failed := corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kaset-review", Namespace: defaultNS,
+			Labels: map[string]string{
+				labels.LabelSecurityStage: security.StageReview, labels.LabelSecuritySliceID: "slice_a", labels.LabelSecurityScanID: "scan_a",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: corev1alpha1.GroupVersion.String(), Kind: "RepositoryScan", Name: "kaset", UID: "kaset-uid", Controller: &controller,
+			}},
+		},
+		Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseFailed, Message: "prompt failed"},
+	}
+	if progress := reconciler.collectScanRunProgress(context.Background(), []corev1alpha1.Task{failed}); !progress.hasActive {
+		t.Fatalf("progress = %#v, want the run kept active while its retry is unknown", progress)
+	}
+}
+
+func TestUnreviewableFirstBatchKeepsRunForPendingSlices(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	reconciler := &RepositoryScanReconciler{SecurityStore: store}
+	scan := &corev1alpha1.RepositoryScan{ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS}}
+	pending := &storepkg.ReviewSlice{
+		SchemaVersion: 1, ID: "slice_later", Namespace: defaultNS, RepositoryScan: "kaset", Source: "deterministic-go-package",
+		Title: "Go package later", Kind: "package", OwnedFiles: []storepkg.ReviewSliceFile{{Path: "later/a.go", Reason: "source"}},
+		Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_batch",
+	}
+	bindReviewSliceContext(t, pending)
+	if err := store.UpsertReviewSlice(ctx, pending); err != nil {
+		t.Fatalf("UpsertReviewSlice() error = %v", err)
+	}
+	// Every started slice failed its retry, but another has not started.
+	progress := scanRunProgress{hasThreatModelReady: true, hasReview: true, reviewCount: 16, reviewUnreviewable: 16}
+	run := &storepkg.ScanRun{ID: "scan_batch", Phase: scanRunPhaseRunning}
+	applyScanRunProgress(run, progress)
+	if err := reconciler.keepScanRunningForPendingReviewSlices(ctx, scan, run, progress); err != nil {
+		t.Fatalf("keepScanRunningForPendingReviewSlices() error = %v", err)
+	}
+	failScanRunWithoutReviews(run, progress)
+	if run.Phase != scanRunPhaseRunning {
+		t.Fatalf("run = %s %q, want it running for the pending slice", run.Phase, run.Summary)
 	}
 }

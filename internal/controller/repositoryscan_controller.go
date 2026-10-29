@@ -1906,7 +1906,14 @@ func (r *RepositoryScanReconciler) collectScanRunProgress(
 	for _, key := range reviewKeys {
 		task := reviewTasks[key]
 		if task.Status.Phase == corev1alpha1.TaskPhaseFailed {
-			if retryTask := r.uncachedReviewRetry(ctx, task); retryTask != nil {
+			retryTask, err := r.uncachedReviewRetry(ctx, task)
+			switch {
+			case err != nil:
+				// Whether a retry replaced this failure is unknown, so the run
+				// stays active and the next reconcile reads it again.
+				log.FromContext(ctx).Error(err, "Read review retry Task", "task", task.Name)
+				progress.hasActive = true
+			case retryTask != nil:
 				task = retryTask
 			}
 		}
@@ -1941,26 +1948,41 @@ func unreviewableAfterRetry(task *corev1alpha1.Task) bool {
 // the informer cache. The retry is created just before progress is refreshed,
 // and a cache that has not seen it yet would end the run on the failure the
 // retry replaces.
-func (r *RepositoryScanReconciler) uncachedReviewRetry(ctx context.Context, task *corev1alpha1.Task) *corev1alpha1.Task {
+func (r *RepositoryScanReconciler) uncachedReviewRetry(ctx context.Context, task *corev1alpha1.Task) (*corev1alpha1.Task, error) {
 	attempt, ok := securityReviewAttempt(task)
 	sliceID := strings.TrimSpace(task.Labels[labels.LabelSecuritySliceID])
 	owner := metav1.GetControllerOf(task)
 	if !ok || attempt != securityReviewInitialAttempt || sliceID == "" || owner == nil || owner.Kind != "RepositoryScan" {
-		return nil
+		return nil, nil
 	}
 	name := security.ScanStageRetryTaskName(owner.Name, scanTaskRunID(task), security.StageReview, sliceID, securityReviewRetryAttempt)
 	reader := uncachedReader(r.APIReader, r.Client)
 	if reader == nil {
-		return nil
+		return nil, nil
 	}
 	retryTask := &corev1alpha1.Task{}
 	if err := reader.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: name}, retryTask); err != nil {
-		return nil
+		return nil, client.IgnoreNotFound(err)
 	}
 	if retryAttempt, ok := securityReviewAttempt(retryTask); !ok || retryAttempt != securityReviewRetryAttempt || scanTaskRunID(retryTask) != scanTaskRunID(task) {
-		return nil
+		return nil, nil
 	}
-	return retryTask
+	return retryTask, nil
+}
+
+// failScanRunWithoutReviews fails a finished run in which every review slice
+// failed its retry: unreviewable slices do not fail a run that reviewed
+// others, but a run that reviewed none has nothing to report. It runs after
+// pending slices reopen the run, so failures in the first batch do not end a
+// run whose other slices have not started.
+func failScanRunWithoutReviews(run *store.ScanRun, progress scanRunProgress) {
+	if run.Phase != scanRunPhaseSucceeded || !progress.hasReview || progress.reviewSucceeded > 0 || progress.reviewUnreviewable == 0 {
+		return
+	}
+	run.Phase = scanRunPhaseFailed
+	run.ErrorMessage = "no review slice could be reviewed after a retry"
+	run.Summary = run.ErrorMessage
+	stampFailedScanRunCompletion(run)
 }
 
 func recordScanTaskTiming(progress *scanRunProgress, task *corev1alpha1.Task) {
@@ -2029,18 +2051,6 @@ func applyScanRunProgress(run *store.ScanRun, progress scanRunProgress) {
 				strings.Join(progress.failedStages, ", "),
 			)
 		}
-		run.Summary = run.ErrorMessage
-		return
-	}
-
-	// Unreviewable slices do not fail a run that reviewed others, but a run
-	// that reviewed none has nothing to report.
-	if progress.hasReview && progress.reviewSucceeded == 0 && progress.reviewUnreviewable == progress.reviewCount {
-		run.Phase = scanRunPhaseFailed
-		if progress.latestCompletion != nil {
-			run.CompletedAt = progress.latestCompletion
-		}
-		run.ErrorMessage = "no review slice could be reviewed after a retry"
 		run.Summary = run.ErrorMessage
 		return
 	}
@@ -2153,6 +2163,7 @@ func (r *RepositoryScanReconciler) refreshScanRunStatus(
 	if err := r.keepScanRunningForPendingReviewSlices(ctx, scan, run, progress); err != nil {
 		return err
 	}
+	failScanRunWithoutReviews(run, progress)
 	if previousPhase != scanRunPhaseSucceeded && run.Phase == scanRunPhaseSucceeded {
 		if target, ok := frozenScanTargetFromTasks(scan, run, tasks.Items); ok {
 			if err := r.resolveMergedFindingsNotObserved(ctx, scan, run, target); err != nil {
