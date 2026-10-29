@@ -169,3 +169,89 @@ func TestUsageAggregateCacheAvailabilityRequiresEveryMeasurement(t *testing.T) {
 		})
 	}
 }
+
+// A session counter spans its turns. Usage a hidden turn may have used is
+// shown under no visible turn: neither the counter's baseline, whichever came
+// first, nor what the counter gained while a hidden turn ran or after its last
+// report that was not final, reported on or not. A hidden turn's final count,
+// or its end before a gain, keeps that gain its successor's.
+func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
+	count := func(n int64) *int64 { return &n }
+	minutes := func(n float64) time.Duration { return time.Duration(n * float64(time.Minute)) }
+	type report struct {
+		task   string
+		status string
+		input  *int64
+		final  bool
+	}
+	first := func(reports ...report) []report {
+		return append([]report{{"first", store.UsageStatusStarted, count(0), false}, {"first", store.UsageStatusCompleted, count(100), true}}, reports...)
+	}
+	// Reports come a minute apart, the first at minute 1.
+	for _, tc := range []struct {
+		name        string
+		reports     []report
+		hiddenStart time.Duration
+		hiddenEnd   time.Duration // zero: not known to have ended
+		// hiddenRetry: the hidden turn failed at its end and ran again from
+		// then, not known to have ended.
+		hiddenRetry time.Duration
+		visible     int64
+	}{
+		{name: "hidden turn reports nothing", hiddenStart: minutes(2.5), visible: 100, reports: first(
+			report{"hidden", store.UsageStatusCompleted, nil, false}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn reports only its start", hiddenStart: minutes(2.5), visible: 100, reports: first(
+			report{"hidden", store.UsageStatusStarted, count(100), false}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn never reports", hiddenStart: minutes(2.5), hiddenEnd: minutes(3), visible: 100, reports: first(
+			report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn reports its final count", hiddenStart: minutes(2.5), hiddenEnd: minutes(3), visible: 170, reports: first(
+			report{"hidden", store.UsageStatusCompleted, count(180), true}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn's final count comes before its recorded end", hiddenStart: minutes(2.5), hiddenEnd: minutes(3) + time.Second,
+			visible: 170, reports: first(
+				report{"hidden", store.UsageStatusCompleted, count(180), true}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn runs again after its final count", hiddenStart: minutes(2.5), hiddenEnd: minutes(3),
+			hiddenRetry: minutes(3) + time.Second, visible: 100, reports: first(
+				report{"hidden", store.UsageStatusCompleted, count(180), true}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn runs again only after the visible gain", hiddenStart: minutes(2.5), hiddenEnd: minutes(3),
+			hiddenRetry: minutes(4.5), visible: 170, reports: first(
+				report{"hidden", store.UsageStatusCompleted, count(180), true}, report{"second", store.UsageStatusCompleted, count(250), true})},
+		{name: "hidden turn ended before the visible one started", hiddenEnd: minutes(0.5), visible: 100, reports: first()},
+		{name: "hidden turn reports after the baseline", hiddenStart: minutes(1.5), hiddenEnd: minutes(2), visible: 0, reports: []report{
+			{"first", store.UsageStatusCompleted, count(500), true}, {"hidden", store.UsageStatusCompleted, count(600), true}}},
+		{name: "hidden turn ran before the baseline and never reports", hiddenEnd: minutes(0.5), visible: 0, reports: []report{
+			{"first", store.UsageStatusCompleted, count(500), true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, filter := reportFixture()
+			hidden := store.UsageTask{Namespace: "team", TaskUID: "hidden", TaskName: "hidden", WorkID: "work", Phase: "Running",
+				SessionName: "shared", StartedAt: filter.From.Add(tc.hiddenStart)}
+			if tc.hiddenEnd != 0 {
+				hidden.PhaseHistory = []store.UsageTaskPhase{{Phase: "Succeeded", ObservedAt: filter.From.Add(tc.hiddenEnd)}}
+			}
+			if tc.hiddenRetry != 0 {
+				hidden.PhaseHistory = []store.UsageTaskPhase{{Phase: "Failed", ObservedAt: filter.From.Add(tc.hiddenEnd)},
+					{Phase: "Pending", ObservedAt: filter.From.Add(tc.hiddenRetry), Attempt: 1}}
+			}
+			data.Tasks = []store.UsageTask{
+				{Namespace: "team", TaskUID: "first", TaskName: "first", WorkID: "work", Phase: "Succeeded", SessionName: "shared", StartedAt: filter.From},
+				hidden,
+				{Namespace: "team", TaskUID: "second", TaskName: "second", WorkID: "work", Phase: "Succeeded", SessionName: "shared",
+					StartedAt: filter.From.Add(minutes(3.5))},
+			}
+			data.HiddenTasks = map[string]bool{"team/hidden": true}
+			for i, r := range tc.reports {
+				data.Observations = append(data.Observations, store.UsageObservation{Namespace: "team", TaskUID: r.task, ID: fmt.Sprint("report-", i),
+					SessionName: "shared", CounterID: "shared", AttemptID: "0/prompt", Scope: store.UsageScopeSession, Source: store.UsageSourceAgent,
+					Status:      r.status,
+					InputTokens: r.input, Complete: r.final, ObservedAt: filter.From.Add(minutes(float64(i + 1)))})
+			}
+			report, err := usage.Build(data, filter)
+			require.NoError(t, err)
+			total := report.Summary.InputTokens
+			for _, other := range report.OtherWork {
+				total += other.Totals.InputTokens
+			}
+			require.Equal(t, tc.visible, total)
+		})
+	}
+}

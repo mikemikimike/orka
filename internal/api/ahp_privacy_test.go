@@ -291,6 +291,9 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		// A private fork of a turn with no session of its own.
 		{Namespace: namespace, TaskUID: "alice-sessionless-fork", AHPTurn: true, Requester: requester("alice")},
 		{Namespace: namespace, TaskUID: "unknown-sessionless-turn", AHPTurn: true},
+		// Recorded before the turn mark: the fork's name still shows it.
+		{Namespace: namespace, TaskUID: "legacy-alice-fork", TaskName: "ahp-alice-t1-fork-1", Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "legacy-unknown-fork", TaskName: "ahp-alice-t1-fork-2"},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
 	hidden := func(caller *UserInfo) map[string]bool {
@@ -309,10 +312,12 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	require.Equal(t, map[string]bool{
 		"default/alice-legacy": true, "default/reused-bob": true, "default/other-issuer": true,
 		"default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true, "default/unknown-sessionless-turn": true,
+		"default/legacy-unknown-fork": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
 	require.Equal(t, map[string]bool{
 		"default/alice-turn": true, "default/alice-legacy": true, "default/reused-alice": true, "default/other-issuer": true,
 		"default/alice-before-bob": true, "default/alice-sessionless-fork": true, "default/unknown-sessionless-turn": true,
+		"default/legacy-alice-fork": true, "default/legacy-unknown-fork": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }
