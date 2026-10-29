@@ -19,6 +19,7 @@ import { TaskSchedulePanel } from './task-schedule-panel'
 import { TaskOverview } from './task-overview'
 import { TaskActivity } from './task-activity'
 import { TaskArtifactsPanel } from './task-artifacts-panel'
+import { TaskLiveView } from './task-live-view'
 import { TaskStatusDetails } from './task-status-details'
 import { TaskYaml } from './task-yaml'
 import { ViewSwitch } from './view-switch'
@@ -418,7 +419,8 @@ export function TaskDetail({ taskId }: { taskId: string }) {
         </TabsList>
         </div>
 
-        <TabsContent value="overview">
+        <TabsContent value="overview" className="space-y-4">
+          {task.spec.type === 'container' && <TaskLiveView taskId={taskId} running={taskRunning} />}
           <TaskOverview
             task={task}
             events={taskEvents}

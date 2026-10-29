@@ -1246,6 +1246,9 @@ export const taskHandlers: RequestHandler[] = [
     return HttpResponse.json({ artifacts: rec.artifacts.map((artifact) => ({ filename: artifact.filename, contentType: artifact.contentType, size: artifact.size, createdAt: artifact.createdAt })) })
   }),
 
+  // The demo has no browser to show, so live view is off.
+  http.get(api('/tasks/:id/live'), () => notFound('live view')),
+
   http.get(api('/tasks/:id/artifacts/:filename'), ({ request, params }) => {
     const rec = lookup(request, nameParam(params))
     const artifact = rec?.artifacts.find((a) => a.filename === nameParam(params, 'filename'))
