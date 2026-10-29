@@ -109,7 +109,7 @@ const (
 	securityReviewInitialAttempt = 0
 	securityReviewRetryAttempt   = 1
 	securityReviewRetryPrompt    = "\n\nThis is the only automatic result retry. " +
-		"The prior review task returned an invalid terminal result. " +
+		"The prior review task failed or returned an invalid terminal result. " +
 		"Re-run the review from the trusted context above and return exactly one JSON object matching the required envelope. " +
 		"Do not include prose, Markdown fences, or tool transcripts."
 )
@@ -3313,6 +3313,14 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 	}
 
 	if task.Status.Phase != corev1alpha1.TaskPhaseSucceeded {
+		// A failed prompt is often a transient provider error; give the
+		// slice its one automatic retry before failing the run.
+		if task.Status.Phase == corev1alpha1.TaskPhaseFailed {
+			retried, err := r.retryReviewSlice(ctx, scan, task, run, reviewSlice, sliceID, "a failed review prompt")
+			if err != nil || retried {
+				return err
+			}
+		}
 		return r.failReviewTask(ctx, scan, task, run, sliceID, r.pipelineTaskFailureSummary(ctx, task))
 	}
 
@@ -3326,24 +3334,9 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 	}
 	if validationProblem != "" {
 		if retryableResult {
-			retried, retryErr := r.ensureReviewResultRetry(ctx, scan, task, run, reviewSlice, sliceID)
-			if retryErr != nil {
-				if conflict, ok := errors.AsType[*reviewRetryIdentityConflictError](retryErr); ok {
-					// Fail this slice closed rather than returning the
-					// error: a returned error re-runs on every reconcile
-					// and blocks ingestion for every other run of the scan.
-					return r.failReviewTask(ctx, scan, task, run, sliceID, conflict.Error())
-				}
+			retried, retryErr := r.retryReviewSlice(ctx, scan, task, run, reviewSlice, sliceID, "an invalid terminal result")
+			if retryErr != nil || retried {
 				return retryErr
-			}
-			if retried {
-				return r.applyScanTaskIngestion(ctx, scan, task, run, func(_ *RepositoryScanReconciler, current *store.ScanRun, _ *store.ScanTaskIngestion) error {
-					current.Phase = scanRunPhaseRunning
-					current.CompletedAt = nil
-					current.ErrorMessage = ""
-					current.Summary = fmt.Sprintf("Retrying review slice %s after an invalid terminal result", sliceID)
-					return nil
-				})
 			}
 		}
 		message := validationProblem
@@ -3569,6 +3562,38 @@ func (e *reviewRetryIdentityConflictError) Error() string {
 	return e.message + "; re-run the scan after removing the stale retry Task"
 }
 
+// retryReviewSlice starts the slice's one automatic retry and records why.
+// It reports whether a retry now owns the slice.
+func (r *RepositoryScanReconciler) retryReviewSlice(
+	ctx context.Context,
+	scan *corev1alpha1.RepositoryScan,
+	task *corev1alpha1.Task,
+	run *store.ScanRun,
+	reviewSlice *store.ReviewSlice,
+	sliceID, cause string,
+) (bool, error) {
+	retried, err := r.ensureReviewResultRetry(ctx, scan, task, run, reviewSlice, sliceID)
+	if err != nil {
+		if conflict, ok := errors.AsType[*reviewRetryIdentityConflictError](err); ok {
+			// Fail this slice closed rather than returning the error: a
+			// returned error re-runs on every reconcile and blocks
+			// ingestion for every other run of the scan.
+			return true, r.failReviewTask(ctx, scan, task, run, sliceID, conflict.Error())
+		}
+		return false, err
+	}
+	if !retried {
+		return false, nil
+	}
+	return true, r.applyScanTaskIngestion(ctx, scan, task, run, func(_ *RepositoryScanReconciler, current *store.ScanRun, _ *store.ScanTaskIngestion) error {
+		current.Phase = scanRunPhaseRunning
+		current.CompletedAt = nil
+		current.ErrorMessage = ""
+		current.Summary = fmt.Sprintf("Retrying review slice %s after %s", sliceID, cause)
+		return nil
+	})
+}
+
 func reviewResultRetryEligible(
 	scan *corev1alpha1.RepositoryScan,
 	sourceTask *corev1alpha1.Task,
@@ -3580,7 +3605,8 @@ func reviewResultRetryEligible(
 		return false
 	}
 	attempt, validAttempt := securityReviewAttempt(sourceTask)
-	if !validAttempt || attempt != securityReviewInitialAttempt || sourceTask.Status.Phase != corev1alpha1.TaskPhaseSucceeded {
+	if !validAttempt || attempt != securityReviewInitialAttempt ||
+		(sourceTask.Status.Phase != corev1alpha1.TaskPhaseSucceeded && sourceTask.Status.Phase != corev1alpha1.TaskPhaseFailed) {
 		return false
 	}
 	if !activeScanRunPhase(run.Phase) || run.Namespace != scan.Namespace || run.RepositoryScan != scan.Name {

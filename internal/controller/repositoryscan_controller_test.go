@@ -7105,3 +7105,53 @@ func TestIngestValidationTaskMarksUndecodableResultAsError(t *testing.T) {
 		t.Fatalf("finding = %q %q, want error status distinct from a refuted finding", updated.ValidationStatus, updated.ValidationJSON)
 	}
 }
+
+func TestIngestReviewTaskRetriesFailedPromptOnce(t *testing.T) {
+	fixture := newReviewResultRetryFixture(t)
+	fixture.sourceTask.Status.Phase = corev1alpha1.TaskPhaseFailed
+	fixture.sourceTask.Status.Message = "prompt failed"
+	if err := fixture.reconciler.ingestScanTask(fixture.ctx, fixture.scan, fixture.sourceTask); err != nil {
+		t.Fatalf("ingestScanTask(failed source) error = %v", err)
+	}
+	retryTask := fixture.getRetryTask(t)
+	if !strings.Contains(retryTask.Spec.Prompt, "failed or returned an invalid terminal result") {
+		t.Fatalf("retry prompt = %q", retryTask.Spec.Prompt)
+	}
+	run, err := fixture.store.GetScanRun(fixture.ctx, defaultNS, fixture.run.ID)
+	if err != nil {
+		t.Fatalf("GetScanRun() error = %v", err)
+	}
+	if run.Phase != scanRunPhaseRunning || run.ErrorMessage != "" || !strings.Contains(run.Summary, "after a failed review prompt") {
+		t.Fatalf("run after failed prompt = %#v, want running retry", run)
+	}
+	var tasks corev1alpha1.TaskList
+	if err := fixture.client.List(fixture.ctx, &tasks, client.InNamespace(defaultNS)); err != nil {
+		t.Fatalf("List(Tasks) error = %v", err)
+	}
+	if progress := fixture.reconciler.collectScanRunProgress(fixture.ctx, tasks.Items); progress.reviewCount != 1 || len(progress.failedStages) != 0 || !progress.hasActive {
+		t.Fatalf("progress = %#v, want the superseded failure ignored", progress)
+	}
+
+	// The retry is the slice's last chance: its failure fails the run.
+	retryTask.Status.Phase = corev1alpha1.TaskPhaseFailed
+	retryTask.Status.Message = "prompt failed"
+	retryTask.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	if err := fixture.client.Update(fixture.ctx, retryTask); err != nil {
+		t.Fatalf("Update(retry Task) error = %v", err)
+	}
+	if err := fixture.reconciler.ingestOwnedTasks(fixture.ctx, fixture.scan); err != nil {
+		t.Fatalf("ingestOwnedTasks() error = %v", err)
+	}
+	if run, err = fixture.store.GetScanRun(fixture.ctx, defaultNS, fixture.run.ID); err != nil {
+		t.Fatalf("GetScanRun(after retry) error = %v", err)
+	}
+	if run.Phase != scanRunPhaseFailed {
+		t.Fatalf("run after failed retry = %#v, want failed", run)
+	}
+	if err := fixture.client.List(fixture.ctx, &tasks, client.InNamespace(defaultNS)); err != nil {
+		t.Fatalf("List(Tasks after retry) error = %v", err)
+	}
+	if len(tasks.Items) != 2 {
+		t.Fatalf("len(tasks) = %d, want no second retry", len(tasks.Items))
+	}
+}
