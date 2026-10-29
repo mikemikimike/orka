@@ -26,6 +26,9 @@ const (
 	acpToolCallTitleEllipsis = "…"
 )
 
+// acpSessionUpdateAgentMessageChunk is the ACP update carrying assistant text.
+const acpSessionUpdateAgentMessageChunk = "agent_message_chunk"
+
 const (
 	acpAssistantPhaseCommentary  = "commentary"
 	acpAssistantPhaseFinalAnswer = "final_answer"
@@ -71,7 +74,7 @@ func mapACPUpdate(notification *acp.SessionNotification) (*harnessv2.UpdateEvent
 		return nil, "", false, fmt.Errorf("decode ACP session update: %w", err)
 	}
 	switch envelope.SessionUpdate {
-	case "agent_message_chunk":
+	case acpSessionUpdateAgentMessageChunk:
 		var content struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -289,7 +292,7 @@ func acpAssistantMessagePhase(notification *acp.SessionNotification) string {
 			} `json:"codex"`
 		} `json:"_meta"`
 	}
-	if json.Unmarshal(notification.Update, &envelope) != nil || envelope.SessionUpdate != "agent_message_chunk" {
+	if json.Unmarshal(notification.Update, &envelope) != nil || envelope.SessionUpdate != acpSessionUpdateAgentMessageChunk {
 		return ""
 	}
 	switch envelope.Meta.Codex.Phase {
@@ -311,7 +314,7 @@ func acpAssistantMessageID(notification *acp.SessionNotification) string {
 		SessionUpdate string `json:"sessionUpdate"`
 		MessageID     string `json:"messageId"`
 	}
-	if json.Unmarshal(notification.Update, &envelope) != nil || envelope.SessionUpdate != "agent_message_chunk" {
+	if json.Unmarshal(notification.Update, &envelope) != nil || envelope.SessionUpdate != acpSessionUpdateAgentMessageChunk {
 		return ""
 	}
 	return envelope.MessageID

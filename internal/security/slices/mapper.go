@@ -47,6 +47,7 @@ const (
 	extYAML             = ".yaml"
 	extYML              = ".yml"
 	packageJSONFile     = "package.json"
+	goModFile           = "go.mod"
 	pyprojectFile       = "pyproject.toml"
 	requirementsTxtFile = "requirements.txt"
 
@@ -192,7 +193,7 @@ func isReviewableFile(rel string) bool {
 		return true
 	}
 	switch name {
-	case "Dockerfile", "Containerfile", "Makefile", "Taskfile.yml", "Taskfile.yaml", "go.mod", "go.sum",
+	case "Dockerfile", "Containerfile", "Makefile", "Taskfile.yml", "Taskfile.yaml", goModFile, "go.sum",
 		packageJSONFile, pyprojectFile, "setup.py", "setup.cfg", requirementsTxtFile:
 		return true
 	default:

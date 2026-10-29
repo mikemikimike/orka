@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -320,11 +321,12 @@ func runSecurityMapper(ctx context.Context) error {
 			return fmt.Errorf("decode security investigations: %w", err)
 		}
 	}
+	baselineAudit, _ := strconv.ParseBool(os.Getenv(security.EnvBaselineAudit))
 	slices, err := securityslices.MapRepository(workDir, securityslices.MapperOptions{
 		RepositoryScan: repositoryScan,
 		SubPath:        os.Getenv(workerenv.WorkspaceSubpath),
 		Investigations: investigations,
-		BaselineAudit:  os.Getenv(security.EnvBaselineAudit) == "true",
+		BaselineAudit:  baselineAudit,
 	})
 	if err != nil {
 		return err

@@ -196,7 +196,7 @@ func newGoImportGraph(root string, files []repoFile) *goImportGraph {
 		goDirsSet: map[string]struct{}{},
 	}
 	for _, file := range files {
-		if file.Name == "go.mod" {
+		if file.Name == goModFile {
 			if module := readGoModulePath(filepath.Join(root, filepath.FromSlash(file.Path))); module != "" {
 				graph.modules = append(graph.modules, goModule{path: module, dir: file.Dir})
 			}
