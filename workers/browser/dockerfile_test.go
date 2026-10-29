@@ -136,7 +136,9 @@ func TestChromiumWrapperOpensDevToolsOnlyWhereChromiumAllowsIt(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 
-	playwright := []string{"--headless", "--remote-debugging-pipe", "--user-data-dir=/tmp/playwright_chromiumdev_profile-x"}
+	playwright := []string{
+		"--headless", "--remote-debugging-pipe", "--user-data-dir=/tmp/playwright_chromiumdev_profile-x",
+	}
 	if got, want := run("1", playwright...), "--remote-debugging-port=0 "+strings.Join(playwright, " "); got != want {
 		t.Errorf("with live view on, Playwright's launch ran %q, want %q", got, want)
 	}
