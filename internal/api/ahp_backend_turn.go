@@ -1330,13 +1330,25 @@ func (b *ahpBackend) nextGeneration(ctx context.Context, principal ahphost.Princ
 				_ = b.workspaces.ensureWorktree(setupCtx, principal, pod, project, next)
 				cancel()
 			}
-			go b.workspaces.dropWorktree(context.WithoutCancel(ctx), principal, project, record.Branch)
+			b.dropOldWorktree(ctx, principal, project, record.Branch)
 		}
 		_ = emit.Emit(ctx, record.Session, ahptypes.StateAction{Value: &ahptypes.SessionWorkingDirectoryReplacedAction{
 			Type: ahptypes.ActionTypeSessionWorkingDirectoryReplaced, Directory: ahpDirectoryURI(record.WorkDir), Replacement: ahpDirectoryURI(next.WorkDir),
 		}})
 	}
 	return next, note + "\n\n", nil
+}
+
+// dropOldWorktree removes, in the background, the worktree a session moved
+// off, and reports whether it does. Terminals are the user's own and outlive
+// the worktrees they start in: while one runs, the worktree it may be in
+// stays, as when a session is disposed of.
+func (b *ahpBackend) dropOldWorktree(ctx context.Context, principal ahphost.Principal, project ahpProject, branch string) bool {
+	if b.hasTerminals(principal.UserKey) {
+		return false
+	}
+	go b.workspaces.dropWorktree(context.WithoutCancel(ctx), principal, project, branch)
+	return true
 }
 
 // ahpCarryOver gives a new Orka Session the conversation so far.

@@ -429,3 +429,21 @@ func TestAHPWorkspaceGitChangesFinishAndTakeTurns(t *testing.T) {
 		t.Fatal("the second change never ran")
 	}
 }
+
+// A session's old worktree stays while the user has a terminal open, which
+// may be in it, and goes once none is.
+func TestAHPOldWorktreeStaysWhileATerminalRuns(t *testing.T) {
+	env := newAHPTestEnv(t)
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	key := ahpTerminalKey(alice.UserKey, "ahp-terminal:/a")
+	env.backend.mu.Lock()
+	env.backend.shells[key] = &ahpTerminal{ctx: ctx, channel: "ahp-terminal:/a", cancel: cancel}
+	env.backend.mu.Unlock()
+	require.False(t, env.backend.dropOldWorktree(context.Background(), alice, ahpProject{}, "old"))
+	env.backend.mu.Lock()
+	delete(env.backend.shells, key)
+	env.backend.mu.Unlock()
+	require.True(t, env.backend.dropOldWorktree(context.Background(), alice, ahpProject{}, "old"))
+}
