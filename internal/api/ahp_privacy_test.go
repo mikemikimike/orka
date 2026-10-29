@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 	kubernetestesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/events"
@@ -296,8 +299,15 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		{Namespace: namespace, TaskUID: "legacy-unknown-fork", TaskName: "ahp-alice-t1-fork-2"},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
+	// Usage with no Task, as a chat's: an AHP session's is its owner's while
+	// a turn's Task continues the session, and no one's after.
+	observations := []store.UsageObservation{
+		{Namespace: namespace, CounterID: "chat-in-bobs", SessionName: "ahp-live"},
+		{Namespace: namespace, CounterID: "chat-in-gone", SessionName: "ahp-gone"},
+		{Namespace: namespace, CounterID: "chat-in-team", SessionName: "team-session"},
+	}
 	hidden := func(caller *UserInfo) map[string]bool {
-		data := store.UsageData{Tasks: slices.Clone(rows)}
+		data := store.UsageData{Tasks: slices.Clone(rows), Observations: slices.Clone(observations)}
 		app := fiber.New()
 		app.Get("/", func(c fiber.Ctx) error {
 			c.Locals(UserInfoContextKey, caller)
@@ -312,12 +322,12 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	require.Equal(t, map[string]bool{
 		"default/alice-legacy": true, "default/reused-bob": true, "default/other-issuer": true,
 		"default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true, "default/unknown-sessionless-turn": true,
-		"default/legacy-unknown-fork": true,
+		"default/legacy-unknown-fork": true, "default/call-chat-in-bobs": true, "default/call-chat-in-gone": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
 	require.Equal(t, map[string]bool{
 		"default/alice-turn": true, "default/alice-legacy": true, "default/reused-alice": true, "default/other-issuer": true,
 		"default/alice-before-bob": true, "default/alice-sessionless-fork": true, "default/unknown-sessionless-turn": true,
-		"default/legacy-alice-fork": true, "default/legacy-unknown-fork": true,
+		"default/legacy-alice-fork": true, "default/legacy-unknown-fork": true, "default/call-chat-in-gone": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }
@@ -446,4 +456,35 @@ func TestAHPSessionPagesNeverNameAHiddenSession(t *testing.T) {
 		}
 	}
 	require.Equal(t, []string{"team-new", "team-old"}, all)
+}
+
+// Rows that retain their requester need no session owner, so a report of
+// only such rows lists no Tasks.
+func TestAHPUsageOfKnownRequestersLooksUpNoOwners(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	var lists atomic.Int32
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			lists.Add(1)
+			return c.List(ctx, list, opts...)
+		},
+	}).Build()
+	handlers := NewHandlers(HandlersConfig{Client: kube})
+	alice := &store.UsageRequester{Issuer: "https://issuer.example", Subject: "alice"}
+	data := store.UsageData{Tasks: []store.UsageTask{
+		{Namespace: "default", TaskUID: "one", SessionName: "ahp-gone", Requester: alice},
+		{Namespace: "default", TaskUID: "two", SessionName: "ahp-other", Requester: alice},
+	}}
+	app := fiber.New()
+	app.Get("/", func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"})
+		return handlers.filterUsageTaskAccess(c, &data, time.Now())
+	})
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, map[string]bool{"default/one": true, "default/two": true}, data.HiddenTasks)
+	require.Zero(t, lists.Load())
 }

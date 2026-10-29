@@ -196,6 +196,8 @@ func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
 		{name: "hidden turn reports on the counter, recorded in another session", hiddenSession: "elsewhere", visible: 0,
 			reports: append(slices.Clone(first), report{"hidden", store.UsageStatusCompleted, count(180)},
 				report{"second", store.UsageStatusCompleted, count(250)})},
+		{name: "hidden turn reports the first total", hiddenSession: "elsewhere", visible: 0, reports: []report{
+			{"first", store.UsageStatusStarted, nil}, {"hidden", store.UsageStatusCompleted, count(500)}}},
 		{name: "hidden turn in the session never reports", hiddenSession: "shared", visible: 0, reports: append(slices.Clone(first),
 			report{"second", store.UsageStatusCompleted, count(250)})},
 		{name: "hidden turn in the session before a baseline", hiddenSession: " shared ", visible: 0, reports: []report{
@@ -229,6 +231,21 @@ func TestUsageHiddenTurnsStayOffASharedCounter(t *testing.T) {
 			encoded, err := json.Marshal(report)
 			require.NoError(t, err)
 			require.Equal(t, tc.visible == 0, strings.Contains(string(encoded), "Shared with a Task this report does not show"), "the gap shows")
+			// A visible Task's measurement shows its latest report.
+			for _, work := range report.Works {
+				for _, task := range work.Tasks {
+					if task.TaskUID != "first" || len(task.Measurements) == 0 {
+						continue
+					}
+					last := tc.reports[0].status
+					for _, r := range tc.reports {
+						if r.task == "first" {
+							last = r.status
+						}
+					}
+					require.Equal(t, last, task.Measurements[0].Status)
+				}
+			}
 		})
 	}
 }

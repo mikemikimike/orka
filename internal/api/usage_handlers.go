@@ -237,36 +237,22 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 		linkedWorks[key] = append(linkedWorks[key], link.WorkID)
 	}
 	ui := GetUserInfo(c)
-	ahpOwners := map[string]map[string]*corev1alpha1.Task{}
-	ahpSessions := map[string][]string{}
-	for _, task := range data.Tasks {
-		if _, ahp := ahpSessionName(task.SessionName); ahp {
-			ahpSessions[task.Namespace] = append(ahpSessions[task.Namespace], task.SessionName)
-		}
-	}
+	ownersIn := h.ahpUsageOwners(c, ui, *data)
 	for _, task := range data.Tasks {
 		key := task.Namespace + "/" + task.TaskUID
 		known[key] = true
 		// Another person's AHP turns stay out of the report, as from the
 		// Task API.
-		// Rows from before the turn mark name their Task, which a turn or a
-		// fork of one names with the AHP prefix.
-		if _, ahp := ahpSessionName(task.SessionName); ahpPerson(ui) && (ahp || task.AHPTurn || strings.HasPrefix(task.TaskName, ahpNamePrefix)) {
-			owners, ok := ahpOwners[task.Namespace]
-			if !ok {
-				var err error
-				if owners, err = ahpSessionOwnersIn(c.Context(), h.client, task.Namespace, ahpSessions[task.Namespace]); err != nil {
-					return err
-				}
-				ahpOwners[task.Namespace] = owners
+		hidden, err := ahpUsageRowHidden(ui, task, ownersIn)
+		if err != nil {
+			return err
+		}
+		if hidden {
+			data.HiddenTasks[key] = true
+			if task.WorkID != "" {
+				hiddenWorks[task.WorkID] = true
 			}
-			if ahpUsageHidden(ui, task, owners) {
-				data.HiddenTasks[key] = true
-				if task.WorkID != "" {
-					hiddenWorks[task.WorkID] = true
-				}
-				continue
-			}
+			continue
 		}
 		owner := task.GatewayOwner
 		if owner == nil {
@@ -307,9 +293,71 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 		if observation.TaskUID != "" && !known[key] {
 			data.HiddenTasks[key] = true
 		}
+		// Usage with no Task, such as a chat's in an AHP session, is the
+		// session's owner's while a turn's Task continues it, and no one's
+		// after.
+		if _, ahp := ahpSessionName(observation.SessionName); observation.TaskUID == "" && ahp && ahpPerson(ui) {
+			owners, err := ownersIn(observation.Namespace)
+			if err != nil {
+				return err
+			}
+			if ahpSessionHiddenBy(ui, observation.SessionName, owners) {
+				data.HiddenTasks[usage.ObservationTaskKey(observation)] = true
+			}
+		}
 	}
 	data.Works = slices.DeleteFunc(data.Works, func(work store.UsageWorkRequest) bool { return hiddenWorks[work.ID] })
 	return nil
+}
+
+// ahpUsageRowHidden reports a usage row of an AHP turn, or in an AHP session,
+// that the person may not see; any other row is not hidden here. Rows from
+// before the turn mark name their Task, which a turn or a fork of one names
+// with the AHP prefix.
+func ahpUsageRowHidden(ui *UserInfo, task store.UsageTask, ownersIn func(string) (map[string]*corev1alpha1.Task, error)) (bool, error) {
+	if _, ahp := ahpSessionName(task.SessionName); !ahpPerson(ui) || !ahp && !task.AHPTurn && !strings.HasPrefix(task.TaskName, ahpNamePrefix) {
+		return false, nil
+	}
+	// A row's retained requester decides without the session's owner.
+	var owners map[string]*corev1alpha1.Task
+	if task.Requester == nil {
+		var err error
+		if owners, err = ownersIn(task.Namespace); err != nil {
+			return false, err
+		}
+	}
+	return ahpUsageHidden(ui, task, owners), nil
+}
+
+// ahpUsageOwners returns a lookup, per namespace and once each, of the live
+// owners of the AHP sessions whose owner decides who sees their usage: those
+// of rows that retain no requester, and of usage with no Task.
+func (h *Handlers) ahpUsageOwners(c fiber.Ctx, ui *UserInfo, data store.UsageData) func(string) (map[string]*corev1alpha1.Task, error) {
+	sessions := map[string][]string{}
+	if ahpPerson(ui) {
+		for _, task := range data.Tasks {
+			if _, ahp := ahpSessionName(task.SessionName); ahp && task.Requester == nil {
+				sessions[task.Namespace] = append(sessions[task.Namespace], task.SessionName)
+			}
+		}
+		for _, observation := range data.Observations {
+			if _, ahp := ahpSessionName(observation.SessionName); ahp && observation.TaskUID == "" {
+				sessions[observation.Namespace] = append(sessions[observation.Namespace], observation.SessionName)
+			}
+		}
+	}
+	owners := map[string]map[string]*corev1alpha1.Task{}
+	return func(namespace string) (map[string]*corev1alpha1.Task, error) {
+		if found, ok := owners[namespace]; ok {
+			return found, nil
+		}
+		found, err := ahpSessionOwnersIn(c.Context(), h.client, namespace, sessions[namespace])
+		if err != nil {
+			return nil, err
+		}
+		owners[namespace] = found
+		return found, nil
+	}
 }
 
 // usageRepositoryFoldKey preserves strings.EqualFold matching in the PR index.

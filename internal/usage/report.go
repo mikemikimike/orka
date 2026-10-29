@@ -347,30 +347,23 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 			current = &counter{byTask: map[measurementOwner]*Measurement{}}
 			counters[key] = current
 		}
-		uid := observation.TaskUID
-		if uid == "" {
-			uid = "call-" + observation.CounterID
-		}
+		uid := observationTaskUID(observation)
 		tk := taskKey(observation.Namespace, uid)
 		if _, exists := tasks[tk]; !exists {
 			tasks[tk] = Task{UsageTask: store.UsageTask{Namespace: observation.Namespace, TaskUID: uid, TaskName: observation.TaskName,
 				SessionName: observation.SessionName, StartedAt: observation.ObservedAt, Role: unassociatedRole, Phase: unknownTaskPhase}, Measurements: []Measurement{}}
 		}
 		if shared[key] {
+			// A gain on it may be a hidden Task's: it is credited to no Task,
+			// and the counter has no baseline to show. A hidden Task's report
+			// changes nothing a visible Task shows.
 			if !data.HiddenTasks[tk] {
-				// A gain on it may be a hidden Task's: it is credited to no
-				// Task, and the counter has no baseline to show.
-				owner := measurementOwner{taskID: tk, attemptID: observation.AttemptID}
-				if current.byTask[owner] == nil {
-					current.byTask[owner] = &Measurement{AttemptID: observation.AttemptID, Scope: observation.Scope, Source: observation.Source,
-						Provider: observation.Provider, Model: observation.Model, Status: observation.Status, ObservedAt: observation.ObservedAt}
-				}
+				observedBy(current, observation, tk)
 				current.gap = sharedCounterGap
-				continue
 			}
-		} else {
-			addSessionBaseline(current, observation, tasks)
+			continue
 		}
+		addSessionBaseline(current, observation, tasks)
 		applyObservation(current, observation, tk)
 	}
 	for key, c := range counters {
@@ -402,6 +395,18 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 	return tasks
 }
 
+// observationTaskUID names the Task an observation counts toward: its own,
+// or, for usage with no Task such as a chat's, one per counter.
+func observationTaskUID(observation store.UsageObservation) string {
+	return cmp.Or(observation.TaskUID, "call-"+observation.CounterID)
+}
+
+// ObservationTaskKey is the key UsageData.HiddenTasks hides an observation's
+// usage by, also for usage with no Task.
+func ObservationTaskKey(observation store.UsageObservation) string {
+	return taskKey(observation.Namespace, observationTaskUID(observation))
+}
+
 // sharedCounterGap marks usage on a counter a hidden Task may share.
 const sharedCounterGap = "Shared with a Task this report does not show; usage on it is not attributed to a Task"
 
@@ -424,7 +429,7 @@ func sharedCounters(data store.UsageData, tasks map[string]Task, asOf time.Time)
 			continue
 		}
 		key := taskKey(observation.Namespace, observation.Scope+"/"+observation.CounterID)
-		tk := taskKey(observation.Namespace, cmp.Or(observation.TaskUID, "call-"+observation.CounterID))
+		tk := ObservationTaskKey(observation)
 		if data.HiddenTasks[tk] {
 			shared[key] = true
 		} else if observation.Scope == store.UsageScopeSession {
@@ -509,7 +514,9 @@ func finishTaskMeasurements(task Task, key string) Task {
 	return task
 }
 
-func applyObservation(c *counter, observation store.UsageObservation, taskID string) {
+// observedBy returns the measurement of the observing Task's attempt on a
+// counter, brought up to the observation's time, provider, model and status.
+func observedBy(c *counter, observation store.UsageObservation, taskID string) *Measurement {
 	owner := measurementOwner{taskID: taskID, attemptID: observation.AttemptID}
 	m := c.byTask[owner]
 	if m == nil {
@@ -526,6 +533,11 @@ func applyObservation(c *counter, observation store.UsageObservation, taskID str
 	if m.Status != store.UsageStatusCompleted && m.Status != store.UsageStatusFailed && m.Status != store.UsageStatusCancelled {
 		m.Status = observation.Status
 	}
+	return m
+}
+
+func applyObservation(c *counter, observation store.UsageObservation, taskID string) {
+	m := observedBy(c, observation, taskID)
 	counts := [4]*int64{observation.InputTokens, observation.OutputTokens, observation.CachedInputTokens, observation.CacheWriteInputTokens}
 	targets := [4]**int64{&m.InputTokens, &m.OutputTokens, &m.CachedInputTokens, &m.CacheWriteInputTokens}
 	for i, count := range counts {
