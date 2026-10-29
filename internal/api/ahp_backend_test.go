@@ -2526,3 +2526,30 @@ func TestAHPBackendDeferredActionsKeepToTheirTurn(t *testing.T) {
 	confirm("turn-1")
 	require.EqualValues(t, 1, decided.Load(), "the running turn's own decision")
 }
+
+// A turn recorded before a restart whose Task was never created leaves the
+// session counting a turn its Orka Session never ran, and no Orka Session:
+// the next turn creates it, rather than continue one that does not exist.
+func TestAHPBackendCreatesTheOrkaSessionNoTurnCreated(t *testing.T) {
+	env := newAHPTestEnv(t)
+	sessions, ok := env.backend.store.(store.SessionStore)
+	require.True(t, ok)
+	env.backend.h.sessionStore = sessions
+	c := env.connect("alice")
+	ctx := ahpCtx(t)
+	chat := env.setUpSession(c, "allow-all")
+	alice := ahphost.UserKey("https://issuer.example", "alice")
+	require.NoError(t, env.backend.updateSession(ctx, alice, ahpTestSession, func(s *ahpSession) {
+		s.Turns, s.SessionTurns = 1, 1
+	}))
+	record := ahpSession{}
+	require.NoError(t, env.backend.getRecord(ctx, alice, ahpRecordSession, ahpTestSession, &record))
+
+	_, err := c.Dispatch(ctx, chat, ahptypes.StateAction{Value: &ahptypes.ChatTurnStartedAction{
+		Type: ahptypes.ActionTypeChatTurnStarted, TurnId: "turn-2", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: ahptypes.Message{Text: "hello", Origin: ahptypes.MessageOrigin{Kind: ahptypes.MessageKindUser}},
+	}})
+	require.NoError(t, err)
+	task := env.waitForTask(record.OrkaSession + "-t2")
+	require.True(t, task.Spec.SessionRef.Create, "the turn creates the Orka Session")
+}

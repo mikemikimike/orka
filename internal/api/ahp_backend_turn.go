@@ -203,8 +203,15 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 	number := record.Turns + 1
 	name := fmt.Sprintf("%s-t%d", record.OrkaSession, number)
 	// SessionTurns counts the turns the current Orka Session has run, so its
-	// first one creates it, also after a turn whose Task was not created.
+	// first one creates it, also after a turn whose Task was not created. A
+	// turn recorded before a restart, whose Task never was, left the count
+	// raised and no Orka Session: this turn creates it still.
 	first := record.SessionTurns == 0
+	if !first && b.h.sessionStore != nil {
+		if _, err := b.h.sessionStore.GetSession(ctx, record.Namespace, record.OrkaSession); errors.Is(err, store.ErrNotFound) {
+			first = true
+		}
+	}
 	prompt := action.Message.Text
 	if first && len(record.History) > 0 {
 		prompt = ahpCarryOver(record.History) + prompt
