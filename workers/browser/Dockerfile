@@ -120,6 +120,19 @@ RUN set -eu; \
       > /usr/local/bin/playwright.orka; \
     chmod 0755 /usr/local/bin/playwright.orka; \
     mv -f /usr/local/bin/playwright.orka /usr/local/bin/playwright; \
+    for chrome in /ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell \
+        /ms-playwright/chromium-[0-9]*/chrome-linux*/chrome; do \
+      mv "$chrome" "$chrome.orka"; \
+      printf '%s\n' \
+        '#!/bin/sh' \
+        '# With live view on, Chromium also listens for DevTools on 127.0.0.1 and names' \
+        '# the port in DevToolsActivePort, so the worker can screencast its pages to' \
+        '# the dashboard. Playwright keeps driving it over its own pipe.' \
+        'if [ "${ORKA_BROWSER_LIVE_VIEW:-}" = 1 ]; then exec "$0.orka" --remote-debugging-port=0 "$@"; fi' \
+        'exec "$0.orka" "$@"' \
+        > "$chrome"; \
+      chmod 0755 "$chrome"; \
+    done; \
     test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}"
 
 COPY LICENSE NOTICE.md /usr/share/licenses/orka/

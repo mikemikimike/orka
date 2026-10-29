@@ -1,0 +1,177 @@
+/*
+Copyright (c) 2026.
+
+MIT License - see LICENSE file for details.
+*/
+
+package api
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
+)
+
+const liveViewTestImage = "ghcr.io/orka-agents/orka/browser-worker@sha256:" +
+	"1111111111111111111111111111111111111111111111111111111111111111"
+
+// liveViewFixture runs the internal and public live view handlers over one
+// frame holder. Tasks "shop" and "other" each have a worker Pod; "shop" runs
+// the browser image and "other" a plain container image.
+type liveViewFixture struct {
+	app    *fiber.App
+	frames *LiveViewFrames
+	client client.Client
+}
+
+func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
+	t.Helper()
+	scheme := internalCallerAuthScheme(t)
+	objects := make([]client.Object, 0, 6)
+	for name, image := range map[string]string{"shop": liveViewTestImage, "other": "busybox:1.37"} {
+		task := internalCallerAuthTaskObject(name, name+"-uid", name+"-job", "", "")
+		task.Spec.Type = corev1alpha1.TaskTypeContainer
+		task.Spec.Image = image
+		job := internalCallerAuthJob(task, name+"-job", name+"-job-uid")
+		pod := internalCallerAuthPod(task, name+"-pod", name+"-pod-uid", job)
+		objects = append(objects, task, job, pod)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&corev1alpha1.Task{}).Build()
+	var frames *LiveViewFrames
+	if enabled {
+		frames = NewLiveViewFrames()
+	}
+	internal := NewInternalHandlers(nil, nil, nil, nil, nil, InternalHandlersConfig{
+		Client: k8sClient, APIReader: k8sClient, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage,
+	})
+	public := NewHandlers(HandlersConfig{Client: k8sClient, APIReader: k8sClient, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage})
+	app := fiber.New()
+	// X-Test-Pod names the worker Pod a frame post comes from.
+	app.Use(func(c fiber.Ctx) error {
+		if pod := c.Get("X-Test-Pod"); pod != "" {
+			c.Locals(UserInfoContextKey, internalCallerAuthWorkerUser(pod, pod+"-uid"))
+		}
+		return c.Next()
+	})
+	app.Post("/internal/v1/live/:namespace/:taskName", internal.SubmitLiveViewFrame)
+	app.Get("/api/v1/tasks/:id/live", public.GetTaskLiveView)
+	return &liveViewFixture{app: app, frames: frames, client: k8sClient}
+}
+
+func (f *liveViewFixture) post(t *testing.T, task, pod, contentType string, body []byte) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/live/default/"+task, bytes.NewReader(body))
+	req.Header.Set("X-Test-Pod", pod)
+	req.Header.Set("Content-Type", contentType)
+	resp, err := f.app.Test(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func (f *liveViewFixture) get(t *testing.T, task string, header ...string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+task+"/live?namespace=default", nil)
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	resp, err := f.app.Test(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func TestLiveViewShowsTheWorkersLatestFrame(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+
+	resp := f.get(t, "shop")
+	require.Equal(t, http.StatusNoContent, resp.StatusCode, "no frame has arrived yet")
+
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame-1")).StatusCode)
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame-2")).StatusCode)
+
+	resp = f.get(t, "shop")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "frame-2", string(body), "a newer frame replaces the previous one")
+	require.Equal(t, "image/jpeg", resp.Header.Get("Content-Type"))
+	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	require.NotEmpty(t, resp.Header.Get("X-Orka-Frame-Time"))
+	etag := resp.Header.Get("ETag")
+	require.NotEmpty(t, etag)
+
+	require.Equal(t, http.StatusNotModified, f.get(t, "shop", "If-None-Match", etag).StatusCode)
+}
+
+func TestLiveViewTakesFramesOnlyFromTheTasksOwnWorker(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+
+	resp := f.post(t, "shop", "other-pod", "image/jpeg", []byte("forged"))
+	require.Equal(t, http.StatusForbidden, resp.StatusCode, "another Task's worker posted a frame")
+	require.Equal(t, http.StatusForbidden, f.post(t, "other", "other-pod", "image/jpeg", []byte("frame")).StatusCode,
+		"a Task off the browser image has no live view")
+	require.Equal(t, http.StatusNoContent, f.get(t, "shop").StatusCode, "a refused frame was stored")
+}
+
+func TestLiveViewRefusesFramesItCannotShow(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+
+	require.Equal(t, http.StatusUnsupportedMediaType, f.post(t, "shop", "shop-pod", "image/png", []byte("png")).StatusCode)
+	require.Equal(t, http.StatusBadRequest, f.post(t, "shop", "shop-pod", "image/jpeg", nil).StatusCode)
+	tooLarge := bytes.Repeat([]byte("x"), maxLiveViewFrameBytes+1)
+	require.Equal(t, http.StatusRequestEntityTooLarge, f.post(t, "shop", "shop-pod", "image/jpeg", tooLarge).StatusCode)
+}
+
+func TestLiveViewOnlyForRunningBrowserTasks(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	require.Equal(t, http.StatusNotFound, f.get(t, "other").StatusCode, "a plain container Task has no live view")
+
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame")).StatusCode)
+	task := &corev1alpha1.Task{}
+	require.NoError(t, f.client.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "shop"}, task))
+	task.Status.Phase = corev1alpha1.TaskPhaseSucceeded
+	require.NoError(t, f.client.Status().Update(t.Context(), task))
+
+	require.Equal(t, http.StatusNotFound, f.get(t, "shop").StatusCode, "a finished Task still showed a frame")
+	_, kept := f.frames.get(liveViewKey("default", "shop", task.UID))
+	require.False(t, kept, "a finished Task's frame stayed in memory")
+}
+
+func TestLiveViewIsOffByDefault(t *testing.T) {
+	f := newLiveViewFixture(t, false)
+	require.Equal(t, http.StatusNotFound, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame")).StatusCode)
+	require.Equal(t, http.StatusNotFound, f.get(t, "shop").StatusCode)
+}
+
+func TestLiveViewFramesExpireAndStayBounded(t *testing.T) {
+	frames := NewLiveViewFrames()
+	now := time.Unix(1_800_000_000, 0)
+	frames.now = func() time.Time { return now }
+
+	frames.put("a", []byte("old"))
+	now = now.Add(liveViewFrameTTL + time.Second)
+	_, ok := frames.get("a")
+	require.False(t, ok, "a frame outlived its time to live")
+
+	for i := 0; i <= maxLiveViewTasks; i++ {
+		now = now.Add(time.Millisecond)
+		frames.put(fmt.Sprintf("task-%d", i), []byte("frame"))
+	}
+	require.Len(t, frames.frames, maxLiveViewTasks)
+	_, ok = frames.get("task-0")
+	require.False(t, ok, "the oldest frame was kept past the bound")
+
+	// A recreated Task with the same name has a new UID, so a new key.
+	require.NotEqual(t, liveViewKey("default", "shop", "uid-1"), liveViewKey("default", "shop", "uid-2"))
+}

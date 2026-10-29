@@ -105,6 +105,9 @@ type ServerConfig struct {
 	// port serve the embedded web dashboard and answer unrouted non-API
 	// paths with its index page.
 	DashboardEnabled bool
+	// LiveView streams a view-only screencast of running browser Tasks to the
+	// dashboard, held in memory only.
+	LiveView LiveViewConfig
 }
 
 // Server is the REST API server
@@ -127,6 +130,7 @@ type Server struct {
 	MemoryProposalStore store.MemoryProposalStore
 	ExecutionEventStore store.ExecutionEventStore
 	GatewayEventStore   store.GatewayEventStore
+	liveViewFrames      *LiveViewFrames
 }
 
 // NewServer creates a new API server
@@ -156,6 +160,9 @@ func NewServer(c client.Client, sessionManager *controller.SessionManager, confi
 		ExecutionEventStore: config.ExecutionEventStore,
 		GatewayEventStore:   config.GatewayEventStore,
 	}
+	if config.LiveView.Enabled && config.LiveView.BrowserWorkerImage != "" {
+		server.liveViewFrames = NewLiveViewFrames()
+	}
 
 	server.handlers = NewHandlers(HandlersConfig{
 		Client:                    c,
@@ -181,6 +188,8 @@ func NewServer(c client.Client, sessionManager *controller.SessionManager, confi
 		GatewayDeliveryStore:      config.GatewayDeliveryStore,
 		GatewayService:            config.GatewayService,
 		Connectors:                config.Connectors,
+		LiveViewFrames:            server.liveViewFrames,
+		LiveViewBrowserImage:      config.LiveView.BrowserWorkerImage,
 	})
 	resolver := NewProviderResolver(c, config.Chat)
 	server.chatHandler = NewChatHandler(c, config.APIReader, sessionManager, config.Chat, config.WatchNamespace, config.EnforceNamespaceIsolation, config.SessionStore, config.ResultStore, resolver, config.Clientset)
@@ -363,6 +372,7 @@ func (s *Server) setupRoutes() {
 	api.Get("/tasks/:id/children", s.handlers.GetTaskChildren)
 	api.Get("/tasks/:id/artifacts", s.handlers.ListTaskArtifacts)
 	api.Get("/tasks/:id/artifacts/:filename", s.handlers.DownloadTaskArtifact)
+	api.Get("/tasks/:id/live", s.handlers.GetTaskLiveView)
 
 	// Session endpoints
 	api.Get("/sessions", s.handlers.ListSessions)
@@ -555,6 +565,8 @@ func (s *Server) setupRoutes() {
 				GatewayService:          s.config.GatewayService,
 				TaskProvenanceProtected: s.config.TaskProvenanceProtected,
 				ConnectorTools:          s.config.ConnectorTools,
+				LiveViewFrames:          s.liveViewFrames,
+				LiveViewBrowserImage:    s.config.LiveView.BrowserWorkerImage,
 			},
 		)
 		internal := s.app.Group("/internal/v1")
@@ -571,6 +583,7 @@ func (s *Server) setupRoutes() {
 		internal.Post("/results/:namespace/:taskName", callbackAuth, s.internalHandlers.SubmitResult)
 		internal.Post("/artifacts/:namespace/:taskName/:filename", callbackAuth, s.internalHandlers.UploadArtifact)
 		internal.Post("/events/:namespace/:streamType/:streamID", callbackAuth, s.internalHandlers.SubmitExecutionEvent)
+		internal.Post("/live/:namespace/:taskName", callbackAuth, s.internalHandlers.SubmitLiveViewFrame)
 		internal.Use(NewAuthMiddleware(s.client))
 		// Native workers run connector-backed tools here; the person's token
 		// never leaves the controller.

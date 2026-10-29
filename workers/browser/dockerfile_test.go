@@ -74,6 +74,10 @@ func TestBrowserWorkerDockerfileIsPinnedAndHardened(t *testing.T) {
 		// Diagnostics and a browser path other than the image's reach the real installer.
 		`[ "${PLAYWRIGHT_BROWSERS_PATH:-}" = /ms-playwright ] || exec node "$cli" "$@"`,
 		`--help|-h|--list|--dry-run) exec node "$cli" "$@" ;;`,
+		// Live view: Chromium opens a loopback DevTools port only when the
+		// operator turned it on.
+		`if [ "${ORKA_BROWSER_LIVE_VIEW:-}" = 1 ]; then exec "$0.orka" --remote-debugging-port=0 "$@"; fi`,
+		`exec "$0.orka" "$@"`,
 	} {
 		if !strings.Contains(finalStage, required) {
 			t.Errorf("final stage is missing %q", required)
