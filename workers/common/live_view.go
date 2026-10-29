@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -156,8 +158,19 @@ func (lv *liveView) scan(ctx context.Context) {
 }
 
 // devToolsPort reads the port on the first line of a DevToolsActivePort file.
+// The Task's code can write under /tmp, so only a regular file is read, and
+// only its start: opening without blocking keeps a FIFO by that name from
+// stalling discovery, and with it the worker's exit.
 func devToolsPort(file string) (int, bool) {
-	data, err := os.ReadFile(file)
+	f, err := os.OpenFile(file, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return 0, false
+	}
+	defer func() { _ = f.Close() }()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return 0, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 64))
 	if err != nil {
 		return 0, false
 	}
