@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
@@ -251,4 +252,75 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, hidden, sessionHidden, subject)
 	}
+}
+
+// A page of sessions leaves out another person's AHP sessions, and its
+// continue token never names one: pages read on until full, and the token
+// names the last session listed.
+func TestAHPSessionPagesNeverNameAHiddenSession(t *testing.T) {
+	const namespace = "default"
+	turn := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-alice-t1", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, RequestedBy: &corev1alpha1.RequestedBy{Issuer: "https://issuer.example", Subject: "alice"},
+			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-alice"},
+		},
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(turn).Build()
+	db, err := sqlite.NewDB(":memory:")
+	require.NoError(t, err)
+	ss := sqlite.NewStore(db, ":memory:")
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	// Newest first: team-new, ahp-alice, team-old.
+	for i, name := range []string{"team-old", "ahp-alice", "team-new"} {
+		at := start.Add(time.Duration(i) * time.Minute)
+		require.NoError(t, ss.CreateSession(context.Background(), &store.SessionRecord{Namespace: namespace, Name: name, SessionType: "task",
+			CreatedAt: at, UpdatedAt: at}))
+	}
+	handlers := NewHandlers(HandlersConfig{Client: kube, SessionStore: ss, ResultStore: ss})
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob", Username: "bob", Namespace: namespace})
+		return c.Next()
+	})
+	app.Get("/sessions", handlers.ListSessions)
+	page := func(limit int, token string) ([]string, string) {
+		t.Helper()
+		resp, err := app.Test(httptest.NewRequest(http.MethodGet, fmt.Sprintf("/sessions?limit=%d&continue=%s", limit, token), nil))
+		require.NoError(t, err)
+		defer resp.Body.Close() //nolint:errcheck
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var listed struct {
+			Items    []map[string]any `json:"items"`
+			Metadata struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&listed))
+		names := make([]string, 0, len(listed.Items))
+		for _, item := range listed.Items {
+			names = append(names, item["id"].(string))
+		}
+		if listed.Metadata.Continue != "" {
+			cursor, err := decodeSessionListCursor(listed.Metadata.Continue)
+			require.NoError(t, err)
+			require.NotEqual(t, "ahp-alice", cursor.Name, "the token names a hidden session")
+		}
+		return names, listed.Metadata.Continue
+	}
+
+	names, token := page(2, "")
+	require.Equal(t, []string{"team-new", "team-old"}, names)
+	require.Empty(t, token)
+	var all []string
+	for token = ""; ; {
+		names, token = page(1, token)
+		all = append(all, names...)
+		if token == "" {
+			break
+		}
+	}
+	require.Equal(t, []string{"team-new", "team-old"}, all)
 }

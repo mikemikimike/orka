@@ -1084,44 +1084,56 @@ func (h *Handlers) ListSessions(c fiber.Ctx) error {
 	if limit <= MaxLimit {
 		pageLimit = int(limit)
 	}
-	sessions, more, err := h.sessionStore.ListSessionsPage(ctx, namespace, sessionCursor, pageLimit, store.SessionTypeGateway)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to list sessions: %v", err))
-	}
-
-	items := make([]fiber.Map, 0, len(sessions))
-	continueToken := ""
-	if more && len(sessions) > 0 {
-		last := sessions[len(sessions)-1]
-		continueToken = encodeSessionListCursor(store.SessionPageCursor{CreatedAt: last.CreatedAt, Name: last.Name})
-	}
+	// Sessions hidden from the caller are left out, and pages read on until
+	// one is full. The continue token names the last session listed, never
+	// a hidden one: the next page reads the rows after it again.
 	ui := GetUserInfo(c)
-	var ahpOwners map[string]*corev1alpha1.Task
-	if ahpPerson(ui) {
-		names := make([]string, 0, len(sessions))
-		for _, s := range sessions {
-			names = append(names, s.Name)
+	items := make([]fiber.Map, 0, pageLimit)
+	continueToken := ""
+	cursor := sessionCursor
+	for len(items) < pageLimit {
+		sessions, more, err := h.sessionStore.ListSessionsPage(ctx, namespace, cursor, pageLimit, store.SessionTypeGateway)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to list sessions: %v", err))
 		}
-		if ahpOwners, err = ahpSessionOwnersIn(ctx, h.client, namespace, names); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up session owners: %v", err))
+		var ahpOwners map[string]*corev1alpha1.Task
+		if ahpPerson(ui) {
+			names := make([]string, 0, len(sessions))
+			for _, s := range sessions {
+				names = append(names, s.Name)
+			}
+			if ahpOwners, err = ahpSessionOwnersIn(ctx, h.client, namespace, names); err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to look up session owners: %v", err))
+			}
 		}
-	}
-	for _, s := range sessions {
-		if ahpSessionHiddenBy(ui, s.Name, ahpOwners) {
-			continue
+		for i, s := range sessions {
+			if ahpSessionHiddenBy(ui, s.Name, ahpOwners) {
+				continue
+			}
+			items = append(items, fiber.Map{
+				"id":             s.Name,
+				apiFieldName:     s.Name,
+				toolNamespaceArg: namespace,
+				"sessionType":    s.SessionType,
+				"messageCount":   s.MessageCount,
+				"inputTokens":    s.InputTokens,
+				"outputTokens":   s.OutputTokens,
+				"activeTask":     s.ActiveTask,
+				"createdAt":      s.CreatedAt.Format(time.RFC3339),
+				"updatedAt":      s.UpdatedAt.Format(time.RFC3339),
+			})
+			if len(items) == pageLimit {
+				if more || i < len(sessions)-1 {
+					continueToken = encodeSessionListCursor(store.SessionPageCursor{CreatedAt: s.CreatedAt, Name: s.Name})
+				}
+				break
+			}
 		}
-		items = append(items, fiber.Map{
-			"id":             s.Name,
-			apiFieldName:     s.Name,
-			toolNamespaceArg: namespace,
-			"sessionType":    s.SessionType,
-			"messageCount":   s.MessageCount,
-			"inputTokens":    s.InputTokens,
-			"outputTokens":   s.OutputTokens,
-			"activeTask":     s.ActiveTask,
-			"createdAt":      s.CreatedAt.Format(time.RFC3339),
-			"updatedAt":      s.UpdatedAt.Format(time.RFC3339),
-		})
+		if !more || len(sessions) == 0 {
+			break
+		}
+		last := sessions[len(sessions)-1]
+		cursor = &store.SessionPageCursor{CreatedAt: last.CreatedAt, Name: last.Name}
 	}
 
 	response := ListResponse{
