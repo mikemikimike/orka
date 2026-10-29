@@ -74,8 +74,10 @@ type UsageTask struct {
 	PhaseObservedAt time.Time          `json:"-"`
 	PhaseAttempt    int32              `json:"-"`
 	GatewayOwner    *UsageGatewayOwner `json:"gatewayOwner,omitempty"`
-	// Requester is retained for access checks only; reports omit it.
+	// Requester and AHPTurn are retained for access checks only; reports
+	// omit them. AHPTurn marks a Task that was private as an AHP turn.
 	Requester *UsageRequester `json:"requester,omitempty"`
+	AHPTurn   bool            `json:"ahpTurn,omitempty"`
 }
 
 // UsageGatewayOwner retains the immutable access boundary after Task cleanup.

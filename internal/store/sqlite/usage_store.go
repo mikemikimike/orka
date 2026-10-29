@@ -185,6 +185,8 @@ func mergeUsageTaskSnapshot(task *store.UsageTask, existing store.UsageTask) err
 	if existing.Requester != nil {
 		task.Requester = existing.Requester
 	}
+	// A Task once private stays so, whatever later happens to its labels.
+	task.AHPTurn = task.AHPTurn || existing.AHPTurn
 	task.StartedAt = existing.StartedAt
 	if task.WorkID == "" {
 		task.WorkID = existing.WorkID

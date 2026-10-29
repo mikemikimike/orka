@@ -288,6 +288,9 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 		{Namespace: namespace, TaskUID: "legacy-in-bobs", SessionName: "ahp-live"},
 		// A name with surrounding space is the session it names.
 		{Namespace: namespace, TaskUID: "padded-legacy-in-bobs", SessionName: " ahp-live"},
+		// A private fork of a turn with no session of its own.
+		{Namespace: namespace, TaskUID: "alice-sessionless-fork", AHPTurn: true, Requester: requester("alice")},
+		{Namespace: namespace, TaskUID: "unknown-sessionless-turn", AHPTurn: true},
 		{Namespace: namespace, TaskUID: "team", SessionName: "team-session"},
 	}
 	hidden := func(caller *UserInfo) map[string]bool {
@@ -305,11 +308,11 @@ func TestAHPUsageStaysTheRequestersAfterTaskCleanup(t *testing.T) {
 	}
 	require.Equal(t, map[string]bool{
 		"default/alice-legacy": true, "default/reused-bob": true, "default/other-issuer": true,
-		"default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true,
+		"default/legacy-in-bobs": true, "default/padded-legacy-in-bobs": true, "default/unknown-sessionless-turn": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"}))
 	require.Equal(t, map[string]bool{
 		"default/alice-turn": true, "default/alice-legacy": true, "default/reused-alice": true, "default/other-issuer": true,
-		"default/alice-before-bob": true,
+		"default/alice-before-bob": true, "default/alice-sessionless-fork": true, "default/unknown-sessionless-turn": true,
 	}, hidden(&UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "bob"}))
 	require.Empty(t, hidden(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"}))
 }

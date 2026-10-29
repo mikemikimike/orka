@@ -322,7 +322,7 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 			}
 		}
 		task.PhaseHistory = nil
-		task.Requester = nil
+		task.Requester, task.AHPTurn = nil, false
 		if !task.StartedAt.After(asOf) {
 			tasks[taskKey(task.Namespace, task.TaskUID)] = Task{UsageTask: task, Measurements: []Measurement{}}
 		}

@@ -249,7 +249,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 		known[key] = true
 		// Another person's AHP turns stay out of the report, as from the
 		// Task API.
-		if _, ahp := ahpSessionName(task.SessionName); ahpPerson(ui) && ahp {
+		if _, ahp := ahpSessionName(task.SessionName); ahpPerson(ui) && (ahp || task.AHPTurn) {
 			owners, ok := ahpOwners[task.Namespace]
 			if !ok {
 				var err error

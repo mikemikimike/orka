@@ -9,6 +9,7 @@ import (
 
 	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
 	"github.com/orka-agents/orka/internal/gateway"
+	"github.com/orka-agents/orka/internal/labels"
 	"github.com/orka-agents/orka/internal/store"
 	"github.com/orka-agents/orka/internal/usage"
 )
@@ -64,6 +65,7 @@ func usageTaskSnapshot(task *corev1alpha1.Task) store.UsageTask {
 	if requester := task.Spec.RequestedBy; requester != nil {
 		result.Requester = &store.UsageRequester{Issuer: requester.Issuer, Subject: requester.Subject}
 	}
+	result.AHPTurn = task.Labels[labels.LabelAHPTurn] == labels.LabelAHPTurnValue
 	return result
 }
 
