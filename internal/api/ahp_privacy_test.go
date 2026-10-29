@@ -175,15 +175,24 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-bob"},
 		},
 	}
+	// A turn whose workspace is not reused per session.
+	plain := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "ahp-alice-t2", Namespace: namespace, Labels: map[string]string{labels.LabelAHPTurn: labels.LabelAHPTurnValue}},
+		Spec: corev1alpha1.TaskSpec{
+			Type: corev1alpha1.TaskTypeAgent, Prompt: "alice's plan", RequestedBy: requester("alice"),
+			SessionRef: &corev1alpha1.SessionReference{Name: "ahp-alice", Append: true},
+		},
+	}
 	eventStore := storetest.NewFakeExecutionEventStore()
 	appendTestTaskEvent(t, eventStore, turn.Name, events.ExecutionEventTypeTaskStarted)
+	appendTestTaskEvent(t, eventStore, plain.Name, events.ExecutionEventTypeTaskStarted)
 	db, err := sqlite.NewDB(":memory:")
 	require.NoError(t, err)
 	ss := sqlite.NewStore(db, ":memory:")
 	for _, name := range []string{"ahp-alice", "ahp-bob", "ahp-orphan"} {
 		require.NoError(t, ss.CreateSession(context.Background(), &store.SessionRecord{Namespace: namespace, Name: name, SessionType: "task"}))
 	}
-	h, app := setupPostP0Handlers(t, eventStore, ss, turn, bobs)
+	h, app := setupPostP0Handlers(t, eventStore, ss, turn, plain, bobs)
 	reviews := kubernetesfake.NewClientset()
 	reviews.PrependReactor("create", "subjectaccessreviews", func(kubernetestesting.Action) (bool, runtime.Object, error) {
 		return true, externalToolReview(true), nil
@@ -208,5 +217,38 @@ func TestAHPForkStartsItsOwnSessionButContinuesNoOneElses(t *testing.T) {
 		resp := testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t1/fork?namespace=default", map[string]any{"newTaskName": name})
 		require.Equal(t, http.StatusNotFound, resp.StatusCode, name)
 		require.True(t, apierrors.IsNotFound(h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &corev1alpha1.Task{})), name)
+	}
+
+	// A fork carries the turn's prompt and conversation: it is a turn too,
+	// whatever its name or agent, and a name without the AHP prefix, which
+	// would leave a session it starts readable, is refused.
+	require.True(t, ahpTurnTask(created), "the fork is a turn of its own")
+	resp = testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t1/fork?namespace=default", map[string]any{"newTaskName": "my-fork"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.True(t, apierrors.IsNotFound(h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: "my-fork"}, &corev1alpha1.Task{})))
+	require.NoError(t, h.client.Create(t.Context(), &corev1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "other-agent", Namespace: namespace}}))
+	resp = testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t1/fork?namespace=default",
+		map[string]any{"newTaskName": "ahp-other-agent", "agentRef": map[string]any{"name": "other-agent"}})
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
+	other := &corev1alpha1.Task{}
+	require.NoError(t, h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: "ahp-other-agent"}, other))
+	require.Equal(t, "ahp-other-agent", other.Spec.SessionRef.Name, "another agent starts a session of the fork's own")
+	// Forked to another agent, a turn whose workspace is not reused per
+	// session continues no session: only the mark keeps it private.
+	resp = testJSONRequest(t, app, http.MethodPost, "/api/v1/tasks/ahp-alice-t2/fork?namespace=default",
+		map[string]any{"newTaskName": "ahp-sessionless", "agentRef": map[string]any{"name": "other-agent"}})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	sessionless := &corev1alpha1.Task{}
+	require.NoError(t, h.client.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: "ahp-sessionless"}, sessionless))
+	require.Nil(t, sessionless.Spec.SessionRef)
+	for subject, hidden := range map[string]bool{"alice": false, "bob": true} {
+		person := &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: subject}
+		require.Equal(t, hidden, ahpTaskHidden(person, sessionless), subject)
+		require.Equal(t, hidden, ahpTaskHidden(person, other), subject)
+		sessionHidden, err := ahpSessionHiddenIn(t.Context(), h.client, person, namespace, other.Spec.SessionRef.Name)
+		require.NoError(t, err)
+		require.Equal(t, hidden, sessionHidden, subject)
 	}
 }

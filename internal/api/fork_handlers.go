@@ -131,6 +131,13 @@ func (h *Handlers) ForkTask(c fiber.Ctx) error {
 			newName = generatedForkTaskName(sourceName)
 		}
 	}
+	// A fork of an AHP turn carries the turn's prompt and conversation, so it
+	// is private as the turn is: marked a turn, and named, like any session it
+	// starts, with the AHP prefix. Generated names keep the source's.
+	ahpFork := ahpTurnTask(source)
+	if ahpFork && !strings.HasPrefix(newName, ahpNamePrefix) {
+		return fiber.NewError(fiber.StatusBadRequest, "a fork of an AHP turn must be named with the "+ahpNamePrefix+" prefix, which keeps it private")
+	}
 
 	spec := *source.Spec.DeepCopy()
 	applyForkRequestOverrides(&spec, req, namespace)
@@ -157,6 +164,9 @@ func (h *Handlers) ForkTask(c fiber.Ctx) error {
 			},
 		},
 		Spec: spec,
+	}
+	if ahpFork {
+		forked.Labels[labels.LabelAHPTurn] = labels.LabelAHPTurnValue
 	}
 	if err := agentruntimepolicy.ResolveAndReplaceTaskRuntimeRefAllowedTools(
 		c.Context(), h.uncachedReader(), forked,
