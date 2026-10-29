@@ -598,3 +598,47 @@ func TestAHPUsageCounterWithRowlessHiddenUsage(t *testing.T) {
 	operator := build(&UserInfo{AuthType: AuthTypeTokenReview, Username: "system:serviceaccount:default:operator"})
 	require.Contains(t, operator, `"inputTokens":150`, "a ServiceAccount's report keeps the gain attributed")
 }
+
+// limitRecordingStore records the limit each session lookup is given.
+type limitRecordingStore struct {
+	*sqlite.Store
+	limits []int
+}
+
+func (s *limitRecordingStore) UsageTasksInSessions(ctx context.Context, namespace, namespaceUID string, sessions []string, limit int) ([]store.UsageTask, error) {
+	s.limits = append(s.limits, limit)
+	return s.Store.UsageTasksInSessions(ctx, namespace, namespaceUID, sessions, limit)
+}
+
+// The lookup of a report's AHP session rows has one budget across all its
+// teams, as the report's own record limit does.
+func TestAHPUsageSessionLookupSharesOneBudgetAcrossTeams(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.NewDB(":memory:")
+	require.NoError(t, err)
+	recording := &limitRecordingStore{Store: sqlite.NewStore(db, ":memory:")}
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	for _, namespace := range []string{"team-a", "team-b"} {
+		for i := range 3 {
+			require.NoError(t, recording.RegisterUsageTask(ctx, store.UsageTask{Namespace: namespace, TaskUID: fmt.Sprint("turn-", i),
+				TaskName: fmt.Sprint("turn-", i), SessionName: "ahp-shared", Phase: "Succeeded", StartedAt: start}))
+		}
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	handlers := NewHandlers(HandlersConfig{Client: fake.NewClientBuilder().WithScheme(scheme).Build(), ExecutionEventStore: recording})
+	data := store.UsageData{Tasks: []store.UsageTask{
+		{Namespace: "team-a", TaskUID: "mine", SessionName: "ahp-shared", StartedAt: start},
+		{Namespace: "team-b", TaskUID: "mine", SessionName: "ahp-shared", StartedAt: start},
+	}}
+	app := fiber.New()
+	app.Get("/", func(c fiber.Ctx) error {
+		c.Locals(UserInfoContextKey, &UserInfo{AuthType: AuthTypeOIDC, Issuer: "https://issuer.example", Subject: "alice"})
+		return handlers.filterUsageTaskAccess(c, &data, start.Add(time.Hour))
+	})
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, []int{usageMaxRecords, usageMaxRecords - 3}, recording.limits)
+}

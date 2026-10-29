@@ -355,14 +355,18 @@ func (h *Handlers) addHiddenAHPSessionTasks(c fiber.Ctx, ui *UserInfo, data *sto
 		}
 		namespaceUIDs[observation.Namespace] = cmp.Or(namespaceUIDs[observation.Namespace], observation.NamespaceUID)
 	}
-	for namespace, names := range sessions {
-		rows, err := backend.UsageTasksInSessions(c.Context(), namespace, namespaceUIDs[namespace], slices.Sorted(maps.Keys(names)), usageMaxRecords)
+	// One budget covers every team of the report, as the report's own
+	// record limit does.
+	remaining := usageMaxRecords
+	for _, namespace := range slices.Sorted(maps.Keys(sessions)) {
+		rows, err := backend.UsageTasksInSessions(c.Context(), namespace, namespaceUIDs[namespace], slices.Sorted(maps.Keys(sessions[namespace])), remaining)
 		if errors.Is(err, store.ErrUsageSelectionTooLarge) {
 			return fiber.NewError(fiber.StatusUnprocessableEntity, "usage selection exceeds 20000 retained records; narrow the date, team, repository, model, or asOf filters")
 		}
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to load usage report")
 		}
+		remaining -= len(rows)
 		for _, row := range rows {
 			key := row.Namespace + "/" + row.TaskUID
 			if known[key] || !ahpUsageHidden(ui, row.Requester) {
