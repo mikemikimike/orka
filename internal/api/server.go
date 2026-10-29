@@ -228,12 +228,14 @@ func requestBodyConfigWithNativeSessionLimit(header *fasthttp.RequestHeader, nat
 	// fragment handling. net/url would retain a literal '#' in the path and
 	// leave a routed native import without its bounded read deadline.
 	var nativeURI fasthttp.URI
-	if nativeURI.Parse(header.Host(), header.RequestURI()) == nil && isNativeSessionImportPath(string(nativeURI.PathOriginal())) {
+	routed := nativeURI.Parse(header.Host(), header.RequestURI()) == nil
+	if routed && isNativeSessionImportPath(string(nativeURI.PathOriginal())) {
 		return fasthttp.RequestConfig{MaxRequestBodySize: harnessv2.NativeSessionJSONLimit(nativeSessionMaxBytes), ReadTimeout: 30 * time.Second}
 	}
 	// A browser Task's worker posts live view frames; bound the size and the
 	// whole read, so a Task cannot hold controller connections with a slow one.
-	if isLiveViewFramePath(path) {
+	// Match the routed path too, which drops a fragment net/url would keep.
+	if isLiveViewFramePath(path) || (routed && isLiveViewFramePath(string(nativeURI.PathOriginal()))) {
 		return fasthttp.RequestConfig{MaxRequestBodySize: maxLiveViewFrameBytes, ReadTimeout: liveViewReadTimeout}
 	}
 	// Internal broker endpoints authorize against per-pool secrets that are

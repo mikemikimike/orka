@@ -207,7 +207,13 @@ func TestLiveViewTaskRunningMatchesTheTaskUID(t *testing.T) {
 }
 
 func TestLiveViewFrameUploadsAreBounded(t *testing.T) {
-	for _, target := range []string{"/internal/v1/live/default/shop", "/INTERNAL/v1/Live/default/shop/"} {
+	for _, target := range []string{
+		"/internal/v1/live/default/shop",
+		"/INTERNAL/v1/Live/default/shop/",
+		// The router drops a fragment, so the bound must too.
+		"/internal/v1/live/default/shop#ignored/fragment",
+		"http://orka-api.orka-system.svc:8080/internal/v1/live/default/shop",
+	} {
 		header := &fasthttp.RequestHeader{}
 		header.SetMethod(http.MethodPost)
 		header.SetRequestURI(target)
