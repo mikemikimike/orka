@@ -332,6 +332,9 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 	// it when combining namespaces; runtime sequences restart per prompt.
 	sort.SliceStable(observations, func(i, j int) bool { return observations[i].ObservedAt.Before(observations[j].ObservedAt) })
 	counters := map[string]*counter{}
+	// hiddenCounters holds the counters a hidden Task reported on. A
+	// counter's baseline is earlier usage on it, so it is hidden with them.
+	hiddenCounters := map[string]bool{}
 	seen := map[string]bool{}
 	for _, observation := range observations {
 		id := taskKey(observation.Namespace, observation.ID)
@@ -354,7 +357,10 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 			tasks[tk] = Task{UsageTask: store.UsageTask{Namespace: observation.Namespace, TaskUID: uid, TaskName: observation.TaskName,
 				SessionName: observation.SessionName, StartedAt: observation.ObservedAt, Role: unassociatedRole, Phase: unknownTaskPhase}, Measurements: []Measurement{}}
 		}
-		if baselineKey := addSessionBaseline(current, observation, tasks); baselineKey != "" && data.HiddenTasks[tk] {
+		if data.HiddenTasks[tk] {
+			hiddenCounters[key] = true
+		}
+		if baselineKey := addSessionBaseline(current, observation, tasks); baselineKey != "" && hiddenCounters[key] {
 			data.HiddenTasks[baselineKey] = true
 		}
 		applyObservation(current, observation, tk)

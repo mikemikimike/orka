@@ -244,7 +244,6 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 			ahpSessions[task.Namespace] = append(ahpSessions[task.Namespace], task.SessionName)
 		}
 	}
-	retained := ahpRetainedRequesters(data.Tasks)
 	for _, task := range data.Tasks {
 		key := task.Namespace + "/" + task.TaskUID
 		known[key] = true
@@ -259,7 +258,7 @@ func (h *Handlers) filterUsageTaskAccess(c fiber.Ctx, data *store.UsageData, asO
 				}
 				ahpOwners[task.Namespace] = owners
 			}
-			if ahpUsageHidden(ui, task, owners, retained) {
+			if ahpUsageHidden(ui, task, owners) {
 				data.HiddenTasks[key] = true
 				if task.WorkID != "" {
 					hiddenWorks[task.WorkID] = true

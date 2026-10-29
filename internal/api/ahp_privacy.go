@@ -204,41 +204,14 @@ func ahpSessionHiddenBy(ui *UserInfo, session string, owners map[string]*corev1a
 	return owner == nil || !ahpOwns(ui, owner)
 }
 
-// ahpUsageSession identifies the usage rows of one session.
-type ahpUsageSession struct{ namespace, namespaceUID, session string }
-
-// ahpRetainedRequesters returns, for each AHP session among the usage rows,
-// the requester those rows retain. Rows that name different requesters leave
-// the session no one's.
-func ahpRetainedRequesters(tasks []store.UsageTask) map[ahpUsageSession]*store.UsageRequester {
-	requesters := map[ahpUsageSession]*store.UsageRequester{}
-	for _, task := range tasks {
-		session, ahp := ahpSessionName(task.SessionName)
-		if !ahp || task.Requester == nil {
-			continue
-		}
-		key := ahpUsageSession{task.Namespace, task.NamespaceUID, session}
-		if known, seen := requesters[key]; !seen {
-			requesters[key] = task.Requester
-		} else if known != nil && *known != *task.Requester {
-			requesters[key] = nil
-		}
-	}
-	return requesters
-}
-
 // ahpUsageHidden reports retained usage in an AHP session that the person may
-// not see. A session's usage is shown or hidden as a whole, since its usage
-// counters span its turns: shown in part, a session could show the rest.
-// While a turn's Task still continues the session, that Task's requester
-// decides, as for the session itself. Once the session's Tasks are cleaned
-// up, the requester its usage retains decides, so people keep seeing their
-// own usage.
-func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task, retained map[ahpUsageSession]*store.UsageRequester) bool {
-	session, _ := ahpSessionName(task.SessionName)
-	if owners[session] != nil {
-		return ahpSessionHiddenBy(ui, session, owners)
+// not see. Usage that retains its requester is that person's alone, whoever
+// now holds a session of its name: a name is free again once a session and
+// its Tasks are gone. Other usage follows the owner of the session while a
+// turn's Task still continues it, as the session does, and is no one's after.
+func ahpUsageHidden(ui *UserInfo, task store.UsageTask, owners map[string]*corev1alpha1.Task) bool {
+	if requester := task.Requester; requester != nil {
+		return requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
 	}
-	requester := retained[ahpUsageSession{task.Namespace, task.NamespaceUID, session}]
-	return requester == nil || requester.Issuer != ui.Issuer || requester.Subject != ui.Subject
+	return ahpSessionHiddenBy(ui, task.SessionName, owners)
 }
