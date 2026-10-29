@@ -2,11 +2,11 @@
 package usage
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -136,127 +136,6 @@ type counter struct {
 	counts [4]*int64
 	byTask map[measurementOwner]*Measurement
 	gap    string
-	// hiddenOpen marks the counts a hidden Task reported last without a
-	// final count: usage after that report may be its own.
-	hiddenOpen [4]bool
-	// lastAt is when the counter was last reported on.
-	lastAt time.Time
-}
-
-// counterPrivacy keeps usage a hidden Task may have used off the visible Tasks
-// that share its counter.
-type counterPrivacy struct {
-	// hidden is the report's hidden Tasks; hidden baselines join them.
-	hidden map[string]bool
-	// counters holds the counters a hidden Task may have used. A counter's
-	// baseline is earlier usage on it, so it is hidden with them, whichever
-	// came first.
-	counters  map[string]bool
-	baselines map[string]string
-	// runs holds, per session, when its hidden Tasks' attempts ran: a hidden
-	// Task can use a session's counter without ever reporting on it. final
-	// holds when a hidden Task's attempt reported its final count, which ends
-	// that attempt's run for usage, whenever its lifecycle recorded the end.
-	runs  map[string][]taskRun
-	final map[string]time.Time
-}
-
-// attemptKey names one attempt of a Task.
-func attemptKey(task string, attempt int32) string { return fmt.Sprintf("%s#%d", task, attempt) }
-
-func newCounterPrivacy(data store.UsageData) *counterPrivacy {
-	p := &counterPrivacy{hidden: data.HiddenTasks, counters: map[string]bool{}, baselines: map[string]string{}, runs: map[string][]taskRun{},
-		final: map[string]time.Time{}}
-	for _, task := range data.Tasks {
-		session := strings.TrimSpace(task.SessionName)
-		if session == "" || !data.HiddenTasks[taskKey(task.Namespace, task.TaskUID)] {
-			continue
-		}
-		// Each attempt is a run of its own: a retry does not undo an earlier
-		// attempt's final count. One that starts ends the one before.
-		id := taskKey(task.Namespace, task.TaskUID)
-		runs := []taskRun{{task: id, start: task.StartedAt}}
-		if len(task.PhaseHistory) > 0 {
-			runs[0].attempt = task.PhaseHistory[0].Attempt
-		}
-		for _, state := range task.PhaseHistory {
-			if run := &runs[len(runs)-1]; state.Attempt != run.attempt {
-				if run.end.IsZero() {
-					run.end = state.ObservedAt
-				}
-				runs = append(runs, taskRun{task: id, attempt: state.Attempt, start: state.ObservedAt})
-			}
-			run := &runs[len(runs)-1]
-			run.end = time.Time{}
-			if state.Phase == "Succeeded" || state.Phase == "Failed" || state.Phase == "Cancelled" {
-				run.end = state.ObservedAt
-			}
-		}
-		key := taskKey(task.Namespace, session)
-		p.runs[key] = append(p.runs[key], runs...)
-	}
-	return p
-}
-
-// observe notes, ahead of an observation, whether a hidden Task may have
-// used the counter since its last report, and reports whether the observing
-// Task is hidden.
-func (p *counterPrivacy) observe(c *counter, key, task string, observation store.UsageObservation, taskSession string) bool {
-	if p.hidden[task] {
-		p.counters[key] = true
-		// Attempt IDs read <attempt>/<prompt>; one that does not end no run.
-		attempt, _, ok := strings.Cut(observation.AttemptID, "/")
-		if n, err := strconv.ParseInt(attempt, 10, 32); ok && err == nil && observation.Complete && terminalUsageStatus(observation.Status) {
-			p.final[attemptKey(task, int32(n))] = observation.ObservedAt
-		}
-		return true
-	}
-	if observation.Scope != store.UsageScopeSession {
-		return false
-	}
-	session := observation.SessionName
-	if session == "" {
-		session = taskSession
-	}
-	// What the counter gained since its last report may be a hidden Task's
-	// that ran meanwhile, reported or not.
-	if p.ranWithin(p.runs[taskKey(observation.Namespace, strings.TrimSpace(session))], c.lastAt, observation.ObservedAt) {
-		p.counters[key] = true
-		c.hiddenOpen = [4]bool{true, true, true, true}
-	}
-	return false
-}
-
-// baseline records a counter's baseline, and hides it once a hidden Task may
-// have used the counter.
-func (p *counterPrivacy) baseline(key, baselineKey string) {
-	if baselineKey != "" {
-		p.baselines[key] = baselineKey
-	}
-	if p.counters[key] && p.baselines[key] != "" {
-		p.hidden[p.baselines[key]] = true
-	}
-}
-
-// taskRun is when a Task ran; a zero end is one not known to have ended.
-type taskRun struct {
-	task       string
-	attempt    int32
-	start, end time.Time
-}
-
-// ranWithin reports a run that overlaps (since, until].
-func (p *counterPrivacy) ranWithin(runs []taskRun, since, until time.Time) bool {
-	for _, run := range runs {
-		end := run.end
-		if final, ok := p.final[attemptKey(run.task, run.attempt)]; ok && (end.IsZero() || final.Before(end)) {
-			end = final
-		}
-		if !run.start.After(until) && (end.IsZero() || end.After(since)) {
-			return true
-		}
-	}
-	return false
 }
 
 type measurementOwner struct{ taskID, attemptID string }
@@ -454,7 +333,7 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 	// it when combining namespaces; runtime sequences restart per prompt.
 	sort.SliceStable(observations, func(i, j int) bool { return observations[i].ObservedAt.Before(observations[j].ObservedAt) })
 	counters := map[string]*counter{}
-	privacy := newCounterPrivacy(data)
+	shared := sharedCounters(data, tasks, asOf)
 	seen := map[string]bool{}
 	for _, observation := range observations {
 		id := taskKey(observation.Namespace, observation.ID)
@@ -477,10 +356,22 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 			tasks[tk] = Task{UsageTask: store.UsageTask{Namespace: observation.Namespace, TaskUID: uid, TaskName: observation.TaskName,
 				SessionName: observation.SessionName, StartedAt: observation.ObservedAt, Role: unassociatedRole, Phase: unknownTaskPhase}, Measurements: []Measurement{}}
 		}
-		hidden := privacy.observe(current, key, tk, observation, tasks[tk].SessionName)
-		privacy.baseline(key, addSessionBaseline(current, observation, tasks))
-		applyObservation(current, observation, tk, hidden)
-		current.lastAt = observation.ObservedAt
+		if shared[key] {
+			if !data.HiddenTasks[tk] {
+				// A gain on it may be a hidden Task's: it is credited to no
+				// Task, and the counter has no baseline to show.
+				owner := measurementOwner{taskID: tk, attemptID: observation.AttemptID}
+				if current.byTask[owner] == nil {
+					current.byTask[owner] = &Measurement{AttemptID: observation.AttemptID, Scope: observation.Scope, Source: observation.Source,
+						Provider: observation.Provider, Model: observation.Model, Status: observation.Status, ObservedAt: observation.ObservedAt}
+				}
+				current.gap = sharedCounterGap
+				continue
+			}
+		} else {
+			addSessionBaseline(current, observation, tasks)
+		}
+		applyObservation(current, observation, tk)
 	}
 	for key, c := range counters {
 		for owner, measurement := range c.byTask {
@@ -509,6 +400,41 @@ func measuredTasks(data store.UsageData, asOf time.Time) map[string]Task {
 		tasks[key] = finishTaskMeasurements(task, key)
 	}
 	return tasks
+}
+
+// sharedCounterGap marks usage on a counter a hidden Task may share.
+const sharedCounterGap = "Shared with a Task this report does not show; usage on it is not attributed to a Task"
+
+// sharedCounters returns the counters that may hold a hidden Task's usage:
+// those a hidden Task reported on, and the session counters of a session a
+// hidden Task continued. A session counter spans the session's turns, so a
+// gain on such a counter may be the hidden Task's even when it never
+// reported; it is credited to no visible Task.
+func sharedCounters(data store.UsageData, tasks map[string]Task, asOf time.Time) map[string]bool {
+	hiddenSessions := map[string]bool{}
+	for _, task := range data.Tasks {
+		session := strings.TrimSpace(task.SessionName)
+		if session != "" && !task.StartedAt.After(asOf) && data.HiddenTasks[taskKey(task.Namespace, task.TaskUID)] {
+			hiddenSessions[taskKey(task.Namespace, session)] = true
+		}
+	}
+	shared := map[string]bool{}
+	for _, observation := range data.Observations {
+		if observation.ObservedAt.After(asOf) {
+			continue
+		}
+		key := taskKey(observation.Namespace, observation.Scope+"/"+observation.CounterID)
+		tk := taskKey(observation.Namespace, cmp.Or(observation.TaskUID, "call-"+observation.CounterID))
+		if data.HiddenTasks[tk] {
+			shared[key] = true
+		} else if observation.Scope == store.UsageScopeSession {
+			session := cmp.Or(observation.SessionName, tasks[tk].SessionName)
+			if hiddenSessions[taskKey(observation.Namespace, strings.TrimSpace(session))] {
+				shared[key] = true
+			}
+		}
+	}
+	return shared
 }
 
 // The first session total may predate this Task. Keep it visible as
@@ -583,10 +509,7 @@ func finishTaskMeasurements(task Task, key string) Task {
 	return task
 }
 
-// applyObservation attributes a counter's new usage to the Task reporting it.
-// Usage after a hidden Task's last report that was not final goes to no Task:
-// it may be the hidden Task's own.
-func applyObservation(c *counter, observation store.UsageObservation, taskID string, hidden bool) {
+func applyObservation(c *counter, observation store.UsageObservation, taskID string) {
 	owner := measurementOwner{taskID: taskID, attemptID: observation.AttemptID}
 	m := c.byTask[owner]
 	if m == nil {
@@ -606,9 +529,6 @@ func applyObservation(c *counter, observation store.UsageObservation, taskID str
 	counts := [4]*int64{observation.InputTokens, observation.OutputTokens, observation.CachedInputTokens, observation.CacheWriteInputTokens}
 	targets := [4]**int64{&m.InputTokens, &m.OutputTokens, &m.CachedInputTokens, &m.CacheWriteInputTokens}
 	for i, count := range counts {
-		if hidden {
-			c.hiddenOpen[i] = count == nil || !observation.Complete || !terminalUsageStatus(observation.Status)
-		}
 		if count == nil {
 			continue
 		}
@@ -625,21 +545,9 @@ func applyObservation(c *counter, observation store.UsageObservation, taskID str
 				c.gap = "Session counter has no initial baseline; earlier usage is shown separately without a work reference"
 				v := *count
 				c.counts[i] = &v
-				if !hidden {
-					c.hiddenOpen[i] = false
-				}
 				continue
 			}
 			previous = *count
-		}
-		if !hidden && c.hiddenOpen[i] {
-			c.hiddenOpen[i] = false
-			if *count > previous {
-				c.gap = "Part of the counter's usage is attributed to no Task in this report"
-			}
-			v := *count
-			c.counts[i] = &v
-			continue
 		}
 		if *targets[i] == nil {
 			v := int64(0)
