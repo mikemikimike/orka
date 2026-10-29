@@ -2,7 +2,6 @@ package security
 
 import (
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 
@@ -56,53 +55,42 @@ func appendSliceScopePrompt(prompt *strings.Builder, slice store.ReviewSlice) {
 	}
 }
 
-const maxReferencePromptDirectories = 40
-
 // appendReferenceFilesPrompt tells the reviewer which files beyond the
-// excerpts it may cite. Paths are summarised by directory to keep the prompt
-// bounded; the manifest holds the exact list the controller enforces.
+// excerpts it may cite. Slice references are listed exactly, so the prompt
+// matches the list the controller enforces; a slice has at most a few hundred.
+// The repository index for cross-component slices is summarised by count.
 func appendReferenceFilesPrompt(prompt *strings.Builder, references []ReviewContextReferenceFile) {
 	if len(references) == 0 {
 		return
 	}
-	dirs := map[string][]string{}
-	seen := map[string]map[string]struct{}{}
+	files := map[string][]string{}
 	repositoryFiles := 0
 	for _, file := range references {
 		if file.Relation == ReferenceRelationRepository {
 			repositoryFiles++
 			continue
 		}
-		dir := path.Dir(file.Path)
-		if seen[file.Relation] == nil {
-			seen[file.Relation] = map[string]struct{}{}
-		}
-		if _, ok := seen[file.Relation][dir]; ok {
-			continue
-		}
-		seen[file.Relation][dir] = struct{}{}
-		dirs[file.Relation] = append(dirs[file.Relation], dir)
+		files[file.Relation] = append(files[file.Relation], file.Path)
 	}
-	prompt.WriteString("\nREFERENCE FILES:\nBeyond the excerpts, you may read these files in your workspace and cite any of their lines:\n")
+	prompt.WriteString("\nREFERENCE FILES:\nBeyond the excerpts, you may read these files in your workspace and cite any of their lines; evidence citing any other file is dropped:\n")
 	if repositoryFiles > 0 {
-		fmt.Fprintf(prompt, "- any of the %d indexed repository source and configuration files (vendored, generated, and build output directories are not indexed)\n", repositoryFiles)
+		fmt.Fprintf(prompt, "- any of the %d indexed repository source and configuration files (vendored, generated, and build output directories are not indexed", repositoryFiles)
+		if repositoryFiles >= MaxReviewContextReferenceFiles {
+			prompt.WriteString("; this repository exceeds the index bound, which keeps source code before configuration")
+		}
+		prompt.WriteString(")\n")
 	}
 	for _, relation := range []struct{ key, label string }{
-		{ReferenceRelationSlice, "this slice's own files, including lines past the excerpts, in"},
-		{ReferenceRelationImports, "packages this slice imports"},
-		{ReferenceRelationImportedBy, "packages that import this slice"},
+		{ReferenceRelationSlice, "this slice's own files, including lines past the excerpts"},
+		{ReferenceRelationImports, "files in packages this slice imports"},
+		{ReferenceRelationImportedBy, "files in packages that import this slice"},
 	} {
-		list := dirs[relation.key]
+		list := files[relation.key]
 		if len(list) == 0 {
 			continue
 		}
 		sort.Strings(list)
-		more := ""
-		if len(list) > maxReferencePromptDirectories {
-			more = fmt.Sprintf(" (and %d more)", len(list)-maxReferencePromptDirectories)
-			list = list[:maxReferencePromptDirectories]
-		}
-		fmt.Fprintf(prompt, "- %s: %s%s\n", relation.label, strings.Join(list, ", "), more)
+		fmt.Fprintf(prompt, "- %s: %s\n", relation.label, strings.Join(list, ", "))
 	}
 }
 

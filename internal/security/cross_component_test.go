@@ -175,7 +175,7 @@ func TestBuildReviewResultPromptExplainsCrossComponentScope(t *testing.T) {
 	}
 	slice := store.ReviewSlice{ID: "slice_api", Title: "API", Kind: "package"}
 	got := BuildReviewResultPrompt(scan, "initial", "", "", "", slice, testResultBinding(), manifest, FindingsV2Repository{RepoURL: scan.Spec.RepoURL, Branch: "main"})
-	for _, want := range []string{"REFERENCE FILES", "packages this slice imports: store", "packages that import this slice: cmd/server", "scan.resolvedQuestions", "root_control"} {
+	for _, want := range []string{"REFERENCE FILES", "files in packages this slice imports: store/db.go", "files in packages that import this slice: cmd/server/main.go", "scan.resolvedQuestions", "root_control"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, got)
 		}
