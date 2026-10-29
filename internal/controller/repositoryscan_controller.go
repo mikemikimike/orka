@@ -3250,7 +3250,7 @@ func (r *RepositoryScanReconciler) validationTaskCountForScanRun(ctx context.Con
 func (r *RepositoryScanReconciler) enqueueAutoValidationTasks(ctx context.Context, scan *corev1alpha1.RepositoryScan, findings []*store.Finding) error {
 	createdByRun := map[string]int{}
 	for _, finding := range findings {
-		if finding == nil || finding.ValidationStatus == findingValidationStatusValidated ||
+		if finding == nil || finding.DuplicateOf != "" || finding.ValidationStatus == findingValidationStatusValidated ||
 			finding.ValidationStatus == findingValidationStatusPending {
 			continue
 		}
@@ -3455,7 +3455,25 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 		if err := tx.SecurityStore.UpdateReviewSliceStatus(ctx, scan.Namespace, scan.Name, sliceID, current.ID, reviewSliceStatusReviewed); err != nil {
 			return err
 		}
-		accepted, capDrops := capAcceptedFindingsForRun(scan, current, partition.Accepted)
+		kept, err := tx.runCanonicalFindings(ctx, scan, current.ID)
+		if err != nil {
+			return err
+		}
+		unique := make([]*store.Finding, 0, len(partition.Accepted))
+		for _, finding := range partition.Accepted {
+			// A repeat of a finding this run already kept is stored as its
+			// duplicate and does not take a place under the run's cap.
+			if canonical := findingWithSharedAnchor(finding, kept); canonical != nil {
+				finding.DuplicateOf = canonical.ID
+				if err := tx.SecurityStore.UpsertObservedFinding(ctx, finding); err != nil {
+					return err
+				}
+				continue
+			}
+			unique = append(unique, finding)
+			kept = append(kept, finding)
+		}
+		accepted, capDrops := capAcceptedFindingsForRun(scan, current, unique)
 		dropped := append(partition.Dropped, capDrops...)
 		ingestion.DroppedFindingsJSON, err = tx.persistDroppedFindingDiagnostics(ctx, scan, task, current, dropped)
 		if err != nil {
@@ -3864,6 +3882,66 @@ func comparableRepositoryScanTaskSpec(spec corev1alpha1.TaskSpec) corev1alpha1.T
 		spec.Suspend = nil
 	}
 	return spec
+}
+
+// runCanonicalFindings lists the findings a run has kept, excluding duplicates.
+func (r *RepositoryScanReconciler) runCanonicalFindings(ctx context.Context, scan *corev1alpha1.RepositoryScan, runID string) ([]*store.Finding, error) {
+	var out []*store.Finding
+	cursor := ""
+	for {
+		page, next, err := r.SecurityStore.ListFindings(ctx, store.FindingFilter{
+			Namespace: scan.Namespace, RepositoryScan: scan.Name, Limit: 200, Cursor: cursor,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for i := range page {
+			if page[i].ScanRunID == runID {
+				out = append(out, &page[i])
+			}
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
+// findingWithSharedAnchor returns a kept finding that reports the same broken
+// control as finding: both cite an overlapping root_control location, or,
+// when neither marks one, an overlapping sink. Findings without such roles
+// never match, so reviews that do not mark roles keep today's behavior.
+func findingWithSharedAnchor(finding *store.Finding, kept []*store.Finding) *store.Finding {
+	for _, role := range []string{"root_control", "sink"} {
+		anchors := findingEvidenceWithRole(finding, role)
+		if len(anchors) == 0 {
+			continue
+		}
+		for _, candidate := range kept {
+			if candidate == nil || candidate.ID == finding.ID || candidate.DuplicateOf != "" {
+				continue
+			}
+			for _, left := range anchors {
+				for _, right := range findingEvidenceWithRole(candidate, role) {
+					if left.Path == right.Path && findingRangesOverlap(left.StartLine, left.EndLine, right.StartLine, right.EndLine) {
+						return candidate
+					}
+				}
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func findingEvidenceWithRole(finding *store.Finding, role string) []store.FindingEvidenceRef {
+	var out []store.FindingEvidenceRef
+	for _, ref := range finding.Evidence {
+		if ref.Role == role && ref.Path != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func capAcceptedFindingsForRun(scan *corev1alpha1.RepositoryScan, run *store.ScanRun, accepted []*store.Finding) ([]*store.Finding, []security.DroppedFindingDiagnostic) {

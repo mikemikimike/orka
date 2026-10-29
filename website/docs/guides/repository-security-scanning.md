@@ -186,6 +186,11 @@ control, and sensitive operation live in different components. Full-repository s
 - **Independent audit.** One extra slice reviews the repository's trust boundaries without
   per-component slicing.
 
+When a review reports a broken control that the run has already kept, that is, both findings
+cite an overlapping `root_control` location (or, without one, an overlapping `sink`), the
+repeat is stored as a duplicate of the first finding and does not count toward
+`maxFindingsPerRun`.
+
 Each review also records coverage: `scan.reviewedFiles` lists the files it read and
 `scan.resolvedQuestions` lists the questions it checked and ruled out. Both appear in the
 review Task's result. Finding evidence can carry a role (`entrypoint`, `source`,

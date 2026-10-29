@@ -7238,3 +7238,108 @@ func TestReviewTasksStayBoundedAndRefillWhileReviewsRun(t *testing.T) {
 		t.Fatalf("review tasks after top-up = %d, want %d", got, maxOutstandingReviewTasks+3)
 	}
 }
+
+func TestIngestReviewTaskStoresRepeatedControlAsDuplicateOutsideCap(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
+	maxFindings := int32(1)
+	scan := &corev1alpha1.RepositoryScan{
+		ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS},
+		Spec:       corev1alpha1.RepositoryScanSpec{RepoURL: "https://github.com/example/repo", MaxFindingsPerRun: &maxFindings},
+	}
+	policyDigest := security.ScannerPolicyDigest(security.ScannerPolicy{})
+	if err := store.CreateScanRun(ctx, &storepkg.ScanRun{
+		ID: "scan_dupes", Namespace: defaultNS, RepositoryScan: "kaset", TaskName: "kaset-review-slice", Mode: "initial",
+		Phase: scanRunPhaseRunning, BaseCommit: "trusted-base", HeadCommit: "trusted-head", PolicyDigest: policyDigest, StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateScanRun() error = %v", err)
+	}
+	reviewSlice := &storepkg.ReviewSlice{
+		SchemaVersion: 1, ID: "slice_api", Namespace: defaultNS, RepositoryScan: "kaset", Source: "deterministic-go-package",
+		Title: "Go package internal/api", Kind: "package", OwnedFiles: []storepkg.ReviewSliceFile{{Path: "internal/api/security.go", Reason: "source"}},
+		Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_dupes",
+	}
+	bindReviewSliceContext(t, reviewSlice)
+	if err := store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
+		t.Fatalf("UpsertReviewSlice() error = %v", err)
+	}
+	task := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "kaset-review-slice", Namespace: defaultNS, Labels: map[string]string{
+			labels.LabelSecurityTarget: "kaset", labels.LabelSecurityScanID: "scan_dupes", labels.LabelSecurityMode: "initial",
+			labels.LabelSecurityStage: security.StageReview, labels.LabelSecuritySliceID: "slice_api",
+		}},
+		Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded},
+	}
+	finding := func(title, category string, start int) security.FindingsV2Finding {
+		return security.FindingsV2Finding{
+			Title: title, Category: category, Severity: "high", Confidence: "high", Summary: title, Remediation: "Check authorization.",
+			Evidence: []security.FindingsV2EvidenceRef{{Path: "internal/api/security.go", StartLine: start, EndLine: start + 3, Role: "root_control"}},
+		}
+	}
+	findings := security.FindingsV2Artifact{
+		SchemaVersion: security.SchemaVersionFindingsV2,
+		Repository:    security.FindingsV2Repository{RepoURL: "https://github.com/example/repo", Branch: "main", BaseSHA: "trusted-base", HeadSHA: "trusted-head"},
+		Scan:          security.FindingsV2Scan{Mode: "initial", SliceID: "slice_api"},
+		Findings: []security.FindingsV2Finding{
+			finding("Missing authorization check", "authz", 5),
+			// Same broken control, reported again under other words.
+			finding("Callers bypass the API permission gate", "CWE-863", 6),
+			// A different control competes for the run's single place.
+			finding("Audit bypass", "authz", 9),
+		},
+	}
+	saveFindingsTaskResult(t, store, task, scan.Name, "scan_dupes", policyDigest, reviewSlice.ReviewContextHash, "slice_api", findings)
+	reconciler.APIReader = repositoryScanRunTestClient(t, scan)
+	if err := reconciler.ingestScanTask(ctx, scan, task); err != nil {
+		t.Fatalf("ingestScanTask() error = %v", err)
+	}
+
+	run, err := store.GetScanRun(ctx, defaultNS, "scan_dupes")
+	if err != nil {
+		t.Fatalf("GetScanRun() error = %v", err)
+	}
+	if run.AcceptedFindings != 1 || run.DroppedFindings != 1 {
+		t.Fatalf("run counts accepted=%d dropped=%d, want 1/1: the repeat must not consume the cap", run.AcceptedFindings, run.DroppedFindings)
+	}
+	all, _, err := store.ListFindings(ctx, storepkg.FindingFilter{Namespace: defaultNS, RepositoryScan: "kaset", IncludeDuplicates: true})
+	if err != nil {
+		t.Fatalf("ListFindings() error = %v", err)
+	}
+	var canonicalID, duplicateOf string
+	for _, item := range all {
+		switch item.Title {
+		case "Missing authorization check":
+			canonicalID = item.ID
+		case "Callers bypass the API permission gate":
+			duplicateOf = item.DuplicateOf
+		case "Audit bypass":
+			t.Fatalf("capped finding was stored: %#v", item)
+		}
+	}
+	if canonicalID == "" || duplicateOf != canonicalID {
+		t.Fatalf("findings = %#v, want the repeat stored as a duplicate of the first", all)
+	}
+}
+
+func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {
+	ref := func(role string, start int) storepkg.FindingEvidenceRef {
+		return storepkg.FindingEvidenceRef{Kind: "file", Path: "pkg/a.go", StartLine: start, EndLine: start + 2, Role: role}
+	}
+	kept := []*storepkg.Finding{{ID: "f1", Evidence: []storepkg.FindingEvidenceRef{ref("root_control", 10), ref("sink", 40)}}}
+	for name, test := range map[string]struct {
+		evidence []storepkg.FindingEvidenceRef
+		want     bool
+	}{
+		"overlapping control":      {[]storepkg.FindingEvidenceRef{ref("root_control", 11)}, true},
+		"distant control":          {[]storepkg.FindingEvidenceRef{ref("root_control", 20)}, false},
+		"same sink, other control": {[]storepkg.FindingEvidenceRef{ref("root_control", 30), ref("sink", 40)}, false},
+		"sink only":                {[]storepkg.FindingEvidenceRef{ref("sink", 41)}, true},
+		"no roles":                 {[]storepkg.FindingEvidenceRef{ref("", 10)}, false},
+	} {
+		got := findingWithSharedAnchor(&storepkg.Finding{ID: "f2", Evidence: test.evidence}, kept) != nil
+		if got != test.want {
+			t.Fatalf("%s: shared anchor = %v, want %v", name, got, test.want)
+		}
+	}
+}
