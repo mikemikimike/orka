@@ -1,6 +1,7 @@
 package security
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -201,7 +202,7 @@ func (s *FindingsV2Scan) UnmarshalJSON(data []byte) error {
 // lenientStringList accepts a string array, a single string, or any other
 // JSON, which is kept as one compact entry.
 func lenientStringList(data json.RawMessage) []string {
-	if len(data) == 0 || string(data) == "null" {
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
 		return nil
 	}
 	var list []FlexibleText
