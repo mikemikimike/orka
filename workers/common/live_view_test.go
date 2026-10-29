@@ -263,6 +263,55 @@ func TestStartLiveViewRetriesAFrameTheControllerDidNotTake(t *testing.T) {
 	}
 }
 
+func TestStartLiveViewStreamsAFewPagesAtOnce(t *testing.T) {
+	var mu sync.Mutex
+	streaming := 0
+	mux := http.NewServeMux()
+	var addr string
+	mux.HandleFunc("/json/list", func(w http.ResponseWriter, _ *http.Request) {
+		pages := make([]map[string]string, 0, 3*liveViewMaxPages)
+		for i := range 3 * liveViewMaxPages {
+			wsURL := fmt.Sprintf("ws://%s/devtools/page/%d", addr, i)
+			pages = append(pages, map[string]string{"type": "page", "webSocketDebuggerUrl": wsURL})
+		}
+		_ = json.NewEncoder(w).Encode(pages)
+	})
+	mux.HandleFunc("/devtools/page/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		mu.Lock()
+		streaming++
+		mu.Unlock()
+		_, _, _ = conn.Read(r.Context())
+		<-r.Context().Done()
+	})
+	browser := httptest.NewServer(mux)
+	t.Cleanup(browser.Close)
+	addr = browser.Listener.Addr().String()
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, _ := liveViewController(t, http.StatusNoContent)
+	setUpLiveView(t, port, controller.URL)
+
+	stop := StartLiveView(t.Context())
+	defer stop()
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return streaming
+	}
+	waitFor(t, "the first pages to stream", func() bool { return count() >= liveViewMaxPages })
+	time.Sleep(5 * liveViewScanInterval)
+	if got := count(); got != liveViewMaxPages {
+		t.Fatalf("streaming %d pages at once, want %d", got, liveViewMaxPages)
+	}
+}
+
 func TestStartLiveViewResendsAStillPage(t *testing.T) {
 	browser := newFakeBrowser(t, [][]byte{[]byte("still-page")})
 	controller, posts := liveViewController(t, http.StatusNoContent)

@@ -31,7 +31,8 @@ import (
 // The live view streams what the Task's browser shows to the dashboard. With
 // live view on, the browser image's Chromium listens for DevTools on
 // 127.0.0.1 and writes its port to DevToolsActivePort in its profile; the
-// worker screencasts every page it finds there and posts the latest frame.
+// worker screencasts the pages it finds there, a few at a time, and posts
+// the latest frame.
 // Frames are posted only when the page repainted, at most twice a second.
 
 const (
@@ -43,6 +44,9 @@ const (
 	liveViewQuality   = 60
 	liveViewMaxWidth  = 1280
 	liveViewMaxHeight = 800
+	// liveViewMaxPages bounds the screencasts at once: the dashboard shows one
+	// frame, and a Task that opens many tabs must not pay to encode them all.
+	liveViewMaxPages = 4
 )
 
 var (
@@ -127,7 +131,8 @@ func (lv *liveView) discover(ctx context.Context) {
 	}
 }
 
-// scan attaches to every page of every browser that named its DevTools port.
+// scan attaches to the pages of every browser that named its DevTools port,
+// up to liveViewMaxPages at once.
 func (lv *liveView) scan(ctx context.Context) {
 	files, _ := filepath.Glob(liveViewProfiles)
 	for _, file := range files {
@@ -140,11 +145,15 @@ func (lv *liveView) scan(ctx context.Context) {
 			continue
 		}
 		for _, wsURL := range pages {
+			// DevTools lists the most recently active pages first; once
+			// liveViewMaxPages stream, another waits for one to close.
 			lv.mu.Lock()
-			attached := lv.pages[wsURL]
-			lv.pages[wsURL] = true
+			attach := !lv.pages[wsURL] && len(lv.pages) < liveViewMaxPages
+			if attach {
+				lv.pages[wsURL] = true
+			}
 			lv.mu.Unlock()
-			if attached {
+			if !attach {
 				continue
 			}
 			lv.wg.Go(func() {

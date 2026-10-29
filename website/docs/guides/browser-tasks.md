@@ -199,8 +199,8 @@ in the dashboard reaches the browser.
 
 Turn it on with the Helm value `workers.browser.liveView: true`, which renders
 `--browser-live-view`. Only Tasks on the configured browser image stream. Their Chromium then
-also listens for DevTools on `127.0.0.1` inside the Pod, and the worker screencasts every
-page that Playwright or `chromium-headless` opens.
+also listens for DevTools on `127.0.0.1` inside the Pod, and the worker screencasts the
+pages that Playwright or `chromium-headless` opens, up to four at a time.
 
 - **Who can see it.** Anyone allowed to read the Task's artifacts. A frame shows whatever
   the page shows, including account data, and Orka redacts nothing, so turn live view on
@@ -211,7 +211,9 @@ page that Playwright or `chromium-headless` opens.
 - **What it shows.** The page that last repainted. A page that does not change sends no
   frames, and with several pages open the view follows whichever changed last.
 - **What does not stream.** Images other than the configured browser image, including
-  [your own](#bring-your-own-image), and a Task whose `command` replaces the entrypoint.
+  [your own](#bring-your-own-image), a Task whose `command` replaces the entrypoint, and a
+  persistent context whose `userDataDir` is outside `/tmp`: the worker finds browsers by
+  the profiles Chromium keeps directly under `/tmp`.
 
 ## Stronger isolation
 
