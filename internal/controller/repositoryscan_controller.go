@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -3500,13 +3501,22 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 		// only after their canonical finding survives the cap and is stored
 		// under its final ID.
 		stored := make(map[*store.Finding]struct{}, len(kept))
+		storedIDs := make(map[string]struct{}, len(kept))
 		for _, finding := range kept {
 			stored[finding] = struct{}{}
+			storedIDs[finding.ID] = struct{}{}
 		}
+		keptIDs := maps.Clone(storedIDs)
 		unique := make([]*store.Finding, 0, len(partition.Accepted))
 		type duplicateFinding struct{ finding, canonical *store.Finding }
 		var duplicates []duplicateFinding
 		for _, finding := range partition.Accepted {
+			// Slices overlap, so another slice may already have reported this
+			// exact finding; it is kept once.
+			if _, ok := keptIDs[finding.ID]; ok {
+				continue
+			}
+			keptIDs[finding.ID] = struct{}{}
 			if canonical := findingWithSharedAnchor(finding, kept); canonical != nil {
 				duplicates = append(duplicates, duplicateFinding{finding, canonical})
 				continue
@@ -3520,6 +3530,7 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 		if err != nil {
 			return err
 		}
+		newlyAccepted := 0
 		for _, finding := range accepted {
 			if err := tx.mergeExistingFindingForTarget(ctx, scan, trustedRepository, finding); err != nil {
 				return err
@@ -3527,8 +3538,14 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 			if err := tx.SecurityStore.UpsertObservedFinding(ctx, finding); err != nil {
 				return err
 			}
-			ingestion.FindingIDs = append(ingestion.FindingIDs, finding.ID)
 			stored[finding] = struct{}{}
+			// A finding merged into one this run already counted is not new.
+			if _, ok := storedIDs[finding.ID]; ok {
+				continue
+			}
+			storedIDs[finding.ID] = struct{}{}
+			ingestion.FindingIDs = append(ingestion.FindingIDs, finding.ID)
+			newlyAccepted++
 		}
 		for _, duplicate := range duplicates {
 			// A repeat of a capped finding is dropped with it.
@@ -3541,7 +3558,7 @@ func (r *RepositoryScanReconciler) ingestReviewTask(ctx context.Context, scan *c
 			}
 		}
 		clearReviewRunError(current, sliceID)
-		current.AcceptedFindings += len(accepted)
+		current.AcceptedFindings += newlyAccepted
 		current.DroppedFindings += len(dropped)
 		current.ReviewedSliceCount++
 		current.Summary = findingsV2.Scan.Summary

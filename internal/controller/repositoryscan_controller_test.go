@@ -7299,10 +7299,17 @@ func duplicateTestFinding(title, category string, start int) security.FindingsV2
 // included.
 func ingestOneSliceUnderCapOfOne(t *testing.T, items ...security.FindingsV2Finding) (*storepkg.ScanRun, []storepkg.Finding) {
 	t.Helper()
+	return ingestReviewSlices(t, 1, items)
+}
+
+// ingestReviewSlices ingests one review result per slice, in order, into a run
+// limited to maxFindings and returns the run and every stored finding,
+// duplicates included. Every slice owns the same file, as overlapping slices do.
+func ingestReviewSlices(t *testing.T, maxFindings int32, results ...[]security.FindingsV2Finding) (*storepkg.ScanRun, []storepkg.Finding) {
+	t.Helper()
 	ctx := context.Background()
 	store := setupControllerSQLiteStore(t)
 	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
-	maxFindings := int32(1)
 	scan := &corev1alpha1.RepositoryScan{
 		ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS},
 		Spec:       corev1alpha1.RepositoryScanSpec{RepoURL: "https://github.com/example/repo", MaxFindingsPerRun: &maxFindings},
@@ -7314,32 +7321,35 @@ func ingestOneSliceUnderCapOfOne(t *testing.T, items ...security.FindingsV2Findi
 	}); err != nil {
 		t.Fatalf("CreateScanRun() error = %v", err)
 	}
-	reviewSlice := &storepkg.ReviewSlice{
-		SchemaVersion: 1, ID: "slice_api", Namespace: defaultNS, RepositoryScan: "kaset", Source: "deterministic-go-package",
-		Title: "Go package internal/api", Kind: "package", OwnedFiles: []storepkg.ReviewSliceFile{{Path: "internal/api/security.go", Reason: "source"}},
-		Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_dupes",
-	}
-	bindReviewSliceContext(t, reviewSlice)
-	if err := store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
-		t.Fatalf("UpsertReviewSlice() error = %v", err)
-	}
-	task := &corev1alpha1.Task{
-		ObjectMeta: metav1.ObjectMeta{Name: "kaset-review-slice", Namespace: defaultNS, Labels: map[string]string{
-			labels.LabelSecurityTarget: "kaset", labels.LabelSecurityScanID: "scan_dupes", labels.LabelSecurityMode: "initial",
-			labels.LabelSecurityStage: security.StageReview, labels.LabelSecuritySliceID: "slice_api",
-		}},
-		Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded},
-	}
-	findings := security.FindingsV2Artifact{
-		SchemaVersion: security.SchemaVersionFindingsV2,
-		Repository:    security.FindingsV2Repository{RepoURL: "https://github.com/example/repo", Branch: "main", BaseSHA: "trusted-base", HeadSHA: "trusted-head"},
-		Scan:          security.FindingsV2Scan{Mode: "initial", SliceID: "slice_api"},
-		Findings:      items,
-	}
-	saveFindingsTaskResult(t, store, task, scan.Name, "scan_dupes", policyDigest, reviewSlice.ReviewContextHash, "slice_api", findings)
 	reconciler.APIReader = repositoryScanRunTestClient(t, scan)
-	if err := reconciler.ingestScanTask(ctx, scan, task); err != nil {
-		t.Fatalf("ingestScanTask() error = %v", err)
+	for i, items := range results {
+		sliceID := fmt.Sprintf("slice_api_%d", i)
+		reviewSlice := &storepkg.ReviewSlice{
+			SchemaVersion: 1, ID: sliceID, Namespace: defaultNS, RepositoryScan: "kaset", Source: "deterministic-go-package",
+			Title: "Go package internal/api", Kind: "package", OwnedFiles: []storepkg.ReviewSliceFile{{Path: "internal/api/security.go", Reason: "source"}},
+			Confidence: "high", Status: reviewSliceStatusPending, LastScanRunID: "scan_dupes",
+		}
+		bindReviewSliceContext(t, reviewSlice)
+		if err := store.UpsertReviewSlice(ctx, reviewSlice); err != nil {
+			t.Fatalf("UpsertReviewSlice() error = %v", err)
+		}
+		task := &corev1alpha1.Task{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("kaset-review-slice-%d", i), Namespace: defaultNS, Labels: map[string]string{
+				labels.LabelSecurityTarget: "kaset", labels.LabelSecurityScanID: "scan_dupes", labels.LabelSecurityMode: "initial",
+				labels.LabelSecurityStage: security.StageReview, labels.LabelSecuritySliceID: sliceID,
+			}},
+			Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded},
+		}
+		findings := security.FindingsV2Artifact{
+			SchemaVersion: security.SchemaVersionFindingsV2,
+			Repository:    security.FindingsV2Repository{RepoURL: "https://github.com/example/repo", Branch: "main", BaseSHA: "trusted-base", HeadSHA: "trusted-head"},
+			Scan:          security.FindingsV2Scan{Mode: "initial", SliceID: sliceID},
+			Findings:      items,
+		}
+		saveFindingsTaskResult(t, store, task, scan.Name, "scan_dupes", policyDigest, reviewSlice.ReviewContextHash, sliceID, findings)
+		if err := reconciler.ingestScanTask(ctx, scan, task); err != nil {
+			t.Fatalf("ingestScanTask(%s) error = %v", sliceID, err)
+		}
 	}
 	run, err := store.GetScanRun(ctx, defaultNS, "scan_dupes")
 	if err != nil {
@@ -7350,6 +7360,18 @@ func ingestOneSliceUnderCapOfOne(t *testing.T, items ...security.FindingsV2Findi
 		t.Fatalf("ListFindings() error = %v", err)
 	}
 	return run, all
+}
+
+func TestIngestReviewTaskCountsAFindingReportedByOverlappingSlicesOnce(t *testing.T) {
+	same := security.FindingsV2Finding{
+		Title: "Missing authorization check", Category: "authz", Severity: "high", Confidence: "high",
+		Summary: "Missing authorization check", Remediation: "Check authorization.",
+		Evidence: []security.FindingsV2EvidenceRef{{Path: "internal/api/security.go", StartLine: 5, EndLine: 8}},
+	}
+	run, all := ingestReviewSlices(t, 25, []security.FindingsV2Finding{same}, []security.FindingsV2Finding{same})
+	if run.ReviewedSliceCount != 2 || run.AcceptedFindings != 1 || len(all) != 1 {
+		t.Fatalf("reviewed=%d accepted=%d stored=%d (%s), want one finding counted once", run.ReviewedSliceCount, run.AcceptedFindings, len(all), run.ErrorMessage)
+	}
 }
 
 func TestFindingWithSharedAnchorRequiresMarkedRoles(t *testing.T) {
