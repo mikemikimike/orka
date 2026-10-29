@@ -201,9 +201,10 @@ type UsageStore interface {
 	LoadUsage(context.Context, UsageFilter) (UsageData, error)
 	// UsageTasksInSessions returns, up to limit, the retained rows of a
 	// namespace's Tasks that continued any of the named sessions, by name
-	// without surrounding space, whatever their period. Past the limit it
-	// returns ErrUsageSelectionTooLarge.
-	UsageTasksInSessions(ctx context.Context, namespace string, sessions []string, limit int) ([]UsageTask, error)
+	// without surrounding space, whatever their period. A namespace UID, when
+	// given, keeps out the rows of an earlier namespace of the same name.
+	// Past the limit it returns ErrUsageSelectionTooLarge.
+	UsageTasksInSessions(ctx context.Context, namespace, namespaceUID string, sessions []string, limit int) ([]UsageTask, error)
 	ListUsagePullRequestLinks(context.Context, string, string, time.Time, int) ([]UsagePRLink, error)
 	PruneUsage(context.Context, time.Time) error
 }

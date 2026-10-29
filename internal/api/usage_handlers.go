@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"maps"
 	"slices"
@@ -340,18 +341,22 @@ func (h *Handlers) addHiddenAHPSessionTasks(c fiber.Ctx, ui *UserInfo, data *sto
 			sessions[namespace][session] = true
 		}
 	}
-	known := map[string]bool{}
+	// The report's rows carry their namespace's verified UID, which keeps
+	// out an earlier namespace's rows of the same name.
+	known, namespaceUIDs := map[string]bool{}, map[string]string{}
 	for _, task := range data.Tasks {
 		known[task.Namespace+"/"+task.TaskUID] = true
 		note(task.Namespace, task.SessionName)
+		namespaceUIDs[task.Namespace] = cmp.Or(namespaceUIDs[task.Namespace], task.NamespaceUID)
 	}
 	for _, observation := range data.Observations {
 		if observation.Scope == store.UsageScopeSession {
 			note(observation.Namespace, observation.SessionName)
 		}
+		namespaceUIDs[observation.Namespace] = cmp.Or(namespaceUIDs[observation.Namespace], observation.NamespaceUID)
 	}
 	for namespace, names := range sessions {
-		rows, err := backend.UsageTasksInSessions(c.Context(), namespace, slices.Sorted(maps.Keys(names)), usageMaxRecords)
+		rows, err := backend.UsageTasksInSessions(c.Context(), namespace, namespaceUIDs[namespace], slices.Sorted(maps.Keys(names)), usageMaxRecords)
 		if errors.Is(err, store.ErrUsageSelectionTooLarge) {
 			return fiber.NewError(fiber.StatusUnprocessableEntity, "usage selection exceeds 20000 retained records; narrow the date, team, repository, model, or asOf filters")
 		}

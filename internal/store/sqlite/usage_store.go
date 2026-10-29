@@ -468,7 +468,7 @@ func loadUsage(ctx context.Context, db taskDataExecutor, filter store.UsageFilte
 	return result, nil
 }
 
-func (s *Store) UsageTasksInSessions(ctx context.Context, namespace string, sessions []string, limit int) ([]store.UsageTask, error) {
+func (s *Store) UsageTasksInSessions(ctx context.Context, namespace, namespaceUID string, sessions []string, limit int) ([]store.UsageTask, error) {
 	if len(sessions) == 0 {
 		return nil, nil
 	}
@@ -486,10 +486,11 @@ func (s *Store) UsageTasksInSessions(ctx context.Context, namespace string, sess
 	}
 	rows, err := s.taskDataExecutor(ctx).QueryContext(ctx,
 		`SELECT data FROM usage_tasks
-		 WHERE namespace = ? AND COALESCE(json_extract(data, '$.sessionName'), '') LIKE '%ahp-%'
+		 WHERE namespace = ? AND (? = '' OR COALESCE(json_extract(data, '$.namespaceUID'), '') = ?)
+		   AND COALESCE(json_extract(data, '$.sessionName'), '') LIKE '%ahp-%'
 		   AND EXISTS (SELECT 1 FROM json_each(?) AS wanted
 		               WHERE INSTR(COALESCE(json_extract(usage_tasks.data, '$.sessionName'), ''), wanted.value) > 0)`,
-		namespace, string(names))
+		namespace, namespaceUID, namespaceUID, string(names))
 	if err != nil {
 		return nil, err
 	}
