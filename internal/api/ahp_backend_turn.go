@@ -7,7 +7,6 @@ MIT License - see LICENSE file for details.
 package api
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -291,13 +290,15 @@ func (b *ahpBackend) startTurn(ctx context.Context, principal ahphost.Principal,
 		// number stays used, so a Task the server kept under the name never
 		// stands in the next turn's way.
 		_ = b.cancelTask(context.WithoutCancel(ctx), principal, task.Namespace, name)
-		logSessionUpdate(b.updateSession(ctx, principal.UserKey, record.Session, func(s *ahpSession) {
+		// A session still recording the turn would refuse every later
+		// message: the take-back is tried until it lands.
+		b.updateSessionUntilDone(ctx, principal.UserKey, record.Session, "take back a turn whose Task was not created", func(s *ahpSession) {
 			if s.ActiveTurn != action.TurnId {
 				return
 			}
 			s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
 			s.Agent, s.Model, s.SessionTurns, s.History = record.Agent, record.Model, record.SessionTurns, record.History
-		}), record.Session, "take back a turn whose Task was not created")
+		})
 		b.mu.Lock()
 		if b.turns[turnKey] == turn {
 			delete(b.turns, turnKey)
@@ -1134,29 +1135,18 @@ func (t *ahpTurn) settleWithError(kind, message string) {
 func (t *ahpTurn) finishSession() {
 	now := ahpNow(t.b)
 	_ = t.emit.Emit(t.ctx, t.session.Session, ahpSessionIdle(t.session.Chat, now)...)
-	end := func(ctx context.Context) error {
-		return t.b.updateSession(ctx, t.principal.UserKey, t.session.Session, func(s *ahpSession) {
-			if s.ActiveTurn == t.id {
-				s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
-			}
-		})
-	}
-	err := end(t.ctx)
-	logSessionUpdate(err, t.session.Session, "end the turn")
-	go func() {
-		// A session still recording the turn refuses every later message,
-		// and nothing else ends it while this process runs: try again until
-		// it ends, or the session is gone.
-		ctx := context.WithoutCancel(t.ctx)
-		retry := cmp.Or(t.b.endTurnRetry, time.Second)
-		for delay := retry; err != nil && !errors.Is(err, store.ErrNotFound); delay = min(2*delay, 32*retry) {
-			time.Sleep(delay)
-			err = end(ctx)
-			logSessionUpdate(err, t.session.Session, "end the turn")
+	// A session still recording the turn refuses every later message, and
+	// nothing else ends it while this process runs.
+	ended := t.b.updateSessionUntilDone(t.ctx, t.principal.UserKey, t.session.Session, "end the turn", func(s *ahpSession) {
+		if s.ActiveTurn == t.id {
+			s.ActiveTurn, s.ActiveTask, s.ActiveStartedAt = "", "", ""
 		}
+	})
+	go func() {
+		<-ended
 		// The turn's slot frees when its run loop returns.
 		<-t.ctx.Done()
-		t.b.runPending(ctx, t.principal.UserKey, t.session.Session, t.emit)
+		t.b.runPending(context.WithoutCancel(t.ctx), t.principal.UserKey, t.session.Session, t.emit)
 	}()
 }
 
@@ -1384,14 +1374,33 @@ func ahpKeepHistory(history []ahpExchange) []ahpExchange {
 // with the authority of the connection that sent it. A message whose sender
 // is gone, or whose token no longer holds, does not run: the person sees why.
 func (b *ahpBackend) runPending(ctx context.Context, userKey, session string, emit ahphost.Emitter) {
+	if !b.drainPending(ctx, userKey, session, emit) {
+		return
+	}
+	// The store refused to take a message off the queue, and nothing else
+	// runs it until another turn ends: try again, off the caller.
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		for delay := b.retryWait(); ; delay = min(2*delay, 32*b.retryWait()) {
+			time.Sleep(delay)
+			if !b.drainPending(ctx, userKey, session, emit) {
+				return
+			}
+		}
+	}()
+}
+
+// drainPending starts the session's waiting messages, as runPending does, and
+// reports whether the store refused to take one off the queue.
+func (b *ahpBackend) drainPending(ctx context.Context, userKey, session string, emit ahphost.Emitter) bool {
 	for {
 		var record ahpSession
 		if err := b.getRecord(ctx, userKey, ahpRecordSession, session, &record); err != nil ||
 			record.ActiveTurn != "" || len(record.Pending) == 0 || b.activeTurn(userKey, session) != nil {
-			return
+			return false
 		}
 		if !b.reserveTurn(userKey, session) {
-			return
+			return false
 		}
 		next := record.Pending[0]
 		record.Pending = record.Pending[1:]
@@ -1404,7 +1413,7 @@ func (b *ahpBackend) runPending(ctx context.Context, userKey, session string, em
 		}); err != nil {
 			logSessionUpdate(err, session, "take a message off the queue")
 			b.releaseTurn(userKey, session)
-			return
+			return !errors.Is(err, store.ErrNotFound)
 		}
 		key := ahpPendingKey(userKey, session, next.ID)
 		b.mu.Lock()
@@ -1439,7 +1448,7 @@ func (b *ahpBackend) runPending(ctx context.Context, userKey, session string, em
 				}
 			}), session, "put a message back on the queue")
 			b.releaseTurn(userKey, session)
-			return
+			return false
 		}
 		reason := ""
 		switch {
@@ -1450,7 +1459,7 @@ func (b *ahpBackend) runPending(ctx context.Context, userKey, session string, em
 		}
 		if reason == "" {
 			b.startTurn(ctx, sender, record, action, emit)
-			return
+			return false
 		}
 		b.emitTurnError(ctx, emit, record, action.TurnId, b.now().UTC(), "TurnNotStarted", reason)
 		b.releaseTurn(userKey, session)

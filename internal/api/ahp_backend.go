@@ -7,6 +7,7 @@ MIT License - see LICENSE file for details.
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -192,10 +193,10 @@ type ahpBackend struct {
 	lifecycle map[string]*sync.Mutex
 	// changes serializes, per user, changes to session changesets.
 	changes map[string]*sync.Mutex
-	// endTurnRetry is the first wait before ending a turn the store refused
-	// is tried again; each next wait doubles, up to 32 times it. Zero is a
-	// second.
-	endTurnRetry time.Duration
+	// sessionRetry is the first wait before a session update the store
+	// refused is tried again; each next wait doubles, up to 32 times it.
+	// Zero is a second.
+	sessionRetry time.Duration
 }
 
 // lockUser takes the user's lifecycle lock. It is never taken while mu is held.
@@ -1362,6 +1363,32 @@ func (b *ahpBackend) updateSession(ctx context.Context, userKey, session string,
 	mutate(&record)
 	return b.putRecord(ctx, userKey, ahpRecordSession, session, record)
 }
+
+// updateSessionUntilDone applies a session update that must not be lost: while
+// the store refuses it, it is tried again in the background until it lands or
+// the session is gone. The returned channel closes once it has.
+func (b *ahpBackend) updateSessionUntilDone(ctx context.Context, userKey, session, what string, mutate func(*ahpSession)) <-chan struct{} {
+	done := make(chan struct{})
+	err := b.updateSession(ctx, userKey, session, mutate)
+	logSessionUpdate(err, session, what)
+	if err == nil || errors.Is(err, store.ErrNotFound) {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		ctx := context.WithoutCancel(ctx)
+		for delay := b.retryWait(); err != nil && !errors.Is(err, store.ErrNotFound); delay = min(2*delay, 32*b.retryWait()) {
+			time.Sleep(delay)
+			err = b.updateSession(ctx, userKey, session, mutate)
+			logSessionUpdate(err, session, what)
+		}
+	}()
+	return done
+}
+
+// retryWait is the first wait before a refused session update is tried again.
+func (b *ahpBackend) retryWait() time.Duration { return cmp.Or(b.sessionRetry, time.Second) }
 
 // logSessionUpdate records a failed session update whose caller can go on.
 func logSessionUpdate(err error, session, what string) {
