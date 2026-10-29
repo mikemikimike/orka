@@ -52,6 +52,12 @@ const (
 	liveViewReadTimeout = 10 * time.Second
 	// maxLiveViewTasks bounds memory: about one frame per running browser Task.
 	maxLiveViewTasks = 256
+	// liveViewCallerTTL is how long a worker that proved it is a Task's current
+	// worker may post frames before proving it again. Each proof reads its Pod,
+	// Job, and Task from the API server, and frames arrive up to twice a second.
+	liveViewCallerTTL = 15 * time.Second
+	// maxLiveViewCallers bounds the remembered proofs.
+	maxLiveViewCallers = 512
 )
 
 type liveViewFrame struct {
@@ -78,6 +84,46 @@ type LiveViewFrames struct {
 	// seq: a dashboard holding an earlier controller's tag must not get 304
 	// for a different picture.
 	instance string
+	// callers remembers workers that proved they are a Task's current worker.
+	callers map[string]liveViewCaller
+}
+
+// liveViewCaller is one remembered proof: the Task the worker Pod is the
+// current worker for, until when.
+type liveViewCaller struct {
+	task  *corev1alpha1.Task
+	until time.Time
+}
+
+func (f *LiveViewFrames) caller(key string) (*corev1alpha1.Task, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	caller, ok := f.callers[key]
+	if !ok || !f.now().Before(caller.until) {
+		delete(f.callers, key)
+		return nil, false
+	}
+	return caller.task, true
+}
+
+func (f *LiveViewFrames) rememberCaller(key string, task *corev1alpha1.Task) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := f.now()
+	if len(f.callers) >= maxLiveViewCallers {
+		for k, caller := range f.callers {
+			if !now.Before(caller.until) {
+				delete(f.callers, k)
+			}
+		}
+	}
+	if len(f.callers) >= maxLiveViewCallers {
+		for k := range f.callers {
+			delete(f.callers, k)
+			break
+		}
+	}
+	f.callers[key] = liveViewCaller{task: task, until: now.Add(liveViewCallerTTL)}
 }
 
 // NewLiveViewFrames returns an empty frame holder.
@@ -86,7 +132,10 @@ func NewLiveViewFrames() *LiveViewFrames {
 	if _, err := rand.Read(id[:]); err != nil {
 		binary.BigEndian.PutUint64(id[:], uint64(time.Now().UnixNano()))
 	}
-	return &LiveViewFrames{frames: map[string]liveViewFrame{}, now: time.Now, instance: hex.EncodeToString(id[:])}
+	return &LiveViewFrames{
+		frames: map[string]liveViewFrame{}, callers: map[string]liveViewCaller{},
+		now: time.Now, instance: hex.EncodeToString(id[:]),
+	}
 }
 
 // etag names one frame of one controller process.
@@ -263,9 +312,19 @@ func (h *InternalHandlers) SubmitLiveViewFrame(c fiber.Ctx) error {
 	if length := c.Request().Header.ContentLength(); length > maxLiveViewFrameBytes {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("a live view frame is limited to %d bytes", maxLiveViewFrameBytes))
 	}
-	task, err := h.internalCallerAuthorizer().verifyTaskCaller(c, namespace, taskName)
-	if err != nil {
-		return err
+	// The token is checked on every request; only the proof that its Pod is
+	// the Task's current worker is remembered, for liveViewCallerTTL.
+	podUID := firstUserExtra(GetUserInfo(c), "authentication.kubernetes.io/pod-uid")
+	callerKey := namespace + "/" + taskName + "/" + podUID
+	task, proven := h.liveViewFrames.caller(callerKey)
+	if !proven || podUID == "" {
+		var err error
+		if task, err = h.internalCallerAuthorizer().verifyTaskCaller(c, namespace, taskName); err != nil {
+			return err
+		}
+		if podUID != "" {
+			h.liveViewFrames.rememberCaller(callerKey, task)
+		}
 	}
 	if !liveViewTask(task, h.liveViewBrowserImage) {
 		return fiber.NewError(fiber.StatusForbidden, "this Task has no live view")

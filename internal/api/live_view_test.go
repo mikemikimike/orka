@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,18 @@ type liveViewFixture struct {
 	app    *fiber.App
 	frames *LiveViewFrames
 	client client.Client
+	reads  *countingReader
+}
+
+// countingReader counts the reads the worker proof makes.
+type countingReader struct {
+	client.Reader
+	gets atomic.Int64
+}
+
+func (r *countingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	r.gets.Add(1)
+	return r.Reader.Get(ctx, key, obj, opts...)
 }
 
 func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
@@ -59,8 +72,9 @@ func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
 	if enabled {
 		frames = NewLiveViewFrames()
 	}
+	reads := &countingReader{Reader: k8sClient}
 	internal := NewInternalHandlers(nil, nil, nil, nil, nil, InternalHandlersConfig{
-		Client: k8sClient, APIReader: k8sClient, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage,
+		Client: k8sClient, APIReader: reads, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage,
 	})
 	public := NewHandlers(HandlersConfig{Client: k8sClient, APIReader: k8sClient, LiveViewFrames: frames, LiveViewBrowserImage: liveViewTestImage})
 	app := fiber.New()
@@ -73,7 +87,7 @@ func newLiveViewFixture(t *testing.T, enabled bool) *liveViewFixture {
 	})
 	app.Post("/internal/v1/live/:namespace/:taskName", internal.SubmitLiveViewFrame)
 	app.Get("/api/v1/tasks/:id/live", public.GetTaskLiveView)
-	return &liveViewFixture{app: app, frames: frames, client: k8sClient}
+	return &liveViewFixture{app: app, frames: frames, client: k8sClient, reads: reads}
 }
 
 func (f *liveViewFixture) post(t *testing.T, task, pod, contentType string, body []byte) *http.Response {
@@ -261,4 +275,25 @@ func TestLiveViewETagsDifferAcrossControllerRestarts(t *testing.T) {
 	b, _ := after.get(liveViewKey("default", "shop", "shop-uid"))
 	require.Equal(t, a.seq, b.seq, "both holders start their sequence at the same number")
 	require.NotEqual(t, before.etag(a), after.etag(b), "a restarted controller reused an ETag for a different frame")
+}
+
+func TestLiveViewProvesTheWorkerOncePerInterval(t *testing.T) {
+	f := newLiveViewFixture(t, true)
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame-1")).StatusCode)
+	proof := f.reads.gets.Load()
+	require.Positive(t, proof)
+	for i := 2; i <= 5; i++ {
+		require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte(fmt.Sprintf("frame-%d", i))).StatusCode)
+	}
+	require.Equal(t, proof, f.reads.gets.Load(), "every frame proved the worker against the API server again")
+
+	// Another Pod is still refused: only a successful proof is remembered.
+	require.Equal(t, http.StatusForbidden, f.post(t, "shop", "other-pod", "image/jpeg", []byte("forged")).StatusCode)
+	require.Equal(t, http.StatusForbidden, f.post(t, "shop", "other-pod", "image/jpeg", []byte("forged")).StatusCode)
+
+	// After the interval, the worker proves itself again.
+	f.frames.now = func() time.Time { return time.Now().Add(liveViewCallerTTL + time.Second) }
+	before := f.reads.gets.Load()
+	require.Equal(t, http.StatusNoContent, f.post(t, "shop", "shop-pod", "image/jpeg", []byte("frame-6")).StatusCode)
+	require.Greater(t, f.reads.gets.Load(), before, "an expired proof was trusted")
 }
