@@ -280,6 +280,9 @@ type promptState struct {
 	finalAnswer         strings.Builder
 	finalAnswerSeen     bool
 	finalAnswerOverflow bool
+	lastMessage         strings.Builder
+	lastMessageID       string
+	lastMessageOverflow bool
 	settlement          *harnessv2.PromptSettlement
 	settlementDigest    string
 	// providerDrainTimedOut records that an admitted inference request was

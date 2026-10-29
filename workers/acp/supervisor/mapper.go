@@ -300,6 +300,23 @@ func acpAssistantMessagePhase(notification *acp.SessionNotification) string {
 	}
 }
 
+// acpAssistantMessageID returns the messageId of an agent_message_chunk.
+// codex-acp 2.x sends message phases only to JetBrains AIR clients, but it
+// still names every model message, so the last named message is the answer.
+func acpAssistantMessageID(notification *acp.SessionNotification) string {
+	if notification == nil {
+		return ""
+	}
+	var envelope struct {
+		SessionUpdate string `json:"sessionUpdate"`
+		MessageID     string `json:"messageId"`
+	}
+	if json.Unmarshal(notification.Update, &envelope) != nil || envelope.SessionUpdate != "agent_message_chunk" {
+		return ""
+	}
+	return envelope.MessageID
+}
+
 const (
 	canonicalACPToolCallIDPrefix = "tool-call-v1-sha256-"
 	canonicalACPToolCallIDDomain = "orka.acp.tool-call-id.v1\x00"

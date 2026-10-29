@@ -2139,7 +2139,11 @@ func (s *Server) mapRuntimeEvent(state *sessionState, prompt *promptState, event
 			return nil, err
 		}
 		if text != "" {
-			prompt.appendAssistantText(text, acpAssistantMessagePhase(event.Update), s.cfg.Capabilities.Limits.MaxTerminalResultBytes)
+			messageID := ""
+			if state.profile.ProviderKind == providerKindCodex {
+				messageID = acpAssistantMessageID(event.Update)
+			}
+			prompt.appendAssistantText(text, acpAssistantMessagePhase(event.Update), messageID, s.cfg.Capabilities.Limits.MaxTerminalResultBytes)
 		}
 		if !ok {
 			prompt.sequence--
@@ -2320,8 +2324,16 @@ func (s *Server) buildTerminalEventLocked(
 	return event
 }
 
-func (p *promptState) appendAssistantText(text, phase string, limit int) {
+func (p *promptState) appendAssistantText(text, phase, messageID string, limit int) {
 	appendBoundedPromptText(&p.assistant, &p.assistantOverflow, text, limit)
+	if messageID != "" {
+		if messageID != p.lastMessageID {
+			p.lastMessage.Reset()
+			p.lastMessageOverflow = false
+			p.lastMessageID = messageID
+		}
+		appendBoundedPromptText(&p.lastMessage, &p.lastMessageOverflow, text, limit)
+	}
 	if phase != acpAssistantPhaseFinalAnswer {
 		return
 	}
@@ -2332,6 +2344,9 @@ func (p *promptState) appendAssistantText(text, phase string, limit int) {
 func (p *promptState) terminalResultText() (string, bool) {
 	if p.finalAnswerSeen {
 		return p.finalAnswer.String(), p.finalAnswerOverflow
+	}
+	if p.lastMessageID != "" {
+		return p.lastMessage.String(), p.lastMessageOverflow
 	}
 	return p.assistant.String(), p.assistantOverflow
 }
