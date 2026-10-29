@@ -259,9 +259,10 @@ controller:
     # ExecutionWorkspaceClass for session-scoped workspaces. Needs an installed
     # workspace provider and controller.executionWorkspace.dispatchEnabled.
     workspaceClass: ""
-    # Digest-pinned image with sh, git, sleep and readlink for per-user AHP
-    # workspace Pods, where clients run git and terminals. Empty disables
-    # workspaces and terminals.
+    # Digest-pinned image for per-user AHP workspace Pods, where clients run
+    # git and terminals, with sh, git and the common tools Orka's scripts run
+    # there (cat, dirname, find, grep, head, ls, mkdir, mktemp, mv, readlink,
+    # rm, sed, sleep, stat). Empty disables workspaces and terminals.
     # When set, the chart creates workspaceNamespace with the restricted Pod
     # Security profile, the controller's Role in it, and a NetworkPolicy that
     # admits no ingress and allows egress only to DNS and TCP 443.

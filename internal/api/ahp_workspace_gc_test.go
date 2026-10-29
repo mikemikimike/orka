@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -462,15 +463,22 @@ func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	require.False(t, w.idle(alice.UserKey[:40], pod), "the use counts as recent")
 }
 
-// A workspace image without sleep, or without the readlink file access
-// resolves paths with, stops its container with a reason rather than run
-// while the Pod looks ready.
+// A workspace image without a command Orka's scripts run there, such as the
+// readlink file access resolves paths with or the grep the check for
+// unpublished work reads flags with, stops its container with a reason
+// rather than run while the Pod looks ready.
 func TestAHPWorkspaceKeepAliveNeedsItsCommands(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
-	require.NoError(t, err)
-	onlySleep := t.TempDir()
-	require.NoError(t, os.Symlink(sleep, filepath.Join(onlySleep, "sleep")))
-	for path, missing := range map[string]string{t.TempDir(): "sleep", onlySleep: "readlink"} {
+	with := func(commands ...string) string {
+		dir := t.TempDir()
+		for _, command := range commands {
+			path, err := exec.LookPath(command)
+			require.NoError(t, err)
+			require.NoError(t, os.Symlink(path, filepath.Join(dir, command)))
+		}
+		return dir
+	}
+	allButGrep := slices.DeleteFunc(strings.Fields(ahpWorkspaceCommands), func(c string) bool { return c == "grep" })
+	for path, missing := range map[string]string{with(): "sleep", with("sleep"): "readlink", with(allButGrep...): "grep"} {
 		cmd := exec.Command("/bin/sh", "-c", ahpWorkspaceKeepAlive)
 		cmd.Env = []string{"PATH=" + path}
 		done := make(chan error, 1)

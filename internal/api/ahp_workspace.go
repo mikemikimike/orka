@@ -527,12 +527,17 @@ trap 'rm -rf "$staging"' EXIT
 git clone --quiet --filter=blob:none -- "$2" "$staging/checkout"
 mv "$staging/checkout" "$1"`
 
-// ahpWorkspaceKeepAlive keeps a workspace container running for exec. It
-// needs the image's sleep, and the readlink that file access resolves paths
-// with, as well as sh and git. It stops with an error when one is missing,
-// rather than run with the Pod looking ready while files look missing.
-const ahpWorkspaceKeepAlive = `for c in sleep readlink; do
-  command -v "$c" >/dev/null 2>&1 || { echo "the workspace image has no $c command; it needs sh, git, sleep and readlink" >&2; exit 1; }
+// ahpWorkspaceCommands are the commands Orka's scripts run in a workspace,
+// besides sh and git.
+const ahpWorkspaceCommands = "sleep readlink cat dirname find grep head ls mkdir mktemp mv rm sed stat"
+
+// ahpWorkspaceKeepAlive keeps a workspace container running for exec. Besides
+// sh and git, it needs the commands Orka's scripts in the workspace run: a
+// missing one could make files look missing, leave credentials uninstalled,
+// or have the check for unpublished work find none. It stops with an error
+// when one is missing, rather than run with the Pod looking ready.
+const ahpWorkspaceKeepAlive = `for c in ` + ahpWorkspaceCommands + `; do
+  command -v "$c" >/dev/null 2>&1 || { echo "the workspace image has no $c command; it needs sh, git and ` + ahpWorkspaceCommands + `" >&2; exit 1; }
 done
 trap 'exit 0' TERM
 while :; do sleep 3600 & wait $!; done`
