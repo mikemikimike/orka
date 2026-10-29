@@ -947,6 +947,10 @@ func (s *Store) ListFindings(ctx context.Context, filter store.FindingFilter) ([
 		query.WriteString(` AND repository_scan = ?`)
 		args = append(args, filter.RepositoryScan)
 	}
+	if filter.ScanRunID != "" {
+		query.WriteString(` AND scan_run_id = ?`)
+		args = append(args, filter.ScanRunID)
+	}
 	if filter.SliceID != "" {
 		query.WriteString(` AND slice_id = ?`)
 		args = append(args, filter.SliceID)

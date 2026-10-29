@@ -2324,8 +2324,15 @@ func (s *Server) buildTerminalEventLocked(
 	return event
 }
 
+// untaggedAssistantMessageID keys text Codex sends without a message ID
+// after named messages, such as a /review result, as a message of its own.
+const untaggedAssistantMessageID = "\x00untagged"
+
 func (p *promptState) appendAssistantText(text, phase, messageID string, limit int) {
 	appendBoundedPromptText(&p.assistant, &p.assistantOverflow, text, limit)
+	if messageID == "" && p.lastMessageID != "" {
+		messageID = untaggedAssistantMessageID
+	}
 	if messageID != "" {
 		if messageID != p.lastMessageID {
 			p.lastMessage.Reset()

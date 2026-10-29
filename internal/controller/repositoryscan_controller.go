@@ -3959,7 +3959,7 @@ func (r *RepositoryScanReconciler) runCanonicalFindings(ctx context.Context, sca
 	cursor := ""
 	for {
 		page, next, err := r.SecurityStore.ListFindings(ctx, store.FindingFilter{
-			Namespace: scan.Namespace, RepositoryScan: scan.Name, Limit: 200, Cursor: cursor,
+			Namespace: scan.Namespace, RepositoryScan: scan.Name, ScanRunID: runID, Limit: 200, Cursor: cursor,
 		})
 		if err != nil {
 			return nil, err

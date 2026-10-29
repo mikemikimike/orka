@@ -185,6 +185,7 @@ type FindingCounts struct {
 type FindingFilter struct {
 	Namespace         string
 	RepositoryScan    string
+	ScanRunID         string
 	SliceID           string
 	Category          string
 	Severity          string

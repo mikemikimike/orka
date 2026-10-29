@@ -942,7 +942,7 @@ func TestSupervisorUsesLastCodexMessageWithoutPhases(t *testing.T) {
 		want     string
 	}{
 		{name: "codex", provider: providerKindCodex, want: `{"schemaVersion":1,"ok":true}`},
-		{name: "other runtime", provider: providerKindCopilot, want: "I'll inspect the repository.\n" + `{"schemaVersion":1,"ok":true}` + "Warning: slow\n\n"},
+		{name: "other runtime", provider: providerKindCopilot, want: "I'll inspect the repository.\n" + "Warning: slow\n\n" + `{"schemaVersion":1,"ok":true}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -962,10 +962,10 @@ func TestSupervisorUsesLastCodexMessageWithoutPhases(t *testing.T) {
 			now := time.Now().UTC()
 			events := []acp.PromptEvent{
 				testAssistantMessagePromptEventWithPhase(t, 1, now, "commentary-message", "", "I'll inspect the repository.\n"),
-				testAssistantMessagePromptEventWithPhase(t, 2, now, "final-message", "", `{"schemaVersion":1,`),
-				testAssistantMessagePromptEventWithPhase(t, 3, now, "final-message", "", `"ok":true}`),
-				// Adapter notices carry no messageId and are not the answer.
-				testAssistantMessagePromptEventWithPhase(t, 4, now, "", "", "Warning: slow\n\n"),
+				// Adapter notices carry no messageId; a later message supersedes them.
+				testAssistantMessagePromptEventWithPhase(t, 2, now, "", "", "Warning: slow\n\n"),
+				testAssistantMessagePromptEventWithPhase(t, 3, now, "final-message", "", `{"schemaVersion":1,`),
+				testAssistantMessagePromptEventWithPhase(t, 4, now, "final-message", "", `"ok":true}`),
 			}
 			for _, event := range events {
 				if _, err := server.mapRuntimeEvent(state, prompt, event); err != nil {
