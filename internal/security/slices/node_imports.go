@@ -48,7 +48,7 @@ func newNodeImportGraph(root string, files []repoFile, lines map[string]int) *no
 		}
 	}
 	for _, file := range files {
-		if _, ok := lines[file.Path]; !ok || !isNodeSource(file.Path) || isNodeTestFile(file.Path) {
+		if _, ok := lines[file.Path]; !ok || !isNodeSource(file.Path) || isTestFile(file) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.Path)))
@@ -137,9 +137,4 @@ func readNodePackage(fullPath, dir string) (nodePackage, bool) {
 
 func isNodeSource(filePath string) bool {
 	return slices.Contains(nodeSourceExtensions, path.Ext(filePath))
-}
-
-func isNodeTestFile(filePath string) bool {
-	base := path.Base(filePath)
-	return strings.Contains(base, ".test.") || strings.Contains(base, ".spec.")
 }

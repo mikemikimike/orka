@@ -202,6 +202,7 @@ func TestReferenceFilesFollowTypeScriptImports(t *testing.T) {
 	writeFile(t, root, "backend/src/services/helm.ts", "export const helm = 1\n")
 	writeFile(t, root, "backend/src/lib/kube.ts", "export const kube = 1\n")
 	writeFile(t, root, "backend/src/services/helm.test.ts", "import { helm } from './helm'\n")
+	writeFile(t, root, "backend/src/__tests__/admin.ts", "import { helm } from '../services/helm'\n")
 	slices := []store.ReviewSlice{
 		{ID: "routes", OwnedFiles: []store.ReviewSliceFile{{Path: "backend/src/routes/admin.ts"}}},
 		{ID: "services", OwnedFiles: []store.ReviewSliceFile{{Path: "backend/src/services/helm.ts"}}},
@@ -220,7 +221,7 @@ func TestReferenceFilesFollowTypeScriptImports(t *testing.T) {
 		}
 	}
 	services := referenceSummary(refs["services"])
-	if !strings.Contains(services, "backend/src/routes/admin.ts=imported-by") || strings.Contains(services, "helm.test.ts") {
+	if !strings.Contains(services, "backend/src/routes/admin.ts=imported-by") || strings.Contains(services, "helm.test.ts") || strings.Contains(services, "__tests__") {
 		t.Fatalf("services references = %s, want the route as importer and no test files", services)
 	}
 }
