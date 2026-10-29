@@ -496,7 +496,7 @@ func main() {
 		envutil.String("ORKA_AHP_WORKSPACE_NAMESPACE", "orka-ahp-workspaces"),
 		"Namespace for AHP users' workspace Pods: git checkouts of their projects and sessions, and their terminals.")
 	flag.StringVar(&ahpBackendConfig.WorkspaceImage, "ahp-workspace-image", os.Getenv("ORKA_AHP_WORKSPACE_IMAGE"),
-		"Digest-pinned image with sh, git and sleep for AHP workspaces. Empty disables workspaces and terminals.")
+		"Digest-pinned image with sh, git, sleep and readlink for AHP workspaces. Empty disables workspaces and terminals.")
 	flag.DurationVar(&ahpBackendConfig.WorkspaceIdleTimeout, "ahp-workspace-idle-timeout", 4*time.Hour,
 		"Remove an AHP workspace this long after its last use when no shell or turn runs and nothing in it is unpushed. Zero keeps workspaces until their user's last session ends.")
 	flag.StringVar(&ahpWorkspaceConnectorProvider, "ahp-workspace-connector-provider", os.Getenv("ORKA_AHP_WORKSPACE_CONNECTOR_PROVIDER"),

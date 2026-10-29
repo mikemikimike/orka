@@ -43,7 +43,7 @@ Optional values:
 | `controller.ahp.turnTimeout` | `2h` | Timeout of each turn's Task. |
 | `controller.ahp.gitCredentialSecret` | `""` | Secret in the user's namespace whose `token` key clones and publishes their github.com repositories. See [Repositories and credentials](#repositories-and-credentials). |
 | `controller.ahp.workspaceClass` | `""` | ExecutionWorkspaceClass for session-scoped workspaces. Needs an installed workspace provider and `controller.executionWorkspace.dispatchEnabled`. |
-| `controller.ahp.workspaceImage` | `""` | Digest-pinned image with `sh`, `git` and `sleep` that turns on [workspaces and terminals](#workspaces-and-terminals). |
+| `controller.ahp.workspaceImage` | `""` | Digest-pinned image with `sh`, `git`, `sleep` and `readlink` that turns on [workspaces and terminals](#workspaces-and-terminals). |
 | `controller.ahp.workspaceNamespace` | `orka-ahp-workspaces` | Namespace the chart creates for workspace Pods when `workspaceImage` is set. |
 
 Without Helm, start the controller with the equivalent flags. The chart always turns on
@@ -273,7 +273,7 @@ sets); the controller and the chart refuse the class without them.
 
 Desktop AHP clients run their own git commands on the host, through terminals, before they
 create a session or send a message. Give them a place to do that with
-`controller.ahp.workspaceImage=<image with sh, git and sleep>@sha256:<digest>`. The chart then
+`controller.ahp.workspaceImage=<image with sh, git, sleep and readlink>@sha256:<digest>`. The chart then
 creates `controller.ahp.workspaceNamespace` (`orka-ahp-workspaces`) with the restricted Pod
 Security profile, the controller's Role in it, and a NetworkPolicy that admits no inbound
 traffic and allows only DNS and TCP 443. Without Helm, apply the same objects and start the

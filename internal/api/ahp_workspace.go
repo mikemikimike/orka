@@ -528,9 +528,12 @@ git clone --quiet --filter=blob:none -- "$2" "$staging/checkout"
 mv "$staging/checkout" "$1"`
 
 // ahpWorkspaceKeepAlive keeps a workspace container running for exec. It
-// needs the image's sleep, as well as sh and git, and stops with an error when
-// there is none, rather than spin with the Pod looking ready.
-const ahpWorkspaceKeepAlive = `command -v sleep >/dev/null 2>&1 || { echo "the workspace image has no sleep command; it needs sh, git and sleep" >&2; exit 1; }
+// needs the image's sleep, and the readlink that file access resolves paths
+// with, as well as sh and git. It stops with an error when one is missing,
+// rather than run with the Pod looking ready while files look missing.
+const ahpWorkspaceKeepAlive = `for c in sleep readlink; do
+  command -v "$c" >/dev/null 2>&1 || { echo "the workspace image has no $c command; it needs sh, git, sleep and readlink" >&2; exit 1; }
+done
 trap 'exit 0' TERM
 while :; do sleep 3600 & wait $!; done`
 

@@ -99,6 +99,10 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 	if !strings.HasPrefix(params.Channel, ahpTerminalScheme) {
 		return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: "terminal URIs use the ahp-terminal scheme"}
 	}
+	// A name is the terminal's first title, so it is bounded as titles are.
+	if params.Name != nil && len(*params.Name) > ahpTerminalTitleMax {
+		return ahptypes.TerminalState{}, &ahphost.Rejection{Reason: "the name is too long"}
+	}
 	cwd := ahpWorkspaceRoot
 	if params.Cwd != nil {
 		if dir, ok := ahpWorkspacePath(*params.Cwd); ok {

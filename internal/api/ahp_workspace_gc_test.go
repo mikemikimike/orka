@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/agent-host-protocol/clients/go/ahptypes"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -421,6 +422,24 @@ func TestAHPTerminalDisposalFailsUntilTheShellIsStopped(t *testing.T) {
 	require.NoError(t, env.backend.DisposeTerminal(context.Background(), alice, channel))
 }
 
+// A terminal's name is its first title, so it is bounded as titles are:
+// the stored terminal holds it.
+func TestAHPTerminalNameIsBoundedAsTitlesAre(t *testing.T) {
+	env := newAHPTestEnv(t)
+	unreachable := &rest.Config{Host: "http://127.0.0.1:1"}
+	clientset, err := kubernetes.NewForConfig(unreachable)
+	require.NoError(t, err)
+	env.backend.workspaces = &ahpWorkspaces{b: env.backend, clientset: clientset, rest: unreachable, namespace: "orka-ahp-workspaces",
+		image: "example.com/git@sha256:" + ahpHash("x")}
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	name := strings.Repeat("x", ahpTerminalTitleMax+1)
+	_, err = env.backend.CreateTerminal(context.Background(), alice, ahptypes.CreateTerminalParams{Channel: "ahp-terminal:/a", Name: &name}, nil)
+	var rejection *ahphost.Rejection
+	require.ErrorAs(t, err, &rejection)
+	require.Contains(t, rejection.Reason, "too long")
+	require.Nil(t, env.backend.terminal(alice.UserKey, "ahp-terminal:/a"))
+}
+
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	env := newAHPTestEnv(t)
 	w := &ahpWorkspaces{b: env.backend}
@@ -443,22 +462,29 @@ func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	require.False(t, w.idle(alice.UserKey[:40], pod), "the use counts as recent")
 }
 
-// A workspace image without sleep stops its container with a reason rather
-// than spin while the Pod looks ready.
-func TestAHPWorkspaceKeepAliveNeedsSleep(t *testing.T) {
-	cmd := exec.Command("/bin/sh", "-c", ahpWorkspaceKeepAlive)
-	cmd.Env = []string{"PATH=" + t.TempDir()}
-	done := make(chan error, 1)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	require.NoError(t, cmd.Start())
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		require.Error(t, err)
-		require.Contains(t, stderr.String(), "no sleep command")
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
-		t.Fatal("the keep-alive ran on without sleep")
+// A workspace image without sleep, or without the readlink file access
+// resolves paths with, stops its container with a reason rather than run
+// while the Pod looks ready.
+func TestAHPWorkspaceKeepAliveNeedsItsCommands(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	onlySleep := t.TempDir()
+	require.NoError(t, os.Symlink(sleep, filepath.Join(onlySleep, "sleep")))
+	for path, missing := range map[string]string{t.TempDir(): "sleep", onlySleep: "readlink"} {
+		cmd := exec.Command("/bin/sh", "-c", ahpWorkspaceKeepAlive)
+		cmd.Env = []string{"PATH=" + path}
+		done := make(chan error, 1)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		require.NoError(t, cmd.Start())
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			require.Error(t, err)
+			require.Contains(t, stderr.String(), "no "+missing+" command")
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+			t.Fatalf("the keep-alive ran on without %s", missing)
+		}
 	}
 }
