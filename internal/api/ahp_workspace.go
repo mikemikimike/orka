@@ -660,19 +660,29 @@ printf '%s\n' "$f" | grep -q -E '^([a-z]|S) ' && exit 0
 git -C "$1" worktree remove "$2"`
 
 // removeUnlessHoldsWork deletes the user's workspace Pod unless something in
-// it may exist nowhere else, and reports whether it did. A Pod that cannot be
-// checked, as while its container restarts, still has its files: it stays,
-// for the idle collector to decide about.
+// it may exist nowhere else, and reports whether it is gone. A Pod that
+// cannot be checked, as while its container restarts or when it cannot be
+// read, still has its files: it stays, for the idle collector to decide
+// about. The Pod deleted is the one checked.
 func (w *ahpWorkspaces) removeUnlessHoldsWork(ctx context.Context, principal ahphost.Principal) bool {
-	pod, running := w.running(ctx, principal)
-	if running && w.holdsWork(ctx, pod) {
+	if !w.enabled() {
+		return true
+	}
+	pod := &corev1.Pod{}
+	err := w.reader().Get(ctx, types.NamespacedName{Namespace: w.namespace, Name: ahpWorkspacePodName(principal.UserKey)}, pod)
+	switch {
+	case apierrors.IsNotFound(err):
+		return true
+	case err != nil:
+		return false
+	case pod.Labels[ahpWorkspaceUserLabel] != principal.UserKey[:40] || !pod.DeletionTimestamp.IsZero():
+		// Another's, or going already: nothing of this user's to delete.
+		return true
+	}
+	if pod.Status.Phase != corev1.PodRunning || !ahpContainerRunning(pod) || w.holdsWork(ctx, pod) {
 		return false
 	}
-	if !running && pod != nil && pod.Labels[ahpWorkspaceUserLabel] == principal.UserKey[:40] && pod.DeletionTimestamp.IsZero() {
-		return false
-	}
-	w.remove(ctx, principal)
-	return true
+	return w.b.h.client.Delete(ctx, pod, client.Preconditions{UID: &pod.UID}) == nil
 }
 
 // running returns the user's workspace Pod if it is running; it never creates one.
@@ -686,20 +696,6 @@ func (w *ahpWorkspaces) running(ctx context.Context, principal ahphost.Principal
 	}
 	return pod, pod.Labels[ahpWorkspaceUserLabel] == principal.UserKey[:40] && pod.DeletionTimestamp.IsZero() &&
 		pod.Status.Phase == corev1.PodRunning && ahpContainerRunning(pod)
-}
-
-// remove deletes the user's workspace Pod.
-func (w *ahpWorkspaces) remove(ctx context.Context, principal ahphost.Principal) {
-	if !w.enabled() {
-		return
-	}
-	pod := &corev1.Pod{}
-	if err := w.reader().Get(ctx, types.NamespacedName{Namespace: w.namespace, Name: ahpWorkspacePodName(principal.UserKey)}, pod); err != nil {
-		return
-	}
-	if pod.Labels[ahpWorkspaceUserLabel] == principal.UserKey[:40] {
-		_ = w.b.h.client.Delete(ctx, pod, client.Preconditions{UID: &pod.UID})
-	}
 }
 
 // ahpBoundedBuffer keeps at most ahpExecOutputMax bytes of output.

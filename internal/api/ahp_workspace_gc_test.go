@@ -9,12 +9,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/orka-agents/orka/internal/ahphost"
 )
@@ -472,6 +475,33 @@ func TestAHPWatchPatternsAreBounded(t *testing.T) {
 		var rejection *ahphost.Rejection
 		require.ErrorAs(t, err, &rejection, name)
 	}
+}
+
+// A workspace Pod that cannot be read cannot be checked either: disposal
+// keeps it, rather than take a failed read for no Pod.
+func TestAHPWorkspaceDisposalKeepsAWorkspaceItCannotRead(t *testing.T) {
+	env := newAHPTestEnv(t)
+	w := &ahpWorkspaces{b: env.backend, clientset: kubefake.NewClientset(), rest: &rest.Config{}, namespace: "orka-ahp-workspaces", image: "example.com/git@sha256:" + ahpHash("x")}
+	env.backend.workspaces = w
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	pod := w.podSpec(alice)
+	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+		Name: ahpWorkspaceContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}}
+	require.NoError(t, env.kube.Create(context.Background(), pod))
+	var failRead atomic.Bool
+	failRead.Store(true)
+	env.backend.h.apiReader = interceptor.NewClient(env.kube.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			// The first read fails; later ones answer.
+			if failRead.Swap(false) {
+				return errors.New("the API server did not answer")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	require.False(t, w.removeUnlessHoldsWork(context.Background(), alice))
+	require.NoError(t, env.kube.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}), "the workspace stays")
 }
 
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
