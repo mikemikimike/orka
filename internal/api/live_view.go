@@ -9,6 +9,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -71,11 +74,24 @@ type LiveViewFrames struct {
 	frames map[string]liveViewFrame
 	seq    uint64
 	now    func() time.Time
+	// instance makes ETags unique across controller restarts, which reset
+	// seq: a dashboard holding an earlier controller's tag must not get 304
+	// for a different picture.
+	instance string
 }
 
 // NewLiveViewFrames returns an empty frame holder.
 func NewLiveViewFrames() *LiveViewFrames {
-	return &LiveViewFrames{frames: map[string]liveViewFrame{}, now: time.Now}
+	var id [8]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		binary.BigEndian.PutUint64(id[:], uint64(time.Now().UnixNano()))
+	}
+	return &LiveViewFrames{frames: map[string]liveViewFrame{}, now: time.Now, instance: hex.EncodeToString(id[:])}
+}
+
+// etag names one frame of one controller process.
+func (f *LiveViewFrames) etag(frame liveViewFrame) string {
+	return `"` + f.instance + "-" + strconv.FormatUint(frame.seq, 10) + `"`
 }
 
 // liveViewKey includes the Task UID, so a Task recreated under the same name
@@ -222,7 +238,7 @@ func (h *Handlers) GetTaskLiveView(c fiber.Ctx) error {
 	if !ok {
 		return c.SendStatus(fiber.StatusNoContent)
 	}
-	etag := `"` + strconv.FormatUint(frame.seq, 10) + `"`
+	etag := h.liveViewFrames.etag(frame)
 	c.Set(fiber.HeaderETag, etag)
 	c.Set("X-Orka-Frame-Time", frame.changedAt.UTC().Format(time.RFC3339Nano))
 	if string(c.Request().Header.Peek(fiber.HeaderIfNoneMatch)) == etag {

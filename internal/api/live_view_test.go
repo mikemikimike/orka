@@ -252,3 +252,13 @@ func TestLiveViewKeepaliveKeepsTheFrameAndItsTime(t *testing.T) {
 	require.NotEqual(t, first.seq, changed.seq)
 	require.Equal(t, now, changed.changedAt)
 }
+
+func TestLiveViewETagsDifferAcrossControllerRestarts(t *testing.T) {
+	before, after := NewLiveViewFrames(), NewLiveViewFrames()
+	before.put("default", "shop", "shop-uid", []byte("frame-a"))
+	after.put("default", "shop", "shop-uid", []byte("frame-b"))
+	a, _ := before.get(liveViewKey("default", "shop", "shop-uid"))
+	b, _ := after.get(liveViewKey("default", "shop", "shop-uid"))
+	require.Equal(t, a.seq, b.seq, "both holders start their sequence at the same number")
+	require.NotEqual(t, before.etag(a), after.etag(b), "a restarted controller reused an ETag for a different frame")
+}
