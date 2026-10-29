@@ -213,7 +213,9 @@ pages that Playwright or `chromium-headless` opens, up to four at a time.
 - **What does not stream.** Images other than the configured browser image, including
   [your own](#bring-your-own-image), a Task whose `command` replaces the entrypoint, and a
   persistent context whose `userDataDir` is outside `/tmp`: the worker finds browsers by
-  the profiles Chromium keeps directly under `/tmp`.
+  the profiles Chromium keeps directly under `/tmp`. Nor do `chromium-headless`'s
+  one-shot `--screenshot`, `--dump-dom`, and `--print-to-pdf` runs: Chromium refuses those
+  commands with a DevTools port, so they run without one.
 
 ## Stronger isolation
 

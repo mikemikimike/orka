@@ -127,8 +127,15 @@ RUN set -eu; \
         '#!/bin/sh' \
         '# With live view on, Chromium also listens for DevTools on 127.0.0.1 and names' \
         '# the port in DevToolsActivePort, so the worker can screencast its pages to' \
-        '# the dashboard. Playwright keeps driving it over its own pipe.' \
-        'if [ "${ORKA_BROWSER_LIVE_VIEW:-}" = 1 ]; then exec "$0.orka" --remote-debugging-port=0 "$@"; fi' \
+        '# the dashboard. Playwright keeps driving it over its own pipe. Chromium refuses' \
+        '# its one-shot --dump-dom, --screenshot, and --print-to-pdf commands with a' \
+        '# DevTools port, so those run without one and do not stream.' \
+        'if [ "${ORKA_BROWSER_LIVE_VIEW:-}" = 1 ]; then' \
+        '  for arg in "$@"; do' \
+        '    case "$arg" in -dump-dom*|--dump-dom*|-screenshot*|--screenshot*|-print-to-pdf*|--print-to-pdf*) exec "$0.orka" "$@" ;; esac' \
+        '  done' \
+        '  exec "$0.orka" --remote-debugging-port=0 "$@"' \
+        'fi' \
         'exec "$0.orka" "$@"' \
         > "$chrome"; \
       chmod 0755 "$chrome"; \
