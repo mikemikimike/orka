@@ -1,11 +1,11 @@
 // Live view frames for the demo's browser Task: a recording of a real one.
-// A browser Task ran Playwright through the storefront checkout in
-// CHECKOUT_SMOKE_SCRIPT on a kind cluster with --browser-live-view; the
-// storefront was served to its browser by the script. These are the frames
-// GET /api/v1/tasks/{id}/live returned while it ran, polled as the dashboard
-// polls, at the controller's frame times. Back-to-back repeats are dropped and
-// each picture is stored once. The demo loops the recording, holding the
-// review page still as the run did, so the dashboard gets 304 there.
+// A browser Task ran CHECKOUT_SMOKE_SCRIPT's Playwright checkout against
+// saucedemo.com, Sauce Labs' public demo store, on a kind cluster with
+// --browser-live-view. These are the frames GET /api/v1/tasks/{id}/live
+// returned while it ran, polled as the dashboard polls, at the controller's
+// frame times. Back-to-back repeats are dropped and each picture is stored
+// once. The demo loops the recording, holding the checkout overview still as
+// the run did, so the dashboard gets 304 there.
 
 /** The image the demo's browser Tasks run, so the live view applies to them. */
 export const DEMO_BROWSER_IMAGE = 'ghcr.io/orka-agents/orka/browser-worker:0.4.0'
@@ -14,17 +14,17 @@ const FILES = import.meta.glob<string>('./live-recording/*.jpg', { eager: true, 
 
 /** Each frame and when it arrived, in milliseconds from the first. */
 const RECORDING: readonly (readonly [file: string, at: number])[] = [
-  ['frame-00.jpg', 0], ['frame-01.jpg', 2519], ['frame-02.jpg', 4012], ['frame-00.jpg', 5506],
-  ['frame-03.jpg', 7024], ['frame-04.jpg', 7513], ['frame-05.jpg', 8000], ['frame-06.jpg', 10002],
-  ['frame-07.jpg', 12506], ['frame-08.jpg', 14021], ['frame-09.jpg', 14505], ['frame-10.jpg', 15001],
-  ['frame-11.jpg', 15504], ['frame-12.jpg', 16001], ['frame-13.jpg', 16500], ['frame-14.jpg', 17004],
-  ['frame-15.jpg', 17517], ['frame-16.jpg', 18013], ['frame-17.jpg', 18499], ['frame-18.jpg', 19018],
-  ['frame-19.jpg', 19503], ['frame-20.jpg', 20015], ['frame-21.jpg', 20503], ['frame-22.jpg', 21005],
-  ['frame-23.jpg', 21513], ['frame-24.jpg', 22012], ['frame-25.jpg', 22504], ['frame-26.jpg', 23012],
-  ['frame-27.jpg', 23515], ['frame-28.jpg', 25009], ['frame-29.jpg', 25514],
+  ['frame-00.jpg', 0], ['frame-01.jpg', 1500], ['frame-02.jpg', 2003], ['frame-03.jpg', 2500],
+  ['frame-04.jpg', 3002], ['frame-05.jpg', 3514], ['frame-06.jpg', 4006], ['frame-07.jpg', 4502],
+  ['frame-08.jpg', 5001], ['frame-09.jpg', 5502], ['frame-10.jpg', 7009], ['frame-11.jpg', 9003],
+  ['frame-12.jpg', 9506], ['frame-13.jpg', 11501], ['frame-14.jpg', 13008], ['frame-15.jpg', 13502],
+  ['frame-16.jpg', 14501], ['frame-17.jpg', 16004], ['frame-18.jpg', 18501], ['frame-19.jpg', 19499],
+  ['frame-20.jpg', 20001], ['frame-21.jpg', 20504], ['frame-22.jpg', 21014], ['frame-23.jpg', 21501],
+  ['frame-24.jpg', 22000], ['frame-25.jpg', 22501], ['frame-26.jpg', 23000], ['frame-27.jpg', 23501],
+  ['frame-26.jpg', 24000], ['frame-28.jpg', 25004],
 ]
 
-/** The run stood on the review page this long before it closed the browser. */
+/** The run stood on the checkout overview this long before it closed the browser. */
 const REVIEW_STILL_MS = 15_000
 const LOOP_MS = RECORDING[RECORDING.length - 1][1] + REVIEW_STILL_MS
 

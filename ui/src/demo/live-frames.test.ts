@@ -24,16 +24,16 @@ describe('demo live view scenes', () => {
   it('plays every recorded frame, and only recorded frames', () => {
     const files = played(0, 45_000)
     expect([...files].sort()).toEqual([...recorded].sort())
-    expect(recorded).toHaveLength(30)
+    expect(recorded).toHaveLength(29)
   })
 
   it('plays the frames in their recorded order', () => {
     expect(liveScene(0).file).toBe('frame-00.jpg')
-    expect(liveScene(12_600).file).toBe('frame-07.jpg')
-    expect(liveScene(25_600).file).toBe('frame-29.jpg')
+    expect(liveScene(12_600).file).toBe('frame-13.jpg')
+    expect(liveScene(25_600).file).toBe('frame-28.jpg')
   })
 
-  it('holds the review page still, so the same picture keeps its key and time', () => {
+  it('holds the checkout overview still, so the same picture keeps its key and time', () => {
     const first = liveScene(26_000)
     const last = liveScene(40_000)
     expect(last.key).toBe(first.key)
@@ -41,7 +41,7 @@ describe('demo live view scenes', () => {
   })
 
   it('loops the recording', () => {
-    const loop = 25_514 + 15_000
+    const loop = 25_004 + 15_000
     expect(liveScene(loop + 100).file).toBe('frame-00.jpg')
     expect(liveScene(loop + 100).key).not.toBe(liveScene(100).key)
     expect(liveScene(loop + 100).since).toBe(loop)
