@@ -379,6 +379,48 @@ func TestAHPWorkspacePrepareReportsAFailedSetup(t *testing.T) {
 	require.NoError(t, w.prepare(ctx, alice, pod, "/workspace"), "a directory that needs no setup")
 }
 
+// Disposing of a terminal whose shell could not be stopped fails and keeps
+// it, so disposing of it again stops the shell, even once the terminal's
+// stream has ended: closing the stream alone can leave the shell running.
+func TestAHPTerminalDisposalFailsUntilTheShellIsStopped(t *testing.T) {
+	env := newAHPTestEnv(t)
+	// Exec reaches no API server here, so stopping the shell fails.
+	unreachable := &rest.Config{Host: "http://127.0.0.1:1"}
+	clientset, err := kubernetes.NewForConfig(unreachable)
+	require.NoError(t, err)
+	w := &ahpWorkspaces{b: env.backend, clientset: clientset, rest: unreachable, namespace: "orka-ahp-workspaces",
+		image: "example.com/git@sha256:" + ahpHash("x")}
+	env.backend.workspaces = w
+	alice := ahphost.Principal{UserKey: ahphost.UserKey("https://issuer.example", "alice")}
+	pod := w.podSpec(alice)
+	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+		Name: ahpWorkspaceContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}}
+	require.NoError(t, env.kube.Create(context.Background(), pod))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	channel := "ahp-terminal:/a"
+	term := &ahpTerminal{ctx: ctx, channel: channel, input: make(chan []byte, ahpTerminalInputQueue), cancel: cancel,
+		pidFile: ahpTerminalPIDFile(alice.UserKey, channel)}
+	key := ahpTerminalKey(alice.UserKey, channel)
+	env.backend.mu.Lock()
+	env.backend.shells[key] = term
+	env.backend.mu.Unlock()
+
+	require.Error(t, env.backend.DisposeTerminal(context.Background(), alice, channel))
+	require.Same(t, term, env.backend.terminal(alice.UserKey, channel), "the terminal is kept")
+	// Its stream ended meanwhile, which forgets the terminal; the shell's
+	// session is still to stop.
+	env.backend.mu.Lock()
+	delete(env.backend.shells, key)
+	env.backend.mu.Unlock()
+	require.Error(t, env.backend.DisposeTerminal(context.Background(), alice, channel))
+
+	// A workspace that no longer runs runs no shell.
+	require.NoError(t, env.kube.Delete(context.Background(), pod))
+	require.NoError(t, env.backend.DisposeTerminal(context.Background(), alice, channel))
+}
+
 func TestAHPWorkspaceUseWaitsOutACollection(t *testing.T) {
 	env := newAHPTestEnv(t)
 	w := &ahpWorkspaces{b: env.backend}

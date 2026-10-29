@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"sort"
@@ -221,7 +222,7 @@ func (b *ahpBackend) CreateTerminal(ctx context.Context, principal ahphost.Princ
 }
 
 func (b *ahpBackend) endTerminal(ctx context.Context, principal ahphost.Principal, term *ahpTerminal, emit ahphost.Emitter, exitCode *int64) {
-	b.stopShell(ctx, principal, term)
+	_ = b.stopShell(ctx, principal, term)
 	b.mu.Lock()
 	key := ahpTerminalKey(principal.UserKey, term.channel)
 	current := b.shells[key] == term
@@ -240,12 +241,22 @@ func (b *ahpBackend) endTerminal(ctx context.Context, principal ahphost.Principa
 }
 
 // DisposeTerminal stops a shell and every process it started, then frees its slot.
+// A stop that fails is returned, and the terminal kept, so disposing of it
+// again finishes: its stream may be gone by then, but the record of its
+// session in the workspace stays until the session is stopped.
 func (b *ahpBackend) DisposeTerminal(ctx context.Context, principal ahphost.Principal, channel string) error {
 	term := b.terminal(principal.UserKey, channel)
+	pidFile := ahpTerminalPIDFile(principal.UserKey, channel)
+	if term != nil {
+		term.cancel()
+		pidFile = term.pidFile
+	}
+	if err := b.stopSession(ctx, principal, pidFile); err != nil {
+		return fmt.Errorf("stop the terminal's shell: %w", err)
+	}
 	if term == nil {
 		return nil
 	}
-	b.stopShell(ctx, principal, term)
 	b.mu.Lock()
 	key := ahpTerminalKey(principal.UserKey, channel)
 	if b.shells[key] == term {
@@ -280,15 +291,21 @@ func (b *ahpBackend) retireLocked(key string) {
 
 // stopShell ends a terminal's exec stream and kills its session in the
 // workspace: closing the stream alone can leave the shell running there.
-func (b *ahpBackend) stopShell(ctx context.Context, principal ahphost.Principal, term *ahpTerminal) {
+func (b *ahpBackend) stopShell(ctx context.Context, principal ahphost.Principal, term *ahpTerminal) error {
 	term.cancel()
+	return b.stopSession(ctx, principal, term.pidFile)
+}
+
+// stopSession kills the session a terminal's record names in the workspace,
+// if it still runs. A workspace that is not running runs nothing.
+func (b *ahpBackend) stopSession(ctx context.Context, principal ahphost.Principal, pidFile string) error {
 	pod, ok := b.workspaces.running(ctx, principal)
 	if !ok {
-		return
+		return nil
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	_ = b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", term.pidFile, "stop")
+	return b.workspaces.run(killCtx, pod, ahpShell, "-c", ahpStopSessionScript, "sh", pidFile, "stop")
 }
 
 // ahpTerminalPIDFile is where a terminal's shell records its session in the
