@@ -178,7 +178,9 @@ control, and sensitive operation live in different components. Full-repository s
 
 - **Reference files.** Each review may read files beyond its excerpts in its workspace and cite
   them. A Go package slice can cite the in-repository packages it imports and those that import
-  it; other slices can cite their own files past the excerpt.
+  it, and TypeScript or JavaScript files can cite the files they import (relative imports and
+  workspace packages) and those that import them; every slice can cite its own files past the
+  excerpt.
 - **Threat-model investigations.** The threat model stage returns up to eight cross-component
   security questions. They are saved in the threat model under **Cross-component
   investigations**, where you can edit them, and each becomes its own review slice that can

@@ -156,7 +156,7 @@ func TestGoImportGraphParsesOnlyIndexedFiles(t *testing.T) {
 func TestMapRepositoryCoversEveryFileOfLargePackages(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "backend/package.json", `{"name":"backend"}`)
-	var want []string
+	want := make([]string, 0, 3*maxReviewSliceOwnedFiles+8)
 	for i := range 2*maxReviewSliceOwnedFiles + 5 {
 		path := "backend/src/services/s" + strconv.Itoa(100+i) + ".ts"
 		writeFile(t, root, path, "export const x = 1\n")
@@ -184,5 +184,38 @@ func TestMapRepositoryCoversEveryFileOfLargePackages(t *testing.T) {
 		if _, ok := owned[path]; !ok {
 			t.Fatalf("%s is not owned by any slice", path)
 		}
+	}
+}
+
+func TestReferenceFilesFollowTypeScriptImports(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "shared/package.json", `{"name":"@app/shared","main":"./types/index.ts"}`)
+	writeFile(t, root, "shared/types/index.ts", "export type Value = string\n")
+	writeFile(t, root, "shared/api/index.ts", "export const api = 1\n")
+	writeFile(t, root, "backend/package.json", `{"name":"@app/backend"}`)
+	writeFile(t, root, "backend/src/routes/admin.ts", "import { helm } from '../services/helm'\nimport type { Value } from '@app/shared'\nimport { api } from \"@app/shared/api\"\nconst k = require('../lib/kube.js')\n")
+	writeFile(t, root, "backend/src/services/helm.ts", "export const helm = 1\n")
+	writeFile(t, root, "backend/src/lib/kube.ts", "export const kube = 1\n")
+	writeFile(t, root, "backend/src/services/helm.test.ts", "import { helm } from './helm'\n")
+	slices := []store.ReviewSlice{
+		{ID: "routes", OwnedFiles: []store.ReviewSliceFile{{Path: "backend/src/routes/admin.ts"}}},
+		{ID: "services", OwnedFiles: []store.ReviewSliceFile{{Path: "backend/src/services/helm.ts"}}},
+	}
+	refs, err := ReferenceFiles(root, slices)
+	if err != nil {
+		t.Fatalf("ReferenceFiles() error = %v", err)
+	}
+	routes := referenceSummary(refs["routes"])
+	for _, want := range []string{
+		"backend/src/services/helm.ts=imports", "shared/types/index.ts=imports",
+		"shared/api/index.ts=imports", "backend/src/lib/kube.ts=imports",
+	} {
+		if !strings.Contains(routes, want) {
+			t.Fatalf("routes references = %s, want %s", routes, want)
+		}
+	}
+	services := referenceSummary(refs["services"])
+	if !strings.Contains(services, "backend/src/routes/admin.ts=imported-by") || strings.Contains(services, "helm.test.ts") {
+		t.Fatalf("services references = %s, want the route as importer and no test files", services)
 	}
 }

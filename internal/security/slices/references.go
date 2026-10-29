@@ -25,8 +25,9 @@ const (
 
 // ReferenceFiles returns, per slice ID, the repository files a reviewer may
 // read from its workspace and cite beyond the slice's excerpts. Go slices get
-// the in-repository packages they import and that import them; investigation
-// and baseline slices get the whole repository index.
+// the in-repository packages they import and that import them, and
+// TypeScript and JavaScript files get the files they import and that import
+// them; investigation and baseline slices get the whole repository index.
 func ReferenceFiles(root string, reviewSlices []store.ReviewSlice) (map[string][]security.ReviewContextReferenceFile, error) {
 	files, err := collectFiles(root)
 	if err != nil {
@@ -34,6 +35,7 @@ func ReferenceFiles(root string, reviewSlices []store.ReviewSlice) (map[string][
 	}
 	lines := referenceLineCounts(root, files)
 	graph := newGoImportGraph(root, files, lines)
+	nodeGraph := newNodeImportGraph(root, files, lines)
 	repository := repositoryReferenceFiles(files, lines)
 
 	out := make(map[string][]security.ReviewContextReferenceFile, len(reviewSlices))
@@ -64,6 +66,16 @@ func ReferenceFiles(root string, reviewSlices []store.ReviewSlice) (map[string][
 		for _, dir := range sortedKeys(sliceDirs) {
 			for _, importer := range graph.importers(dir) {
 				refs.addDir(graph, importer, security.ReferenceRelationImportedBy)
+			}
+		}
+		for _, file := range slice.OwnedFiles {
+			for _, imported := range nodeGraph.imports(file.Path) {
+				refs.add(imported, security.ReferenceRelationImports)
+			}
+		}
+		for _, file := range slice.OwnedFiles {
+			for _, importer := range nodeGraph.importers(file.Path) {
+				refs.add(importer, security.ReferenceRelationImportedBy)
 			}
 		}
 		out[slice.ID] = refs.files
