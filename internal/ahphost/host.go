@@ -64,9 +64,11 @@ type Host struct {
 	byToken map[string]map[*conn]struct{}
 	stopped bool
 	// swept records the users whose leftover channels this process dropped,
-	// and sweeping the users whose sweep runs, closed when it ends.
+	// and sweeping the users whose sweep runs, closed when it ends. resweep
+	// records the users who left a channel behind while their sweep ran.
 	swept    map[string]bool
 	sweeping map[string]chan struct{}
+	resweep  map[string]bool
 	// creating are the channel URIs, per user, whose creation as a session or
 	// terminal is under way.
 	creating map[string]*channelCreation

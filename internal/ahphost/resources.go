@@ -185,7 +185,25 @@ func (c *conn) releaseWatch(channel string) {
 		return
 	}
 	stop()
-	_ = c.host.cfg.Store.DeleteAHPChannelStates(context.Background(), c.principal.UserKey, []string{channel})
+	if err := c.host.cfg.Store.DeleteAHPChannelStates(context.Background(), c.principal.UserKey, []string{channel}); err != nil {
+		// The channel outlives its watch. The user's next initialize or
+		// reconnect sweeps it, as it does a channel an earlier process left,
+		// rather than find it and take a watch to be running.
+		c.host.unsweep(c.principal.UserKey)
+	}
+}
+
+// unsweep has the user's next initialize or reconnect sweep again.
+func (h *Host) unsweep(userKey string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.swept, userKey)
+	if h.sweeping[userKey] != nil {
+		if h.resweep == nil {
+			h.resweep = map[string]bool{}
+		}
+		h.resweep[userKey] = true
+	}
 }
 
 // releaseWatches stops every watch of a closing connection.
@@ -240,9 +258,11 @@ func (h *Host) sweepOnce(ctx context.Context, principal Principal) {
 	h.mu.Unlock()
 	err := h.sweep(ctx, principal)
 	h.mu.Lock()
-	if err == nil {
+	// A channel left behind while the sweep ran may have been listed live.
+	if err == nil && !h.resweep[principal.UserKey] {
 		h.swept[principal.UserKey] = true
 	}
+	delete(h.resweep, principal.UserKey)
 	delete(h.sweeping, principal.UserKey)
 	h.mu.Unlock()
 	close(done)

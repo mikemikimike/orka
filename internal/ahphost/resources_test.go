@@ -257,6 +257,45 @@ func TestAFailedSweepRunsAgainAndSparesLiveWatches(t *testing.T) {
 	require.NoError(t, err, "a watch open in this process is not swept")
 }
 
+// A watch whose channel cannot be deleted when its connection closes leaves
+// the channel to the user's next initialize, which sweeps it: a reconnect
+// must not find it and take the watch to be running.
+func TestAWatchChannelLeftBehindIsSweptLater(t *testing.T) {
+	env, extended := newExtendedEnv(t)
+	backend := &resourceBackend{extendedBackend: extended, released: make(chan struct{})}
+	env.host.cfg.Backends.mu.Lock()
+	env.host.cfg.Backends.backends = []SessionBackend{backend}
+	env.host.cfg.Backends.mu.Unlock()
+	failing := &failingCleanupStore{failingSessionStore: &failingSessionStore{AHPStore: env.host.cfg.Store}}
+	env.host.cfg.Store = failing
+	minted := env.mint("alice")
+	userKey := ahpUserKey(t, env, minted.Token)
+	ctx := ctx5(t)
+
+	first := env.connect(minted.Token)
+	_, err := first.Initialize(ctx, "client-a", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	var opened ahptypes.CreateResourceWatchResult
+	require.NoError(t, first.Request(ctx, "createResourceWatch", ahptypes.CreateResourceWatchParams{Channel: rootChannel, Uri: "file:///work"}, &opened))
+	failing.failDelete.Store(true)
+	require.NoError(t, first.Shutdown(ctx))
+	<-backend.released
+	require.Eventually(t, func() bool {
+		env.host.mu.Lock()
+		defer env.host.mu.Unlock()
+		return !env.host.swept[userKey]
+	}, 5*time.Second, 10*time.Millisecond, "the failed deletion leaves the channel to a sweep")
+	_, err = env.store.GetAHPChannelState(ctx, userKey, opened.Channel)
+	require.NoError(t, err, "the channel outlived its watch")
+
+	failing.failDelete.Store(false)
+	second := env.connect(minted.Token)
+	_, err = second.Initialize(ctx, "client-b", ahptypes.SupportedProtocolVersions(), nil)
+	require.NoError(t, err)
+	_, err = env.store.GetAHPChannelState(ctx, userKey, opened.Channel)
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
 func TestIdleConnectionsArePinged(t *testing.T) {
 	env, _ := newExtendedEnv(t)
 	env.host.cfg.PingInterval = 50 * time.Millisecond
