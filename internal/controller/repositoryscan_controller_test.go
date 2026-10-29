@@ -7698,3 +7698,18 @@ func TestReviewTaskWindowFollowsDispatchCapacity(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordValidationErrorKeepsAnEarlierVerdict(t *testing.T) {
+	// A revalidation is pending over the earlier refutation, then errors.
+	refuted := &storepkg.Finding{ID: "fnd_refuted", ValidationStatus: findingValidationStatusPending, ValidationJSON: `{"status":"failed","summary":"Not reachable."}`}
+	recordValidationError(refuted, "validation task failed")
+	if refuted.ValidationStatus != findingValidationStatusFailed || !strings.Contains(refuted.ValidationJSON, "Not reachable.") {
+		t.Fatalf("refuted finding = %q %s, want the earlier failed verdict kept", refuted.ValidationStatus, refuted.ValidationJSON)
+	}
+
+	first := &storepkg.Finding{ID: "fnd_new", ValidationStatus: findingValidationStatusPending}
+	recordValidationError(first, "validation task failed")
+	if first.ValidationStatus != findingValidationStatusError || !strings.Contains(first.ValidationJSON, `"status":"error"`) {
+		t.Fatalf("first validation = %q %s, want error", first.ValidationStatus, first.ValidationJSON)
+	}
+}

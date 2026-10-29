@@ -4486,15 +4486,7 @@ func (r *RepositoryScanReconciler) ingestValidationTask(ctx context.Context, sca
 			}
 		}
 		if validationProblem != "" {
-			finding.ValidationStatus = findingValidationStatusError
-			failure := security.ValidationArtifact{
-				Version:   1,
-				FindingID: finding.ID,
-				Status:    findingValidationStatusError,
-				Summary:   validationProblem,
-			}
-			data, _ := json.Marshal(failure)
-			finding.ValidationJSON = string(data)
+			recordValidationError(finding, validationProblem)
 		} else if artifact != nil {
 			finding.ValidationStatus = strings.TrimSpace(artifact.Status)
 			data, err := json.Marshal(artifact)
@@ -4508,11 +4500,7 @@ func (r *RepositoryScanReconciler) ingestValidationTask(ctx context.Context, sca
 			}
 		}
 	} else {
-		finding.ValidationStatus = findingValidationStatusError
-		finding.ValidationJSON = fmt.Sprintf(
-			"{\"status\":\"error\",\"summary\":%q}",
-			r.pipelineTaskSummary(ctx, task, "validation task failed"),
-		)
+		recordValidationError(finding, r.pipelineTaskSummary(ctx, task, "validation task failed"))
 	}
 
 	if finding.DuplicateOf == "" {
@@ -4523,6 +4511,28 @@ func (r *RepositoryScanReconciler) ingestValidationTask(ctx context.Context, sca
 	}
 	mergeFindingValidationResult(canonical, finding)
 	return r.SecurityStore.UpsertFinding(ctx, canonical)
+}
+
+// recordValidationError marks a validation that produced no verdict. A
+// revalidation that errors keeps the verdict it was meant to refresh: while
+// the new validation is pending, the finding's validation JSON still holds
+// the earlier result, so a refuted finding stays refuted.
+func recordValidationError(finding *store.Finding, summary string) {
+	var prior struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal([]byte(finding.ValidationJSON), &prior) == nil {
+		switch status := strings.TrimSpace(prior.Status); status {
+		case findingValidationStatusValidated, findingValidationStatusFailed, findingValidationStatusSkipped:
+			finding.ValidationStatus = status
+			return
+		}
+	}
+	finding.ValidationStatus = findingValidationStatusError
+	data, _ := json.Marshal(security.ValidationArtifact{
+		Version: 1, FindingID: finding.ID, Status: findingValidationStatusError, Summary: summary,
+	})
+	finding.ValidationJSON = string(data)
 }
 
 func (r *RepositoryScanReconciler) canonicalFindingForUpdate(ctx context.Context, scan *corev1alpha1.RepositoryScan, finding *store.Finding) (*store.Finding, error) {
