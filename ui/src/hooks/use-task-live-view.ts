@@ -32,9 +32,15 @@ function frameDataUrl(frame: Blob): Promise<string> {
 // would get 401) and shown as a data: URL. 204 means live view is on
 // but no page has repainted yet; 404 means this Task has no live view, which
 // ends the polling. An unchanged frame answers 304 and keeps the current one.
+// The view belongs to one Task: switching Tasks or namespaces never shows the
+// previous Task's frame, even while the new one waits for its first.
 export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView {
   const namespace = useUIStore((s) => s.namespace)
-  const [view, setView] = useState<TaskLiveView>({ status: 'waiting' })
+  const identity = `${namespace}/${taskId}`
+  const [state, setState] = useState<{ identity: string; view: TaskLiveView }>({
+    identity,
+    view: { status: 'waiting' },
+  })
 
   useEffect(() => {
     if (!enabled || !taskId) return
@@ -52,16 +58,18 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
         const res = await fetch(taskLiveViewUrl(taskId, namespace), { headers, signal: abort.signal, cache: 'no-store' })
         if (stopped) return
         if (res.status === 404 || res.status === 501) {
-          setView({ status: 'off' })
+          setState({ identity, view: { status: 'off' } })
           return
         }
         if (res.status === 200) {
           const src = await frameDataUrl(await res.blob())
           if (stopped) return
           etag = res.headers.get('ETag') ?? ''
-          setView({ status: 'live', src, frameTime: res.headers.get('X-Orka-Frame-Time') ?? undefined })
+          setState({ identity, view: { status: 'live', src, frameTime: res.headers.get('X-Orka-Frame-Time') ?? undefined } })
         } else if (res.status === 204) {
-          setView((current) => (current.status === 'live' ? current : { status: 'waiting' }))
+          setState((current) =>
+            current.identity === identity && current.view.status === 'live' ? current : { identity, view: { status: 'waiting' } },
+          )
         }
       } catch {
         // A dropped request is retried on the next tick.
@@ -75,7 +83,8 @@ export function useTaskLiveView(taskId: string, enabled: boolean): TaskLiveView 
       abort.abort()
       clearTimeout(timer)
     }
-  }, [taskId, namespace, enabled])
+  }, [taskId, namespace, identity, enabled])
 
-  return enabled ? view : { status: 'off' }
+  if (!enabled) return { status: 'off' }
+  return state.identity === identity ? state.view : { status: 'waiting' }
 }

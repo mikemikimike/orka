@@ -75,4 +75,16 @@ describe('TaskLiveView', () => {
     expect(fetchMock.mock.calls[1][1].headers['If-None-Match']).toBe('"7"')
     expect(screen.getByRole('img')).toHaveAttribute('src', expect.stringMatching(/^data:image\/jpeg;base64,/))
   })
+
+  it("never shows another Task's frame while the new one waits", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes('/tasks/shop/') ? frame() : new Response(null, { status: 204 }),
+    )
+    const { rerender } = render(<TaskLiveView taskId="shop" running />)
+    await screen.findByRole('img')
+
+    rerender(<TaskLiveView taskId="checkout" running />)
+    expect(await screen.findByText('Waiting for the browser to show a page.')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
 })

@@ -420,7 +420,15 @@ export function TaskDetail({ taskId }: { taskId: string }) {
         </div>
 
         <TabsContent value="overview" className="space-y-4">
-          {task.spec.type === 'container' && <TaskLiveView taskId={taskId} running={taskRunning} />}
+          {task.spec.type === 'container' && (
+            // Keyed by identity, so another Task, or one recreated under the same
+            // name, never inherits this one's frame or polling state.
+            <TaskLiveView
+              key={`${task.metadata.namespace}/${task.metadata.name}/${task.metadata.uid}`}
+              taskId={taskId}
+              running={taskRunning}
+            />
+          )}
           <TaskOverview
             task={task}
             events={taskEvents}
