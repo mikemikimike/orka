@@ -694,3 +694,17 @@ func TestFilterFindingsKeepsAuditLogInjection(t *testing.T) {
 	)})
 	assertFilterKept(t, got)
 }
+
+func TestFilterFindingsDropsDemoAndExampleOnlyFindings(t *testing.T) {
+	for _, filePath := range []string{"demo/agilebank/policy.yaml", "examples/server/main.go", "third_party/lib/hack/patch.sh"} {
+		finding := filterFinding("Image allowlist accepts attacker prefix", filePath, "The policy accepts an attacker-owned registry namespace.")
+		finding.Category = filterTestAuthzCategory
+		assertFilterDropped(t, FilterFindings([]*store.Finding{finding}), "demo or example content")
+	}
+	shipped := filterFinding("Default policy is bypassable", "examples/policy.yaml", "The chart installs this example by default; it is loaded by production clusters.")
+	shipped.Category = filterTestAuthzCategory
+	assertFilterKept(t, FilterFindings([]*store.Finding{shipped}))
+	code := filterFinding("Example handler naming", "pkg/examplecheck/check.go", "Authorization is skipped for the runtime handler.")
+	code.Category = filterTestAuthzCategory
+	assertFilterKept(t, FilterFindings([]*store.Finding{code}))
+}

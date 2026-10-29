@@ -88,11 +88,14 @@ const (
 	findingValidationStatusValidated = "validated"
 	findingValidationStatusFailed    = "failed"
 	findingValidationStatusSkipped   = "skipped"
-	validationModeOff                = "off"
-	validationModeFull               = "full"
-	validationThresholdLow           = "low"
-	findingCategoryCWEPrefix         = "cwe"
-	findingCategoryFromTerm          = "from"
+	// findingValidationStatusError marks a validation that produced no
+	// verdict, unlike failed, which means the validator refuted the finding.
+	findingValidationStatusError = "error"
+	validationModeOff            = "off"
+	validationModeFull           = "full"
+	validationThresholdLow       = "low"
+	findingCategoryCWEPrefix     = "cwe"
+	findingCategoryFromTerm      = "from"
 
 	scanSummaryRunning            = "scan is running"
 	scanSummaryThreatModelPending = "Threat model generated; deterministic mapper pending"
@@ -744,6 +747,10 @@ func (r *RepositoryScanReconciler) createMapperTask(ctx context.Context, scan *c
 	if err != nil {
 		return err
 	}
+	crossComponentEnv, err := r.mapperCrossComponentEnv(ctx, scan, run)
+	if err != nil {
+		return err
+	}
 	timeout := metav1.Duration{Duration: 30 * time.Minute}
 	priority := int32(690)
 	taskName := security.ScanStageTaskNameForRun(scan.Name, run.Mode, security.StageMapper, "", run.ID)
@@ -765,7 +772,7 @@ func (r *RepositoryScanReconciler) createMapperTask(ctx context.Context, scan *c
 			Command:  []string{"--security-mapper"},
 			Timeout:  &timeout,
 			Priority: &priority,
-			Env: []corev1.EnvVar{
+			Env: append([]corev1.EnvVar{
 				{Name: security.EnvRepositoryScanName, Value: scan.Name},
 				{Name: security.EnvStage, Value: security.StageMapper},
 				{Name: security.EnvScanID, Value: run.ID},
@@ -774,7 +781,7 @@ func (r *RepositoryScanReconciler) createMapperTask(ctx context.Context, scan *c
 				{Name: security.EnvPolicyProvenance, Value: security.PolicyProvenanceEnv(policy)},
 				{Name: security.EnvScanBaseCommit, Value: run.BaseCommit},
 				{Name: security.EnvScanHeadCommit, Value: run.HeadCommit},
-			},
+			}, crossComponentEnv...),
 			Workspace: repositoryScanTaskWorkspace(targetScan, ""),
 		},
 	}
@@ -782,6 +789,34 @@ func (r *RepositoryScanReconciler) createMapperTask(ctx context.Context, scan *c
 		return err
 	}
 	return r.createOrValidateScanStageTask(ctx, scan, run, task)
+}
+
+// mapperCrossComponentEnv asks the mapper for slices that are not bounded to
+// one component: the threat model's investigations and an independent audit.
+// Change-focused runs keep to the slices their changes touch.
+func (r *RepositoryScanReconciler) mapperCrossComponentEnv(ctx context.Context, scan *corev1alpha1.RepositoryScan, run *store.ScanRun) ([]corev1.EnvVar, error) {
+	if run.BaseCommit != "" {
+		return nil, nil
+	}
+	env := []corev1.EnvVar{{Name: security.EnvBaselineAudit, Value: booleanTrueValue}}
+	if r.SecurityStore == nil {
+		return env, nil
+	}
+	model, err := r.SecurityStore.GetLatestThreatModel(ctx, scan.Namespace, scan.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		return env, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if investigations := security.ThreatModelInvestigations(model.Content); len(investigations) > 0 {
+		data, err := json.Marshal(investigations)
+		if err != nil {
+			return nil, err
+		}
+		env = append(env, corev1.EnvVar{Name: security.EnvInvestigations, Value: string(data)})
+	}
+	return env, nil
 }
 
 type latestScanPipelineState struct {
@@ -4003,11 +4038,11 @@ func (r *RepositoryScanReconciler) ingestValidationTask(ctx context.Context, sca
 			}
 		}
 		if validationProblem != "" {
-			finding.ValidationStatus = findingValidationStatusFailed
+			finding.ValidationStatus = findingValidationStatusError
 			failure := security.ValidationArtifact{
 				Version:   1,
 				FindingID: finding.ID,
-				Status:    findingValidationStatusFailed,
+				Status:    findingValidationStatusError,
 				Summary:   validationProblem,
 			}
 			data, _ := json.Marshal(failure)
@@ -4025,9 +4060,9 @@ func (r *RepositoryScanReconciler) ingestValidationTask(ctx context.Context, sca
 			}
 		}
 	} else {
-		finding.ValidationStatus = findingValidationStatusFailed
+		finding.ValidationStatus = findingValidationStatusError
 		finding.ValidationJSON = fmt.Sprintf(
-			"{\"status\":\"failed\",\"summary\":%q}",
+			"{\"status\":\"error\",\"summary\":%q}",
 			r.pipelineTaskSummary(ctx, task, "validation task failed"),
 		)
 	}
@@ -4109,6 +4144,8 @@ func findingValidationStatusRank(status string) int {
 		return 3
 	case findingValidationStatusPending:
 		return 2
+	case findingValidationStatusError:
+		return 1
 	case "unvalidated":
 		return 1
 	default:

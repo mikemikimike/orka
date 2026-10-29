@@ -32,7 +32,7 @@ const (
 	maxPatchSummaryBytes         = 16 << 10
 	maxPatchChangedFiles         = 64
 	maxPatchTestsRun             = 64
-	maxReviewContextBytes        = 256 << 10
+	maxReviewContextBytes        = 1 << 20
 	maxThreatModelBytes          = 768 << 10
 	maxFindingTextBytes          = 64 << 10
 	maxFindingSummaryBytes       = 16 << 10
@@ -41,6 +41,14 @@ const (
 	maxValidationListItems       = 64
 	maxValidationItemBytes       = 8 << 10
 	maxValidationEvidenceRefs    = 32
+	maxReviewedFiles             = 256
+	maxResolvedQuestions         = 32
+	maxResolvedQuestionBytes     = 4 << 10
+
+	// MaxReviewContextReferenceFiles bounds the files a review may cite
+	// beyond its excerpts; it keeps a whole-repository index within the
+	// review context byte limit.
+	MaxReviewContextReferenceFiles = 4000
 )
 
 // AgentResultBinding is controller-owned identity that every SecurityScan
@@ -98,12 +106,13 @@ func ParseTrustedReviewContextManifest(data []byte) (*ReviewContextManifest, str
 // ThreatModelResultEnvelope is the only accepted terminal result for the
 // threat-model agent stage.
 type ThreatModelResultEnvelope struct {
-	SchemaVersion  int    `json:"schemaVersion"`
-	Kind           string `json:"kind"`
-	RepositoryScan string `json:"repositoryScan"`
-	ScanID         string `json:"scanId"`
-	PolicyDigest   string `json:"policyDigest"`
-	ThreatModel    string `json:"threatModel"`
+	SchemaVersion  int                     `json:"schemaVersion"`
+	Kind           string                  `json:"kind"`
+	RepositoryScan string                  `json:"repositoryScan"`
+	ScanID         string                  `json:"scanId"`
+	PolicyDigest   string                  `json:"policyDigest"`
+	ThreatModel    string                  `json:"threatModel"`
+	Investigations []SecurityInvestigation `json:"investigations,omitempty"`
 }
 
 // FindingsResultEnvelope is the only accepted terminal result for one review
@@ -175,6 +184,7 @@ func ParseThreatModelResult(data []byte, expected AgentResultBinding) (string, e
 	if securityResultLooksLikeToolTranscript(content) {
 		return "", fmt.Errorf("threatModel looks like a tool transcript")
 	}
+	content = RenderThreatModelInvestigations(content, result.Investigations)
 	content = SanitizeThreatModel(content)
 	if len(content) > maxThreatModelBytes {
 		return "", fmt.Errorf("threatModel exceeds %d bytes", maxThreatModelBytes)
@@ -226,6 +236,7 @@ func ParseFindingsResult(data []byte, expected FindingsResultExpectation) (*Find
 	if strings.TrimSpace(result.SliceID) != strings.TrimSpace(expected.SliceID) {
 		return nil, fmt.Errorf("security result sliceId does not match task slice")
 	}
+	normalizeFindingsCoverage(&result.Findings.Scan)
 	if err := validateFindingsResultArtifact(result.Findings, expected); err != nil {
 		return nil, err
 	}
@@ -255,6 +266,7 @@ func ParseValidationResult(data []byte, expected ValidationResultExpectation) (*
 	if strings.TrimSpace(result.FindingID) != findingID || strings.TrimSpace(result.Validation.FindingID) != findingID {
 		return nil, fmt.Errorf("security validation result findingId does not match task finding")
 	}
+	result.Validation.Evidence = usableValidationEvidence(result.Validation.Evidence, expected.Finding.Evidence)
 	if err := validateValidationArtifact(result.Validation, expected.Finding); err != nil {
 		return nil, err
 	}
@@ -304,6 +316,50 @@ func validateAgentResultBinding(repositoryScan, scanID, policyDigest, contextDig
 		return fmt.Errorf("security result contextDigest does not match mapper context")
 	}
 	return nil
+}
+
+// normalizeFindingsCoverage bounds the reviewer's coverage notes. They only
+// describe the review, so excess or unsafe entries are dropped instead of
+// rejecting the findings they accompany.
+func normalizeFindingsCoverage(scan *FindingsV2Scan) {
+	files := make([]string, 0, min(len(scan.ReviewedFiles), maxReviewedFiles))
+	seen := map[string]struct{}{}
+	for _, file := range scan.ReviewedFiles {
+		file = strings.TrimSpace(file)
+		if _, ok := seen[file]; ok || !SafeRepoPath(file) {
+			continue
+		}
+		seen[file] = struct{}{}
+		files = append(files, file)
+		if len(files) == maxReviewedFiles {
+			break
+		}
+	}
+	scan.ReviewedFiles = files
+	questions := make([]FindingsV2ResolvedQuestion, 0, min(len(scan.ResolvedQuestions), maxResolvedQuestions))
+	for _, question := range scan.ResolvedQuestions {
+		question.Question = truncateUTF8(strings.TrimSpace(question.Question), maxResolvedQuestionBytes)
+		question.Resolution = truncateUTF8(strings.TrimSpace(question.Resolution), maxResolvedQuestionBytes)
+		if question.Question == "" {
+			continue
+		}
+		questions = append(questions, question)
+		if len(questions) == maxResolvedQuestions {
+			break
+		}
+	}
+	scan.ResolvedQuestions = questions
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func validateFindingsResultArtifact(artifact FindingsV2Artifact, expected FindingsResultExpectation) error {
@@ -399,8 +455,8 @@ func validateValidationArtifact(artifact ValidationArtifact, finding *store.Find
 		value string
 	}{
 		{summaryField, artifact.Summary},
-		{"reproduction", artifact.Reproduction},
-		{"attack_path_analysis", artifact.AttackPathAnalysis},
+		{"reproduction", string(artifact.Reproduction)},
+		{"attack_path_analysis", string(artifact.AttackPathAnalysis)},
 		{"likelihood", artifact.Likelihood},
 		{"impact", artifact.Impact},
 	} {
@@ -432,6 +488,23 @@ func validateValidationArtifact(artifact ValidationArtifact, finding *store.Find
 		}
 	}
 	return nil
+}
+
+// usableValidationEvidence keeps the validator's evidence that may be merged
+// into the finding. Validators trace beyond the finding's own locations, so
+// refs outside that boundary are dropped instead of discarding the verdict.
+func usableValidationEvidence(refs ValidationArtifactEvidenceRefs, accepted []store.FindingEvidenceRef) ValidationArtifactEvidenceRefs {
+	out := make(ValidationArtifactEvidenceRefs, 0, min(len(refs), maxValidationEvidenceRefs))
+	for _, ref := range refs {
+		if validateValidationEvidenceRef(len(out), ref, accepted) != nil {
+			continue
+		}
+		out = append(out, ref)
+		if len(out) == maxValidationEvidenceRefs {
+			break
+		}
+	}
+	return out
 }
 
 func validateValidationEvidenceRef(index int, ref store.FindingEvidenceRef, accepted []store.FindingEvidenceRef) error {

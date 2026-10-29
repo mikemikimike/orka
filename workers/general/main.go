@@ -314,10 +314,22 @@ func runSecurityMapper(ctx context.Context) error {
 		return fmt.Errorf("security mapper requires a git workspace")
 	}
 	repositoryScan := strings.TrimSpace(os.Getenv(security.EnvRepositoryScanName))
+	var investigations []security.SecurityInvestigation
+	if raw := strings.TrimSpace(os.Getenv(security.EnvInvestigations)); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &investigations); err != nil {
+			return fmt.Errorf("decode security investigations: %w", err)
+		}
+	}
 	slices, err := securityslices.MapRepository(workDir, securityslices.MapperOptions{
 		RepositoryScan: repositoryScan,
 		SubPath:        os.Getenv(workerenv.WorkspaceSubpath),
+		Investigations: investigations,
+		BaselineAudit:  os.Getenv(security.EnvBaselineAudit) == "true",
 	})
+	if err != nil {
+		return err
+	}
+	references, err := securityslices.ReferenceFiles(workDir, slices)
 	if err != nil {
 		return err
 	}
@@ -336,6 +348,7 @@ func runSecurityMapper(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("build security review context for %s: %w", contextSlice.ID, err)
 		}
+		manifest.ReferenceFiles = references[contextSlice.ID]
 		manifestData, err := json.Marshal(manifest)
 		if err != nil {
 			return fmt.Errorf("marshal security review context for %s: %w", contextSlice.ID, err)

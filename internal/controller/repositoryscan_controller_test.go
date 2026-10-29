@@ -7018,3 +7018,90 @@ func TestIngestPatchTaskSecondReconcileAcceptsSanitizedStoredDiff(t *testing.T) 
 	}
 	assertPatchIngestState(t, fixture, patchProposalStatusPROpened, findingStatePROpen)
 }
+
+func TestMapperCrossComponentEnvAppliesOnlyToFullScans(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	reconciler := &RepositoryScanReconciler{SecurityStore: store}
+	scan := &corev1alpha1.RepositoryScan{ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS}}
+
+	env, err := reconciler.mapperCrossComponentEnv(ctx, scan, &storepkg.ScanRun{ID: "scan_full"})
+	if err != nil {
+		t.Fatalf("mapperCrossComponentEnv(no threat model) error = %v", err)
+	}
+	if len(env) != 1 || env[0].Name != security.EnvBaselineAudit || env[0].Value != booleanTrueValue {
+		t.Fatalf("env without threat model = %#v, want only the baseline audit", env)
+	}
+
+	content := security.RenderThreatModelInvestigations("# Threat model\n", []security.SecurityInvestigation{
+		{Title: "Flow", Question: "Does input reach the sink?", Paths: []string{"pkg/flow"}},
+	})
+	if err := store.SaveThreatModel(ctx, &storepkg.ThreatModel{
+		Namespace: defaultNS, RepositoryScan: scan.Name, Content: content, Source: "generated",
+	}); err != nil {
+		t.Fatalf("SaveThreatModel() error = %v", err)
+	}
+	env, err = reconciler.mapperCrossComponentEnv(ctx, scan, &storepkg.ScanRun{ID: "scan_full"})
+	if err != nil {
+		t.Fatalf("mapperCrossComponentEnv(full) error = %v", err)
+	}
+	var investigations []security.SecurityInvestigation
+	for _, item := range env {
+		if item.Name == security.EnvInvestigations {
+			if err := json.Unmarshal([]byte(item.Value), &investigations); err != nil {
+				t.Fatalf("investigations env = %q: %v", item.Value, err)
+			}
+		}
+	}
+	if len(investigations) != 1 || investigations[0].Question != "Does input reach the sink?" {
+		t.Fatalf("env = %#v, want the threat model's investigation", env)
+	}
+
+	env, err = reconciler.mapperCrossComponentEnv(ctx, scan, &storepkg.ScanRun{ID: "scan_incremental", BaseCommit: "abc123"})
+	if err != nil || len(env) != 0 {
+		t.Fatalf("mapperCrossComponentEnv(incremental) = %#v, %v; want none", env, err)
+	}
+}
+
+func TestIngestValidationTaskMarksUndecodableResultAsError(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	reconciler := &RepositoryScanReconciler{SecurityStore: store, ArtifactStore: store, ResultStore: store}
+	scan := &corev1alpha1.RepositoryScan{ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS}}
+	finding := &storepkg.Finding{
+		ID: "fnd_error", Namespace: defaultNS, RepositoryScan: "kaset", ScanRunID: "scan_validate",
+		Fingerprint: "sha256:error", Title: "Validation target", Summary: "candidate", Severity: "high",
+		Confidence: "high", ValidationStatus: findingValidationStatusPending, State: findingStateOpen,
+	}
+	if err := store.UpsertFinding(ctx, finding); err != nil {
+		t.Fatalf("UpsertFinding() error = %v", err)
+	}
+	task := &corev1alpha1.Task{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kaset-validation-fnd_error",
+			Namespace: defaultNS,
+			Labels: map[string]string{
+				labels.LabelSecurityTarget:    "kaset",
+				labels.LabelSecurityScanID:    finding.ScanRunID,
+				labels.LabelSecurityFindingID: finding.ID,
+				labels.LabelSecurityStage:     security.StageValidation,
+				labels.LabelSecurityMode:      security.StageValidation,
+			},
+		},
+		Status: corev1alpha1.TaskStatus{Phase: corev1alpha1.TaskPhaseSucceeded, ResultRef: &corev1alpha1.ResultReference{Available: true}},
+	}
+	if err := store.SaveResult(ctx, task.Namespace, task.Name, []byte("I checked the code.\n{}")); err != nil {
+		t.Fatalf("SaveResult() error = %v", err)
+	}
+
+	if err := reconciler.ingestValidationTask(ctx, scan, task); err != nil {
+		t.Fatalf("ingestValidationTask() error = %v", err)
+	}
+	updated, err := store.GetFinding(ctx, defaultNS, finding.ID)
+	if err != nil {
+		t.Fatalf("GetFinding() error = %v", err)
+	}
+	if updated.ValidationStatus != findingValidationStatusError || !strings.Contains(updated.ValidationJSON, `"status":"error"`) {
+		t.Fatalf("finding = %q %q, want error status distinct from a refuted finding", updated.ValidationStatus, updated.ValidationJSON)
+	}
+}

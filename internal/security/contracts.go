@@ -29,8 +29,12 @@ const (
 	EnvScannerPolicyVersion = "ORKA_SECURITY_SCANNER_POLICY_VERSION"
 	EnvPolicyDigest         = "ORKA_SECURITY_POLICY_DIGEST"
 	EnvPolicyProvenance     = "ORKA_SECURITY_POLICY_PROVENANCE"
+	// EnvInvestigations carries threat-model investigations to the mapper as
+	// JSON; EnvBaselineAudit asks it for the independent audit slice.
+	EnvInvestigations = "ORKA_SECURITY_INVESTIGATIONS"
+	EnvBaselineAudit  = "ORKA_SECURITY_BASELINE_AUDIT"
 
-	ScannerPolicyVersion = "2026-06-orka-fp-policy-v1"
+	ScannerPolicyVersion = "2026-10-orka-cross-component-v1"
 
 	SchemaVersionReviewSlices  = 1
 	SchemaVersionReviewContext = 1
@@ -60,9 +64,42 @@ type ReviewContextManifest struct {
 	ChangedLineRanges []ChangedLineRange          `json:"changedLineRanges,omitempty"`
 	IncludedFiles     []ReviewContextIncludedFile `json:"includedFiles"`
 	OmittedFiles      []ReviewContextOmittedFile  `json:"omittedFiles,omitempty"`
-	PromptBytes       int                         `json:"promptBytes"`
-	ApproximateTokens int                         `json:"approximateTokens"`
-	Prompt            string                      `json:"prompt,omitempty"`
+	// ReferenceFiles are repository files the reviewer may read from its
+	// workspace and cite beyond the included excerpts.
+	ReferenceFiles    []ReviewContextReferenceFile `json:"referenceFiles,omitempty"`
+	PromptBytes       int                          `json:"promptBytes"`
+	ApproximateTokens int                          `json:"approximateTokens"`
+	Prompt            string                       `json:"prompt,omitempty"`
+}
+
+// ReviewContextReferenceFile bounds citations to a file the mapper read:
+// evidence may cite any line from 1 through Lines.
+type ReviewContextReferenceFile struct {
+	Path     string `json:"path"`
+	Lines    int    `json:"lines"`
+	Relation string `json:"relation"`
+}
+
+// Reference file relations recorded by the mapper.
+const (
+	ReferenceRelationSlice      = "slice"
+	ReferenceRelationImports    = "imports"
+	ReferenceRelationImportedBy = "imported-by"
+	ReferenceRelationRepository = "repository"
+)
+
+// Slice kinds that are not bounded to one component.
+const (
+	SliceKindInvestigation = "investigation"
+	SliceKindBaseline      = "baseline"
+)
+
+// SecurityInvestigation is a cross-component security question from the
+// threat model. The mapper turns each one into its own review slice.
+type SecurityInvestigation struct {
+	Title    string   `json:"title"`
+	Question string   `json:"question"`
+	Paths    []string `json:"paths,omitempty"`
 }
 
 type ReviewContextIncludedFile struct {
@@ -108,6 +145,17 @@ type FindingsV2Scan struct {
 	Mode    string `json:"mode"`
 	SliceID string `json:"sliceId"`
 	Summary string `json:"summary"`
+	// ReviewedFiles and ResolvedQuestions record what the reviewer examined
+	// and ruled out, so a slice without findings still explains its result.
+	ReviewedFiles     []string                     `json:"reviewedFiles,omitempty"`
+	ResolvedQuestions []FindingsV2ResolvedQuestion `json:"resolvedQuestions,omitempty"`
+}
+
+// FindingsV2ResolvedQuestion is a security question the reviewer checked and
+// answered without a finding, with the controlling evidence.
+type FindingsV2ResolvedQuestion struct {
+	Question   string `json:"question"`
+	Resolution string `json:"resolution"`
 }
 
 type FindingsV2Finding struct {
@@ -133,6 +181,14 @@ type FindingsV2EvidenceRef struct {
 	EndLine   int     `json:"endLine"`
 	Symbol    *string `json:"symbol"`
 	Quote     *string `json:"quote"`
+	// Role places the location on the attack path: entrypoint, source,
+	// propagation, root_control, sink, or context.
+	Role string `json:"role,omitempty"`
+}
+
+// Evidence roles a finding location may carry.
+var findingEvidenceRoles = map[string]struct{}{
+	"entrypoint": {}, "source": {}, "propagation": {}, "root_control": {}, "sink": {}, "context": {},
 }
 
 type DroppedFindingArtifact struct {
@@ -223,6 +279,17 @@ func ParseReviewContextManifest(data []byte) (*ReviewContextManifest, error) {
 			if lineRange.StartLine <= 0 || lineRange.EndLine < lineRange.StartLine {
 				return nil, fmt.Errorf("included file %q has invalid line range", file.Path)
 			}
+		}
+	}
+	if len(manifest.ReferenceFiles) > MaxReviewContextReferenceFiles {
+		return nil, fmt.Errorf("review context lists more than %d reference files", MaxReviewContextReferenceFiles)
+	}
+	for _, file := range manifest.ReferenceFiles {
+		if !SafeRepoPath(file.Path) {
+			return nil, fmt.Errorf("reference file path %q is not repo-relative and safe", file.Path)
+		}
+		if file.Lines <= 0 {
+			return nil, fmt.Errorf("reference file %q has no lines", file.Path)
 		}
 	}
 	return &manifest, nil

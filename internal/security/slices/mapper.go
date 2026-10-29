@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/orka-agents/orka/internal/security"
 	"github.com/orka-agents/orka/internal/store"
 )
 
@@ -25,6 +26,10 @@ const (
 type MapperOptions struct {
 	RepositoryScan string
 	SubPath        string
+	// Investigations become cross-component review slices.
+	Investigations []security.SecurityInvestigation
+	// BaselineAudit adds one independent repository-wide review slice.
+	BaselineAudit bool
 }
 
 const (
@@ -65,6 +70,10 @@ func MapRepository(root string, opts MapperOptions) ([]store.ReviewSlice, error)
 	addWorkflowAndScriptSlices(builder, files)
 	addConfigSlices(builder, files)
 	addGenericFallbackSlices(builder, files)
+	addInvestigationSlices(builder, files, opts.Investigations)
+	if opts.BaselineAudit {
+		addBaselineAuditSlice(builder, files)
+	}
 	return builder.slices(), nil
 }
 
@@ -123,7 +132,7 @@ func shouldSkipDir(rel string, entry fs.DirEntry) bool {
 	}
 	name := path.Base(rel)
 	switch name {
-	case ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "coverage", ".next",
+	case ".git", ".hg", ".svn", "node_modules", "vendor", "third_party", "dist", "build", "coverage", ".next",
 		"target", "bin", ".cache", ".turbo", ".venv", "venv", "__pycache__", ".pytest_cache":
 		return true
 	default:
