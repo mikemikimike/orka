@@ -108,6 +108,8 @@ controller:
     # Agent Tasks the controller runs through ACP runtimes at once, across
     # all RuntimePools. Each running prompt holds one place, so raise this
     # with pool.maxRunningPrompts to run more prompts concurrently (1-1000).
+    # A coordinator waiting on ACP child Tasks keeps its place; keep this
+    # above the number of coordinators that can wait at once.
     dispatch:
       maxConcurrentTasks: 4
     # Planned controller upgrades use a same-binary preStop child to call a

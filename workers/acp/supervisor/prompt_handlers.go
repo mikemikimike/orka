@@ -2324,22 +2324,22 @@ func (s *Server) buildTerminalEventLocked(
 	return event
 }
 
-// untaggedAssistantMessageID keys text Codex sends without a message ID
-// after named messages, such as a /review result, as a message of its own.
-const untaggedAssistantMessageID = "\x00untagged"
-
 func (p *promptState) appendAssistantText(text, phase, messageID string, limit int) {
 	appendBoundedPromptText(&p.assistant, &p.assistantOverflow, text, limit)
-	if messageID == "" && p.lastMessageID != "" {
-		messageID = untaggedAssistantMessageID
-	}
-	if messageID != "" {
+	switch {
+	case messageID != "":
 		if messageID != p.lastMessageID {
 			p.lastMessage.Reset()
 			p.lastMessageOverflow = false
 			p.lastMessageID = messageID
 		}
 		appendBoundedPromptText(&p.lastMessage, &p.lastMessageOverflow, text, limit)
+		// A named message supersedes untagged text before it, and resuming
+		// the same message after a warning keeps its earlier chunks.
+		p.untagged.Reset()
+		p.untaggedOverflow = false
+	case p.lastMessageID != "":
+		appendBoundedPromptText(&p.untagged, &p.untaggedOverflow, text, limit)
 	}
 	if phase != acpAssistantPhaseFinalAnswer {
 		return
@@ -2348,9 +2348,15 @@ func (p *promptState) appendAssistantText(text, phase, messageID string, limit i
 	appendBoundedPromptText(&p.finalAnswer, &p.finalAnswerOverflow, text, limit)
 }
 
+// terminalResultText prefers the final answer, then untagged text that
+// followed the last named message (codex-acp sends a /review result that
+// way), then the last named message, then all assistant text.
 func (p *promptState) terminalResultText() (string, bool) {
 	if p.finalAnswerSeen {
 		return p.finalAnswer.String(), p.finalAnswerOverflow
+	}
+	if p.untagged.Len() > 0 || p.untaggedOverflow {
+		return p.untagged.String(), p.untaggedOverflow
 	}
 	if p.lastMessageID != "" {
 		return p.lastMessage.String(), p.lastMessageOverflow

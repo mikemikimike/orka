@@ -7537,3 +7537,38 @@ func TestApplyScanRunProgressReportsUnreviewableSlices(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeEvidenceRefsKeepsARoleReportedLater(t *testing.T) {
+	location := storepkg.FindingEvidenceRef{Kind: "file", Path: "pkg/a.go", StartLine: 3, EndLine: 5}
+	withRole := location
+	withRole.Role = "root_control"
+	merged := mergeEvidenceRefs([]storepkg.FindingEvidenceRef{location}, withRole)
+	if len(merged) != 1 || merged[0].Role != "root_control" {
+		t.Fatalf("merged = %#v, want one ref with the later role", merged)
+	}
+	otherRole := location
+	otherRole.Role = "sink"
+	if merged = mergeEvidenceRefs(merged, otherRole); merged[0].Role != "root_control" {
+		t.Fatalf("merged = %#v, want the first role kept", merged)
+	}
+}
+
+func TestKeepThreatModelInvestigationsCarriesSavedQuestions(t *testing.T) {
+	ctx := context.Background()
+	store := setupControllerSQLiteStore(t)
+	reconciler := &RepositoryScanReconciler{SecurityStore: store}
+	scan := &corev1alpha1.RepositoryScan{ObjectMeta: metav1.ObjectMeta{Name: "kaset", Namespace: defaultNS}}
+	saved := security.RenderThreatModelInvestigations("# Threat model\n\nFull scan.", []security.SecurityInvestigation{
+		{Title: "Flow", Question: "Does input reach the sink?", Paths: []string{"pkg/flow"}},
+	})
+	if err := reconciler.persistThreatModelIfChanged(ctx, scan, "scan_full", time.Time{}, saved); err != nil {
+		t.Fatalf("persistThreatModelIfChanged() error = %v", err)
+	}
+	got, err := reconciler.keepThreatModelInvestigations(ctx, scan, "# Threat model\n\nIncremental update.")
+	if err != nil {
+		t.Fatalf("keepThreatModelInvestigations() error = %v", err)
+	}
+	if !strings.Contains(got, "Incremental update.") || len(security.ThreatModelInvestigations(got)) != 1 {
+		t.Fatalf("incremental threat model = %q, want the update with the saved investigation", got)
+	}
+}

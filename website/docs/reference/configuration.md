@@ -43,7 +43,7 @@ tags; development charts use the rolling `0.0.0-dev` tag. See
 | `controller.acpRuntime.opencodeImage` | release image tag | OpenCode ACP image tag or digest; an empty string disables it. |
 | `controller.acpRuntime.pool.maxRunningPrompts` | `4` | Concurrent prompts in each new built-in runtime RuntimePool, such as repository scan review slices for one Agent. Cannot exceed `maxResidentSessions`. Existing pools keep their capacity. |
 | `controller.acpRuntime.pool.maxResidentSessions` | `10` | Resident RuntimeSessions in each new built-in runtime RuntimePool (1-1000). |
-| `controller.acpRuntime.dispatch.maxConcurrentTasks` | `4` | Agent Tasks the controller runs through ACP runtimes at once, across all RuntimePools (1-1000). Raise it with `pool.maxRunningPrompts`: each running prompt holds one place. |
+| `controller.acpRuntime.dispatch.maxConcurrentTasks` | `4` | Agent Tasks the controller runs through ACP runtimes at once, across all RuntimePools (1-1000). Raise it with `pool.maxRunningPrompts`: each running prompt holds one place. A coordinator waiting on ACP child Tasks keeps its place, so keep this above the number of coordinators that can wait at once. |
 | `controller.acpRuntime.upgradeDrain.*` | enabled | Two-phase planned-upgrade admission closure and RuntimePool drain settings. |
 | `controller.acpRuntime.toolboxes.enabled` | `false` | Let built-in Agents declare `runtime.toolboxes`, read-only tool images bound into runtime Pods. See [Toolboxes](../guides/toolboxes.md). |
 | `controller.acpRuntime.toolboxes.allowedRegistries` | `[]` | Registry hosts or host/path prefixes toolbox images may come from. Empty allows nothing. |
@@ -433,7 +433,7 @@ See [charts/orka/values.yaml](https://github.com/orka-agents/orka/blob/main/char
 | `--acp-runtime-namespace` / `ORKA_ACP_RUNTIME_NAMESPACE` | `orka-runtimes` | Namespace for managed runtime Deployments, Services, Secrets, and policies. |
 | `--acp-runtime-pool-max-running-prompts` | `4` | Concurrent prompts in each new built-in runtime RuntimePool; cannot exceed `--acp-runtime-pool-max-resident-sessions`. |
 | `--acp-runtime-pool-max-resident-sessions` | `10` | Resident RuntimeSessions in each new built-in runtime RuntimePool (1-1000). |
-| `--acp-dispatch-max-concurrent-tasks` | `4` | Agent Tasks the controller runs through ACP runtimes at once, across all RuntimePools (1-1000). Each running prompt holds one place, so pool capacity above this value is not used. |
+| `--acp-dispatch-max-concurrent-tasks` | `4` | Agent Tasks the controller runs through ACP runtimes at once, across all RuntimePools (1-1000). Each running prompt holds one place, so pool capacity above this value is not used. A coordinator Task waiting on ACP child Tasks keeps its place, so keep this above the number of coordinators that can wait at once. |
 | `--acp-provider-proxy-namespace` / `ORKA_ACP_PROVIDER_PROXY_NAMESPACE` | `""` | Approved provider-proxy namespace selector. The Helm chart uses its release namespace when the proxy is enabled. |
 | `--acp-provider-proxy-base-url` / `ORKA_ACP_PROVIDER_PROXY_BASE_URL` | unset | Authenticated provider-proxy URL injected into built-in RuntimePools. |
 | `--acp-provider-proxy-pod-labels` / `ORKA_ACP_PROVIDER_PROXY_POD_LABELS` | `orka.ai/network-role=provider-auth-proxy` | Exact Pod labels selected by RuntimePool egress policy. |

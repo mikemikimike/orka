@@ -551,7 +551,7 @@ func main() {
 	flag.IntVar(&acpRuntimePoolMaxResidentSessions, "acp-runtime-pool-max-resident-sessions", int(corev1alpha1.DefaultRuntimePoolMaxResidentSessions),
 		"Resident RuntimeSessions each new built-in runtime RuntimePool keeps (1-1000).")
 	flag.IntVar(&acpDispatchMaxConcurrentTasks, "acp-dispatch-max-concurrent-tasks", controller.DefaultACPDispatchWorkers,
-		"Agent Tasks the controller runs through ACP runtimes at once across all RuntimePools (1-1000).")
+		"Agent Tasks the controller runs through ACP runtimes at once across all RuntimePools (1-1000). A coordinator waiting on ACP child Tasks keeps its place.")
 	flag.StringVar(&acpProviderProxyPodLabels, "acp-provider-proxy-pod-labels", envutil.String("ORKA_ACP_PROVIDER_PROXY_POD_LABELS", "orka.ai/network-role=provider-auth-proxy"),
 		"Comma-separated exact Pod labels selected by RuntimePool provider-proxy egress policy.")
 	flag.StringVar(&acpProviderProxyTokenFile, "acp-provider-proxy-token-file", os.Getenv("ORKA_ACP_PROVIDER_PROXY_TOKEN_FILE"),

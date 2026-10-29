@@ -2417,17 +2417,21 @@ func (r *RepositoryScanReconciler) ensureActiveScanRunPolicyCurrent(ctx context.
 
 func mergeEvidenceRefs(existing []store.FindingEvidenceRef, refs ...store.FindingEvidenceRef) []store.FindingEvidenceRef {
 	merged := append([]store.FindingEvidenceRef{}, existing...)
-	seen := map[string]struct{}{}
-	for _, ref := range merged {
-		key := evidenceRefKey(ref)
-		seen[key] = struct{}{}
+	seen := map[string]int{}
+	for i, ref := range merged {
+		seen[evidenceRefKey(ref)] = i
 	}
 	for _, ref := range refs {
 		key := evidenceRefKey(ref)
-		if _, ok := seen[key]; ok {
+		if i, ok := seen[key]; ok {
+			// The same location reported again can carry the role an
+			// earlier report lacked.
+			if merged[i].Role == "" {
+				merged[i].Role = ref.Role
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[key] = len(merged)
 		merged = append(merged, ref)
 	}
 	return merged
@@ -3441,13 +3445,41 @@ func (r *RepositoryScanReconciler) ingestThreatModelTask(ctx context.Context, sc
 			current.ErrorMessage = failure
 			return nil
 		}
-		if err := tx.persistThreatModelIfChanged(ctx, scan, current.ID, current.StartedAt, threatModel); err != nil {
+		content := threatModel
+		if current.BaseCommit != "" {
+			var err error
+			if content, err = tx.keepThreatModelInvestigations(ctx, scan, content); err != nil {
+				return err
+			}
+		}
+		if err := tx.persistThreatModelIfChanged(ctx, scan, current.ID, current.StartedAt, content); err != nil {
 			return err
 		}
 		clearThreatModelRunError(current)
 		current.Summary = scanSummaryThreatModelPending
 		return nil
 	})
+}
+
+// keepThreatModelInvestigations carries the saved investigations into an
+// incremental threat model that omits them: incremental scans do not ask for
+// investigations, and the next full scan reviews them.
+func (r *RepositoryScanReconciler) keepThreatModelInvestigations(ctx context.Context, scan *corev1alpha1.RepositoryScan, content string) (string, error) {
+	if len(security.ThreatModelInvestigations(content)) > 0 {
+		return content, nil
+	}
+	saved, err := r.SecurityStore.GetLatestThreatModel(ctx, scan.Namespace, scan.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		return content, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	investigations := security.ThreatModelInvestigations(saved.Content)
+	if len(investigations) == 0 {
+		return content, nil
+	}
+	return security.RenderThreatModelInvestigations(content, investigations), nil
 }
 
 //nolint:gocyclo // Review ingestion keeps terminal outcomes and result validation in one state transition.

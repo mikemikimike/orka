@@ -1613,4 +1613,10 @@ func TestPromptStateKeepsUntaggedTextAfterNamedMessages(t *testing.T) {
 	if got, _ := state.terminalResultText(); got != "Final." {
 		t.Fatalf("terminalResultText() = %q, want the later named message", got)
 	}
+	// A warning in the middle of a named message does not drop its start.
+	state.appendAssistantText("Warning: slow\n\n", "", "", 1<<20)
+	state.appendAssistantText(" Done.", "", "msg_final", 1<<20)
+	if got, _ := state.terminalResultText(); got != "Final. Done." {
+		t.Fatalf("terminalResultText() = %q, want the whole resumed message", got)
+	}
 }
