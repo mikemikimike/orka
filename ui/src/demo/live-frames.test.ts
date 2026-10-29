@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-// jsdom has no canvas: stand in for the drawing so the handler's success path runs.
+// jsdom serves no files: stand in for loading a recorded frame so the
+// handler's success path runs.
 vi.mock('./live-frames', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./live-frames')>()
-  return { ...actual, renderLiveFrame: vi.fn(async () => new Blob(['jpeg'], { type: 'image/jpeg' })) }
+  return { ...actual, liveFrame: vi.fn(async () => new Blob(['jpeg'], { type: 'image/jpeg' })) }
 })
 
 import { liveScene } from './live-frames'
@@ -13,27 +14,37 @@ const live = (name: string, headers?: HeadersInit) =>
   handleDemoRequest(new Request(`http://localhost/api/v1/tasks/${name}/live?namespace=default`, { headers }))
 
 describe('demo live view scenes', () => {
-  it('moves through product, cart, checkout, and review each minute', () => {
-    expect(liveScene(1_000).step).toBe('product')
-    expect(liveScene(10_000).step).toBe('cart')
-    expect(liveScene(20_000).step).toBe('checkout')
-    expect(liveScene(45_000).step).toBe('review')
-    expect(liveScene(61_000).step).toBe('product')
+  const recorded = Object.keys(import.meta.glob('./live-recording/*.jpg')).map((path) => path.replace('./live-recording/', ''))
+  const played = (fromMs: number, toMs: number) => {
+    const files = new Set<string>()
+    for (let t = fromMs; t < toMs; t += 100) files.add(liveScene(t).file)
+    return files
+  }
+
+  it('plays every recorded frame, and only recorded frames', () => {
+    const files = played(0, 45_000)
+    expect([...files].sort()).toEqual([...recorded].sort())
+    expect(recorded).toHaveLength(30)
   })
 
-  it('types into checkout one character at a time', () => {
-    const early = liveScene(13_000)
-    const later = liveScene(20_000)
-    expect(later.typed).toBeGreaterThan(early.typed)
-    expect(later.key).not.toBe(early.key)
+  it('plays the frames in their recorded order', () => {
+    expect(liveScene(0).file).toBe('frame-00.jpg')
+    expect(liveScene(12_600).file).toBe('frame-07.jpg')
+    expect(liveScene(25_600).file).toBe('frame-29.jpg')
   })
 
-  it('keeps the review page still, so the same picture keeps its key and time', () => {
-    const first = liveScene(34_000)
-    const last = liveScene(59_000)
+  it('holds the review page still, so the same picture keeps its key and time', () => {
+    const first = liveScene(26_000)
+    const last = liveScene(40_000)
     expect(last.key).toBe(first.key)
     expect(last.since).toBe(first.since)
-    expect(liveScene(94_000).key).not.toBe(first.key)
+  })
+
+  it('loops the recording', () => {
+    const loop = 25_514 + 15_000
+    expect(liveScene(loop + 100).file).toBe('frame-00.jpg')
+    expect(liveScene(loop + 100).key).not.toBe(liveScene(100).key)
+    expect(liveScene(loop + 100).since).toBe(loop)
   })
 })
 
