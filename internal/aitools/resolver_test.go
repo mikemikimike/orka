@@ -234,6 +234,13 @@ func TestIsImplicitTool(t *testing.T) {
 	if IsImplicitTool(aiToolTask(nil, nil, nil), nil, "recall_memory") {
 		t.Fatal("memory tool was implicitly exposed without coordination or explicit selection")
 	}
+	coordinatedAgent := &corev1alpha1.Agent{Spec: corev1alpha1.AgentSpec{Coordination: &corev1alpha1.CoordinationConfig{Enabled: true}}}
+	if IsImplicitTool(aiToolTask(nil, nil, nil), coordinatedAgent, "custom_tool") {
+		t.Fatal("custom tool was classified as an implicit platform tool with coordination enabled")
+	}
+	if !IsImplicitTool(aiToolTask(nil, nil, nil), coordinatedAgent, "recall_memory") {
+		t.Fatal("memory tool was not classified as implicit with coordination enabled")
+	}
 	child.Spec.Type = corev1alpha1.TaskTypeAgent
 	if IsImplicitTool(child, nil, "send_message") {
 		t.Fatal("disabled agent child messaging tool was classified as implicit")

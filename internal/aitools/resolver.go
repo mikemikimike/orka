@@ -138,6 +138,7 @@ func IsImplicitTool(task *corev1alpha1.Task, agent *corev1alpha1.Agent, name str
 		}
 	}
 	return task != nil && task.Spec.Type == corev1alpha1.TaskTypeAI &&
+		containsTool(memoryToolNames, name) &&
 		(memoryToolsImplicitlyEnabled(task, agent) || memoryToolSelected(task, agent, name))
 }
 
