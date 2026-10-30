@@ -56,10 +56,11 @@ endpoints also offer the first five to clients.
 
 ## Memory tools
 
-Native `type: ai` Tasks receive these when their Agent enables `coordination.enabled`, unless the
-Task sets `orka.ai/disable-coordination-tool-injection: "true"`. The Agent or Task can also select
-individual memory tools by name. `remember` and `propose_memory` create proposals for a person to
-review; they never change durable memory directly. See [Memory](../concepts/memory.md).
+For native `type: ai` Tasks, Orka automatically adds these when the Agent enables
+`coordination.enabled`, unless the Task sets `orka.ai/disable-coordination-tool-injection: "true"`.
+Memory tools explicitly selected by the Agent or Task remain available even with that annotation.
+`remember` and `propose_memory` create proposals for a person to review; they never change durable
+memory directly. See [Memory](../concepts/memory.md).
 
 | Tool | Description | Parameters |
 |------|-------------|------------|

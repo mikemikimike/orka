@@ -47,9 +47,10 @@ Tags: release, testing
 
 When an AI worker can reach the controller internal API, it loads reviewed durable memories before invoking the model. The durable memory section is appended to the system prompt as background project context, separate from the current session transcript.
 
-Native `type: ai` Tasks receive memory tools when their Agent enables `coordination.enabled`, unless
-the Task sets `orka.ai/disable-coordination-tool-injection: "true"`. The Agent or Task can also
-select individual memory tools by name ([parameters](../reference/built-in-tools.md#memory-tools)):
+For native `type: ai` Tasks, Orka automatically adds memory tools when the Agent enables
+`coordination.enabled`, unless the Task sets `orka.ai/disable-coordination-tool-injection: "true"`.
+Memory tools explicitly selected by the Agent or Task remain available even with that annotation
+([parameters](../reference/built-in-tools.md#memory-tools)):
 
 | Tool | Purpose |
 |------|---------|
